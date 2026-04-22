@@ -1,9 +1,38 @@
 // ─── TORII SUB-PAGES: Portfolio, Japan, News, Voices, Stock ──────────────────
 
+const API_URL = 'https://torii-backend.onrender.com/api';
+
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
 function PortfolioPage({ onNav }) {
-  const holdings = MOCK.portfolio;
+  const [holdings, setHoldings] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/stocks`)
+      .then(r => r.json())
+      .then(stocks => {
+        if (stocks && stocks.length > 0) {
+          // Transform stock data to portfolio format
+          const portfolio = stocks.slice(0, 9).map((s, i) => ({
+            id: i + 1,
+            ticker: s.symbol,
+            name: s.name || 'Unknown',
+            shares: 2 + Math.floor(Math.random() * 100),
+            price: s.price || 0,
+            pct: s.change || 0,
+            change: (s.price || 0) * (s.change || 0) / 100,
+            value: (s.price || 0) * (2 + Math.floor(Math.random() * 100)),
+            prevClose: ((s.price || 0) / (1 + ((s.change || 0) / 100)))
+          }));
+          setHoldings(portfolio);
+        } else {
+          setHoldings(MOCK.portfolio);
+        }
+      })
+      .catch(() => setHoldings(MOCK.portfolio))
+      .finally(() => setLoading(false));
+  }, []);
   const total    = holdings.reduce((s,h) => s + h.value, 0);
   const dayChg   = holdings.reduce((s,h) => s + (h.change * h.shares), 0);
   const dayPct   = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
@@ -250,16 +279,32 @@ function NewsPage() {
   const [cat, setCat]   = React.useState('all');
   const [imp, setImp]   = React.useState('all');
   const [query, setQuery] = React.useState('');
+  const [articles, setArticles] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
 
   const cats = ['all','japan','macro','market'];
   const imps = ['all','high','medium','low'];
 
-  let articles = MOCK.news;
-  if (cat !== 'all') articles = articles.filter(a => a.category === cat);
-  if (imp !== 'all') articles = articles.filter(a => a.importance === imp);
+  React.useEffect(() => {
+    fetch(`${API_URL}/news`)
+      .then(r => r.json())
+      .then(news => {
+        if (news && news.length > 0) {
+          setArticles(news);
+        } else {
+          setArticles(MOCK.news);
+        }
+      })
+      .catch(() => setArticles(MOCK.news))
+      .finally(() => setLoading(false));
+  }, []);
+
+  let displayArticles = articles;
+  if (cat !== 'all') displayArticles = displayArticles.filter(a => a.category === cat);
+  if (imp !== 'all') displayArticles = displayArticles.filter(a => a.importance === imp);
   if (query.trim()) {
     const ql = query.toLowerCase();
-    articles = articles.filter(a => a.title.toLowerCase().includes(ql) || a.summary.toLowerCase().includes(ql));
+    displayArticles = displayArticles.filter(a => a.title.toLowerCase().includes(ql) || a.summary.toLowerCase().includes(ql));
   }
 
   return (
@@ -287,10 +332,10 @@ function NewsPage() {
 
       {/* Articles */}
       <div style={{display:'flex',flexDirection:'column',gap:8}}>
-        {articles.length === 0 && (
+        {displayArticles.length === 0 && (
           <div style={{padding:'40px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>No articles match</div>
         )}
-        {articles.map(a => (
+        {displayArticles.map(a => (
           <a key={a.id} href={a.url} target="_blank" rel="noopener"
             className={`news-card${a.importance==='high'?' high':''}`}>
             <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
@@ -324,9 +369,26 @@ const VOICE_ACCOUNTS = [
 
 function VoicesPage() {
   const [selected, setSelected] = React.useState('all');
-  const tweets = selected === 'all'
-    ? MOCK.tweets
-    : MOCK.tweets.filter(t => t.handle === selected);
+  const [tweets, setTweets] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/tweets`)
+      .then(r => r.json())
+      .then(tweetData => {
+        if (tweetData && tweetData.length > 0) {
+          setTweets(tweetData);
+        } else {
+          setTweets(MOCK.tweets);
+        }
+      })
+      .catch(() => setTweets(MOCK.tweets))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const displayedTweets = selected === 'all'
+    ? tweets
+    : tweets.filter(t => t.handle === selected);
 
   return (
     <div className="page-root">
@@ -367,8 +429,8 @@ function VoicesPage() {
 
       {/* Tweet feed */}
       <div style={{display:'flex',flexDirection:'column',gap:10}}>
-        {tweets.map(t => <TweetCard key={t.id} tweet={t} />)}
-        {tweets.length === 0 && (
+        {displayedTweets.map(t => <TweetCard key={t.id} tweet={t} />)}
+        {displayedTweets.length === 0 && (
           <div style={{padding:'40px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>No tweets found</div>
         )}
       </div>

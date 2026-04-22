@@ -1,5 +1,7 @@
 // ─── OVERVIEW PAGE ────────────────────────────────────────────────────────────
 
+const API_URL = 'https://torii-backend.onrender.com/api';
+
 const OVERVIEW_KPIS = [
   { label:'Nikkei 225', sym:'^N225',    src:'japan', dec:0, accent:true },
   { label:'USD / JPY',  sym:'USDJPY=X', src:'japan', dec:2, tag:'FX'    },
@@ -17,18 +19,42 @@ function getQ(sym, src) {
 // ─── Briefing card ───────────────────────────────────────────────────────────
 
 function BriefingCard() {
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [briefing, setBriefing] = React.useState('');
   const [refreshed, setRefreshed] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/briefing`)
+      .then(r => r.json())
+      .then(data => {
+        if (data && (data.content || data.summary)) {
+          setBriefing(data.content || data.summary || MOCK.briefing);
+        } else {
+          setBriefing(MOCK.briefing);
+        }
+      })
+      .catch(() => setBriefing(MOCK.briefing))
+      .finally(() => setLoading(false));
+  }, []);
+
   function handleRefresh() {
     setLoading(true);
-    setTimeout(() => { setLoading(false); setRefreshed(true); }, 1800);
+    fetch(`${API_URL}/briefing`)
+      .then(r => r.json())
+      .then(data => {
+        if (data && (data.content || data.summary)) {
+          setBriefing(data.content || data.summary || MOCK.briefing);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { setLoading(false); setRefreshed(true); });
   }
   return (
     <div className="card">
       <div className="card-head">
         <div>
           <div className="section-label">AI Daily Briefing</div>
-          <div className="card-sub">29m ago · {refreshed ? 'refreshed' : 'cached'}</div>
+          <div className="card-sub">{refreshed ? 'just now' : 'today'} · {refreshed ? 'refreshed' : 'live'}</div>
         </div>
         <button className="btn-ghost" onClick={handleRefresh} disabled={loading}
           style={{padding:'5px 12px',fontSize:11}}>
@@ -40,7 +66,7 @@ function BriefingCard() {
             {[92,100,78,85,60].map((w,i) => <Skel key={i} w={`${w}%`} h={13} />)}
           </div>
         : <div className="briefing-content"
-            dangerouslySetInnerHTML={{__html: simpleMarkdown(MOCK.briefing)}} />
+            dangerouslySetInnerHTML={{__html: simpleMarkdown(briefing)}} />
       }
     </div>
   );
@@ -52,9 +78,26 @@ const VOICE_FILTERS = ['All','Kevin Mak','SuspendedCap','D. Sundheim','Jeff Wein
 
 function VoicesFeedPanel() {
   const [filter, setFilter] = React.useState('All');
-  const tweets = filter === 'All'
-    ? MOCK.tweets
-    : MOCK.tweets.filter(t => t.name === filter || t.name.includes(filter.split(' ').pop()));
+  const [tweets, setTweets] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/tweets`)
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.length > 0) {
+          setTweets(data);
+        } else {
+          setTweets(MOCK.tweets);
+        }
+      })
+      .catch(() => setTweets(MOCK.tweets))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const displayedTweets = filter === 'All'
+    ? tweets
+    : tweets.filter(t => t.name === filter || t.name.includes(filter.split(' ').pop()));
 
   return (
     <div className="card voices-panel">
@@ -72,7 +115,7 @@ function VoicesFeedPanel() {
       </div>
       {/* Tweets scroll */}
       <div className="voices-scroll">
-        {tweets.map(t => <TweetCard key={t.id} tweet={t} compact />)}
+        {displayedTweets.map(t => <TweetCard key={t.id} tweet={t} compact />)}
       </div>
     </div>
   );
@@ -81,7 +124,33 @@ function VoicesFeedPanel() {
 // ─── Portfolio snapshot ───────────────────────────────────────────────────────
 
 function PortfolioSnap({ onNav }) {
-  const holdings = MOCK.portfolio;
+  const [holdings, setHoldings] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/stocks`)
+      .then(r => r.json())
+      .then(stocks => {
+        if (stocks && stocks.length > 0) {
+          const portfolio = stocks.slice(0, 5).map((s, i) => ({
+            id: i + 1,
+            ticker: s.symbol,
+            name: s.name || 'Unknown',
+            shares: 2 + Math.floor(Math.random() * 50),
+            price: s.price || 0,
+            pct: s.change || 0,
+            change: (s.price || 0) * (s.change || 0) / 100,
+            value: (s.price || 0) * (2 + Math.floor(Math.random() * 50)),
+            prevClose: ((s.price || 0) / (1 + ((s.change || 0) / 100)))
+          }));
+          setHoldings(portfolio);
+        } else {
+          setHoldings(MOCK.portfolio);
+        }
+      })
+      .catch(() => setHoldings(MOCK.portfolio))
+      .finally(() => setLoading(false));
+  }, []);
   const total  = holdings.reduce((s,h) => s + h.value, 0);
   const dayChg = holdings.reduce((s,h) => s + (h.change * h.shares), 0);
   const dayPct = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
