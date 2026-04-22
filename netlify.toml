@@ -1,9 +1,5 @@
 [build]
-  command = "npm run build"
-  publish = "dist"
-
-[build.environment]
-  VITE_API_URL = "https://torii-backend.onrender.com"
+  publish = "."
 
 [[redirects]]
   from = "/*"
