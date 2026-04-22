@@ -5,7 +5,7 @@ const API_URL = 'https://torii-backend.onrender.com/api';
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
 function PortfolioPage({ onNav }) {
-  const [holdings, setHoldings] = React.useState([]);
+  const [holdings, setHoldings] = React.useState(MOCK.portfolio);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -16,14 +16,14 @@ function PortfolioPage({ onNav }) {
           // Transform stock data to portfolio format
           const portfolio = stocks.slice(0, 9).map((s, i) => ({
             id: i + 1,
-            ticker: s.symbol,
+            ticker: s.symbol || `STOCK${i}`,
             name: s.name || 'Unknown',
             shares: 2 + Math.floor(Math.random() * 100),
-            price: s.price || 0,
-            pct: s.change || 0,
-            change: (s.price || 0) * (s.change || 0) / 100,
-            value: (s.price || 0) * (2 + Math.floor(Math.random() * 100)),
-            prevClose: ((s.price || 0) / (1 + ((s.change || 0) / 100)))
+            price: parseFloat(s.price) || 0,
+            pct: parseFloat(s.change) || 0,
+            change: (parseFloat(s.price) || 0) * (parseFloat(s.change) || 0) / 100,
+            value: (parseFloat(s.price) || 0) * (2 + Math.floor(Math.random() * 100)),
+            prevClose: ((parseFloat(s.price) || 0) / (1 + ((parseFloat(s.change) || 0) / 100)))
           }));
           setHoldings(portfolio);
         } else {
@@ -33,8 +33,9 @@ function PortfolioPage({ onNav }) {
       .catch(() => setHoldings(MOCK.portfolio))
       .finally(() => setLoading(false));
   }, []);
-  const total    = holdings.reduce((s,h) => s + h.value, 0);
-  const dayChg   = holdings.reduce((s,h) => s + (h.change * h.shares), 0);
+
+  const total    = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + (h.value || 0), 0) : 0;
+  const dayChg   = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + ((h.change || 0) * (h.shares || 0)), 0) : 0;
   const dayPct   = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
   const [sort, setSort] = React.useState('value');
 
@@ -46,8 +47,8 @@ function PortfolioPage({ onNav }) {
   });
 
   // Allocation data
-  const allocs = holdings.map(h => ({ ticker: h.ticker, pct: (h.value / total) * 100, value: h.value, color: h.pct >= 0 ? 'var(--green)' : 'var(--red-loss)' }))
-    .sort((a,b) => b.pct - a.pct);
+  const allocs = holdings && holdings.length > 0 && total > 0 ? holdings.map(h => ({ ticker: h.ticker, pct: (h.value / total) * 100, value: h.value, color: h.pct >= 0 ? 'var(--green)' : 'var(--red-loss)' }))
+    .sort((a,b) => b.pct - a.pct) : [];
 
   return (
     <div className="page-root">
@@ -84,12 +85,15 @@ function PortfolioPage({ onNav }) {
         <div className="stat-card">
           <span className="stat-label">Largest Move</span>
           {(() => {
-            const top = [...holdings].sort((a,b) => Math.abs(b.pct)-Math.abs(a.pct))[0];
-            return <>
+            const top = holdings && holdings.length > 0 ? [...holdings].sort((a,b) => Math.abs(b.pct)-Math.abs(a.pct))[0] : null;
+            return top ? <>
               <span className="stat-value">{top.ticker}</span>
               <span className="stat-change" style={{color:top.pct>=0?'var(--green)':'var(--red-loss)'}}>
-                {top.pct>=0?'+':''}{top.pct.toFixed(2)}%
+                {top.pct>=0?'+':''}{(top.pct || 0).toFixed(2)}%
               </span>
+            </> : <>
+              <span className="stat-value">—</span>
+              <span className="stat-change" style={{color:'var(--fg3)'}}>loading</span>
             </>;
           })()}
         </div>
@@ -169,18 +173,20 @@ function PortfolioPage({ onNav }) {
           </div>
           <div className="card">
             <div className="section-label">Performance</div>
-            {[{label:'Best today', h: [...holdings].sort((a,b)=>b.pct-a.pct)[0], up:true},
-              {label:'Worst today', h: [...holdings].sort((a,b)=>a.pct-b.pct)[0], up:false}].map(({label,h,up})=>(
+            {holdings && holdings.length > 0 ? [
+              {label:'Best today', h: [...holdings].sort((a,b)=>(b.pct||0)-(a.pct||0))[0], up:true},
+              {label:'Worst today', h: [...holdings].sort((a,b)=>(a.pct||0)-(b.pct||0))[0], up:false}
+            ].map(({label,h,up})=>h ? (
               <div key={label} style={{marginBottom:12}}>
                 <div style={{fontSize:9,fontFamily:'var(--font-mono)',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>{label}</div>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                   <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:13,color:'var(--fg)'}}>{h.ticker}</span>
                   <span style={{fontFamily:'var(--font-mono)',fontWeight:600,fontSize:12,color:up?'var(--green)':'var(--red-loss)'}}>
-                    {h.pct>=0?'+':''}{h.pct.toFixed(2)}%
+                    {(h.pct||0)>=0?'+':''}{(h.pct||0).toFixed(2)}%
                   </span>
                 </div>
               </div>
-            ))}
+            ) : null) : null}
           </div>
         </div>
       </div>
@@ -279,7 +285,7 @@ function NewsPage() {
   const [cat, setCat]   = React.useState('all');
   const [imp, setImp]   = React.useState('all');
   const [query, setQuery] = React.useState('');
-  const [articles, setArticles] = React.useState([]);
+  const [articles, setArticles] = React.useState(MOCK.news);
   const [loading, setLoading] = React.useState(true);
 
   const cats = ['all','japan','macro','market'];
@@ -299,7 +305,7 @@ function NewsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  let displayArticles = articles;
+  let displayArticles = articles || [];
   if (cat !== 'all') displayArticles = displayArticles.filter(a => a.category === cat);
   if (imp !== 'all') displayArticles = displayArticles.filter(a => a.importance === imp);
   if (query.trim()) {
@@ -369,7 +375,7 @@ const VOICE_ACCOUNTS = [
 
 function VoicesPage() {
   const [selected, setSelected] = React.useState('all');
-  const [tweets, setTweets] = React.useState([]);
+  const [tweets, setTweets] = React.useState(MOCK.tweets);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -387,8 +393,8 @@ function VoicesPage() {
   }, []);
 
   const displayedTweets = selected === 'all'
-    ? tweets
-    : tweets.filter(t => t.handle === selected);
+    ? (tweets || MOCK.tweets)
+    : (tweets || MOCK.tweets).filter(t => t.handle === selected);
 
   return (
     <div className="page-root">

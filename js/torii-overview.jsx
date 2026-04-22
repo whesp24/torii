@@ -20,7 +20,7 @@ function getQ(sym, src) {
 
 function BriefingCard() {
   const [loading, setLoading] = React.useState(true);
-  const [briefing, setBriefing] = React.useState('');
+  const [briefing, setBriefing] = React.useState(MOCK.briefing);
   const [refreshed, setRefreshed] = React.useState(false);
 
   React.useEffect(() => {
@@ -78,7 +78,7 @@ const VOICE_FILTERS = ['All','Kevin Mak','SuspendedCap','D. Sundheim','Jeff Wein
 
 function VoicesFeedPanel() {
   const [filter, setFilter] = React.useState('All');
-  const [tweets, setTweets] = React.useState([]);
+  const [tweets, setTweets] = React.useState(MOCK.tweets);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -96,8 +96,8 @@ function VoicesFeedPanel() {
   }, []);
 
   const displayedTweets = filter === 'All'
-    ? tweets
-    : tweets.filter(t => t.name === filter || t.name.includes(filter.split(' ').pop()));
+    ? (tweets || MOCK.tweets)
+    : (tweets || MOCK.tweets).filter(t => t.name === filter || t.name.includes(filter.split(' ').pop()));
 
   return (
     <div className="card voices-panel">
@@ -124,7 +124,7 @@ function VoicesFeedPanel() {
 // ─── Portfolio snapshot ───────────────────────────────────────────────────────
 
 function PortfolioSnap({ onNav }) {
-  const [holdings, setHoldings] = React.useState([]);
+  const [holdings, setHoldings] = React.useState(MOCK.portfolio);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -134,14 +134,14 @@ function PortfolioSnap({ onNav }) {
         if (stocks && stocks.length > 0) {
           const portfolio = stocks.slice(0, 5).map((s, i) => ({
             id: i + 1,
-            ticker: s.symbol,
+            ticker: s.symbol || `STOCK${i}`,
             name: s.name || 'Unknown',
             shares: 2 + Math.floor(Math.random() * 50),
-            price: s.price || 0,
-            pct: s.change || 0,
-            change: (s.price || 0) * (s.change || 0) / 100,
-            value: (s.price || 0) * (2 + Math.floor(Math.random() * 50)),
-            prevClose: ((s.price || 0) / (1 + ((s.change || 0) / 100)))
+            price: parseFloat(s.price) || 0,
+            pct: parseFloat(s.change) || 0,
+            change: (parseFloat(s.price) || 0) * (parseFloat(s.change) || 0) / 100,
+            value: (parseFloat(s.price) || 0) * (2 + Math.floor(Math.random() * 50)),
+            prevClose: ((parseFloat(s.price) || 0) / (1 + ((parseFloat(s.change) || 0) / 100)))
           }));
           setHoldings(portfolio);
         } else {
@@ -151,7 +151,7 @@ function PortfolioSnap({ onNav }) {
       .catch(() => setHoldings(MOCK.portfolio))
       .finally(() => setLoading(false));
   }, []);
-  const total  = holdings.reduce((s,h) => s + h.value, 0);
+  const total  = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + (h.value || 0), 0) : 0;
   const dayChg = holdings.reduce((s,h) => s + (h.change * h.shares), 0);
   const dayPct = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
   const up = dayChg >= 0;
