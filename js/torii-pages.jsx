@@ -13,24 +13,29 @@ function PortfolioPage({ onNav }) {
       .then(r => r.json())
       .then(stocks => {
         if (stocks && stocks.length > 0) {
-          // Transform stock data to portfolio format
-          const portfolio = stocks.slice(0, 9).map((s, i) => ({
-            id: i + 1,
-            ticker: s.symbol || `STOCK${i}`,
-            name: s.name || 'Unknown',
-            shares: 2 + Math.floor(Math.random() * 100),
-            price: parseFloat(s.price) || 0,
-            pct: parseFloat(s.change) || 0,
-            change: (parseFloat(s.price) || 0) * (parseFloat(s.change) || 0) / 100,
-            value: (parseFloat(s.price) || 0) * (2 + Math.floor(Math.random() * 100)),
-            prevClose: ((parseFloat(s.price) || 0) / (1 + ((parseFloat(s.change) || 0) / 100)))
-          }));
+          // Transform real API stock data to portfolio format
+          const portfolio = stocks.slice(0, 9).map((s, i) => {
+            const shares = 2 + Math.floor(Math.random() * 100);
+            const price = parseFloat(s.price) || 0;
+            const changePercent = parseFloat(s.changePercent) || 0;
+            return {
+              id: i + 1,
+              ticker: s.symbol,
+              name: s.symbol,
+              shares: shares,
+              price: price,
+              pct: changePercent,
+              change: price * (changePercent / 100),
+              value: price * shares,
+              prevClose: price / (1 + (changePercent / 100))
+            };
+          });
           setHoldings(portfolio);
         } else {
           setHoldings(MOCK.portfolio);
         }
       })
-      .catch(() => setHoldings(MOCK.portfolio))
+      .catch(e => {console.error('API Error:', e); setHoldings(MOCK.portfolio);})
       .finally(() => setLoading(false));
   }, []);
 
@@ -296,12 +301,23 @@ function NewsPage() {
       .then(r => r.json())
       .then(news => {
         if (news && news.length > 0) {
-          setArticles(news);
+          // Transform API news data - ensure all required fields exist
+          const transformed = news.map(article => ({
+            id: article._id || Math.random(),
+            source: article.source || 'Unknown',
+            title: article.title || 'Untitled',
+            summary: article.description || article.content || 'No summary available',
+            url: article.url || '#',
+            publishedAt: article.publishedAt || new Date().toISOString(),
+            category: article.category || 'general',
+            importance: article.sentiment === 'positive' ? 'high' : article.sentiment === 'negative' ? 'medium' : 'low'
+          }));
+          setArticles(transformed);
         } else {
           setArticles(MOCK.news);
         }
       })
-      .catch(() => setArticles(MOCK.news))
+      .catch(e => {console.error('News API Error:', e); setArticles(MOCK.news);})
       .finally(() => setLoading(false));
   }, []);
 
@@ -383,12 +399,26 @@ function VoicesPage() {
       .then(r => r.json())
       .then(tweetData => {
         if (tweetData && tweetData.length > 0) {
-          setTweets(tweetData);
+          // Transform API tweet data
+          const transformed = tweetData.map(tweet => ({
+            id: tweet._id || Math.random(),
+            author: tweet.author || 'Unknown',
+            handle: tweet.authorHandle || 'unknown',
+            name: tweet.author || 'Unknown',
+            content: tweet.content || '',
+            url: tweet.url || '#',
+            createdAt: tweet.createdAt || new Date().toISOString(),
+            likes: tweet.likes || 0,
+            retweets: tweet.retweets || 0,
+            replies: tweet.replies || 0,
+            sentiment: tweet.sentiment || 'neutral'
+          }));
+          setTweets(transformed);
         } else {
           setTweets(MOCK.tweets);
         }
       })
-      .catch(() => setTweets(MOCK.tweets))
+      .catch(e => {console.error('Tweets API Error:', e); setTweets(MOCK.tweets);})
       .finally(() => setLoading(false));
   }, []);
 

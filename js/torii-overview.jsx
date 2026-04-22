@@ -27,13 +27,15 @@ function BriefingCard() {
     fetch(`${API_URL}/briefing`)
       .then(r => r.json())
       .then(data => {
-        if (data && (data.content || data.summary)) {
-          setBriefing(data.content || data.summary || MOCK.briefing);
+        if (data) {
+          // Handle both array and single object responses
+          const briefingContent = Array.isArray(data) ? data[0]?.content : (data.content || data.summary);
+          setBriefing(briefingContent || MOCK.briefing);
         } else {
           setBriefing(MOCK.briefing);
         }
       })
-      .catch(() => setBriefing(MOCK.briefing))
+      .catch(e => {console.error('Briefing API Error:', e); setBriefing(MOCK.briefing);})
       .finally(() => setLoading(false));
   }, []);
 
@@ -86,12 +88,26 @@ function VoicesFeedPanel() {
       .then(r => r.json())
       .then(data => {
         if (data && data.length > 0) {
-          setTweets(data);
+          // Transform API tweet data
+          const transformed = data.map(tweet => ({
+            id: tweet._id || Math.random(),
+            author: tweet.author || 'Unknown',
+            handle: tweet.authorHandle || 'unknown',
+            name: tweet.author || 'Unknown',
+            content: tweet.content || '',
+            url: tweet.url || '#',
+            createdAt: tweet.createdAt || new Date().toISOString(),
+            likes: tweet.likes || 0,
+            retweets: tweet.retweets || 0,
+            replies: tweet.replies || 0,
+            sentiment: tweet.sentiment || 'neutral'
+          }));
+          setTweets(transformed);
         } else {
           setTweets(MOCK.tweets);
         }
       })
-      .catch(() => setTweets(MOCK.tweets))
+      .catch(e => {console.error('Tweets API Error:', e); setTweets(MOCK.tweets);})
       .finally(() => setLoading(false));
   }, []);
 
@@ -132,23 +148,28 @@ function PortfolioSnap({ onNav }) {
       .then(r => r.json())
       .then(stocks => {
         if (stocks && stocks.length > 0) {
-          const portfolio = stocks.slice(0, 5).map((s, i) => ({
-            id: i + 1,
-            ticker: s.symbol || `STOCK${i}`,
-            name: s.name || 'Unknown',
-            shares: 2 + Math.floor(Math.random() * 50),
-            price: parseFloat(s.price) || 0,
-            pct: parseFloat(s.change) || 0,
-            change: (parseFloat(s.price) || 0) * (parseFloat(s.change) || 0) / 100,
-            value: (parseFloat(s.price) || 0) * (2 + Math.floor(Math.random() * 50)),
-            prevClose: ((parseFloat(s.price) || 0) / (1 + ((parseFloat(s.change) || 0) / 100)))
-          }));
+          const portfolio = stocks.slice(0, 5).map((s, i) => {
+            const shares = 2 + Math.floor(Math.random() * 50);
+            const price = parseFloat(s.price) || 0;
+            const changePercent = parseFloat(s.changePercent) || 0;
+            return {
+              id: i + 1,
+              ticker: s.symbol,
+              name: s.symbol,
+              shares: shares,
+              price: price,
+              pct: changePercent,
+              change: price * (changePercent / 100),
+              value: price * shares,
+              prevClose: price / (1 + (changePercent / 100))
+            };
+          });
           setHoldings(portfolio);
         } else {
           setHoldings(MOCK.portfolio);
         }
       })
-      .catch(() => setHoldings(MOCK.portfolio))
+      .catch(e => {console.error('Stocks API Error:', e); setHoldings(MOCK.portfolio);})
       .finally(() => setLoading(false));
   }, []);
   const total  = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + (h.value || 0), 0) : 0;
