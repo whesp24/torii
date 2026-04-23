@@ -7,6 +7,26 @@ const API_URL = 'https://torii-backend.onrender.com/api';
   setInterval(() => fetch(`${API_URL}/health`).catch(() => {}), 14 * 60 * 1000);
 })();
 
+// Wake Render on page load, then fire a global event so components retry their fetches
+(function wakeRender() {
+  let woken = false;
+  function tryWake() {
+    fetch(`${API_URL}/health`, { signal: AbortSignal.timeout(35000) })
+      .then(() => {
+        if (!woken) {
+          woken = true;
+          // Broadcast so any component that loaded mock data can retry
+          window.dispatchEvent(new Event('render-awake'));
+        }
+      })
+      .catch(() => {
+        // Retry once more after 5s if first ping fails
+        setTimeout(tryWake, 5000);
+      });
+  }
+  tryWake();
+})();
+
 const OVERVIEW_KPIS = [
   { label:'Nikkei 225', sym:'^N225',    src:'japan', dec:0, accent:true },
   { label:'USD / JPY',  sym:'USDJPY=X', src:'japan', dec:2, tag:'FX'    },
@@ -16,9 +36,21 @@ const OVERVIEW_KPIS = [
   { label:'Gold',       sym:'GC=F',      src:'macro', dec:0, tag:'COMMO' },
 ];
 
+// Live KPI data fetched from backend (falls back to MOCK while loading/sleeping)
+let _liveKPIs = [];
 function getQ(sym, src) {
+  const live = _liveKPIs.find(k => k.symbol === sym);
+  if (live) return { price: live.price, pct: live.changePercent };
   const pool = src === 'japan' ? MOCK.japan : MOCK.macro;
   return pool.find(q => q.symbol === sym) || null;
+}
+
+// Fetch KPIs once on load and again when Render wakes
+function fetchLiveKPIs(onDone) {
+  fetch(`${API_URL}/kpis`)
+    .then(r => r.json())
+    .then(data => { if (Array.isArray(data) && data.length > 0) { _liveKPIs = data; if (onDone) onDone(); } })
+    .catch(() => {});
 }
 
 // ─── Briefing card ───────────────────────────────────────────────────────────
@@ -98,7 +130,7 @@ function VoicesFeedPanel() {
   const [tweets, setTweets] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
 
-  React.useEffect(() => {
+  function loadTweets() {
     fetch(`${API_URL}/tweets`)
       .then(r => r.json())
       .then(data => {
@@ -112,13 +144,19 @@ function VoicesFeedPanel() {
             url: tweet.url || '#',
             createdAt: tweet.createdAt || new Date().toISOString(),
             sentiment: tweet.sentiment || 'neutral'
-          // Always pre-filter to curated handles only
           })).filter(t => CURATED_HANDLES_LOWER.includes(t.handle));
           setTweets(transformed);
         }
       })
       .catch(e => console.error('Tweets API Error:', e))
       .finally(() => setLoading(false));
+  }
+
+  React.useEffect(() => {
+    loadTweets();
+    const handler = () => { setLoading(true); loadTweets(); };
+    window.addEventListener('render-awake', handler);
+    return () => window.removeEventListener('render-awake', handler);
   }, []);
 
   const displayedTweets = filter === 'All'
@@ -257,20 +295,25 @@ function HeadlinesCard({ onNav }) {
   const [articles, setArticles] = React.useState([]);
   const [loading, setLoading]   = React.useState(true);
 
-  React.useEffect(() => {
+  function loadNews() {
     fetch(`${API_URL}/news`)
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
-          // Sort newest first, take top 5
           const sorted = [...data].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
           setArticles(sorted.slice(0, 5));
-        } else {
-          setArticles(MOCK.news.filter(a => a.importance !== 'low').slice(0, 5));
         }
       })
-      .catch(() => setArticles(MOCK.news.filter(a => a.importance !== 'low').slice(0, 5)))
+      .catch(() => {})
       .finally(() => setLoading(false));
+  }
+
+  React.useEffect(() => {
+    loadNews();
+    // Retry once Render wakes from sleep
+    const handler = () => { setLoading(true); loadNews(); };
+    window.addEventListener('render-awake', handler);
+    return () => window.removeEventListener('render-awake', handler);
   }, []);
 
   const displayArticles = articles.length > 0
@@ -325,6 +368,16 @@ function OverviewPage({ onNav }) {
   const chartDates = MOCK.nikkeiChart.dates;
   const isUp = chartData[chartData.length-1] >= chartData[0];
   const chartColor = isUp ? '#22C55E' : '#FF6B6B';
+
+  // Fetch live KPIs and re-render when Render wakes
+  const [kpiTick, setKpiTick] = React.useState(0);
+  React.useEffect(() => {
+    fetchLiveKPIs(() => setKpiTick(t => t + 1));
+    const handler = () => fetchLiveKPIs(() => setKpiTick(t => t + 1));
+    window.addEventListener('render-awake', handler);
+    const interval = setInterval(() => fetchLiveKPIs(() => setKpiTick(t => t + 1)), 5 * 60 * 1000);
+    return () => { window.removeEventListener('render-awake', handler); clearInterval(interval); };
+  }, []);
 
   return (
     <div className="page-root">

@@ -64,7 +64,7 @@ initializeTasks().catch(err => console.error('Error initializing tasks:', err));
 initializeWatchlist().catch(err => console.error('Error initializing watchlist:', err));
 
 // Scheduled Jobs
-cron.schedule('*/5 * * * *', () => {
+cron.schedule('*/30 * * * *', () => {
   console.log('Running KPI update...');
   updateAllKPIs();
 });
