@@ -206,18 +206,108 @@ function Topbar({ theme, onTheme, notifCount, notifOpen, onNotif }) {
   );
 }
 
-// ─── Sidebar ──────────────────────────────────────────────────────────────────
+// ─── Floating Tasks Widget ────────────────────────────────────────────────────
 
-function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCollapse }) {
+function FloatingTasks({ tasks, onAddTask, onToggleTask }) {
+  const [open,      setOpen]      = React.useState(false);
   const [taskInput, setTaskInput] = React.useState('');
-  const [tasksOpen, setTasksOpen] = React.useState(true);
   const todoCount = tasks.filter(t => !t.done).length;
+
+  const tagColors = {
+    fed:'#F59E0B', boj:'#EF4444', macro:'#8B5CF6',
+    earnings:'#3B82F6', alert:'#FF6B6B', routine:'var(--fg3)',
+  };
 
   function handleAdd(e) {
     e.preventDefault();
     if (taskInput.trim()) { onAddTask(taskInput.trim()); setTaskInput(''); }
   }
 
+  return (
+    <div style={{
+      position: 'fixed', bottom: 24, right: 24,
+      zIndex: 200,
+      display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
+    }}>
+      {/* Expanded panel */}
+      {open && (
+        <div style={{
+          width: 300, maxHeight: 420,
+          background: 'var(--bg)', border: '1px solid var(--bdr)', borderRadius: 14,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        }}>
+          {/* Panel header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderBottom: '1px solid var(--bdr)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>Tasks</span>
+              {todoCount > 0 && (
+                <span style={{ fontSize: 10, fontWeight: 800, background: 'var(--red)', color: 'white', borderRadius: 10, padding: '1px 6px', fontFamily: 'var(--font-mono)' }}>{todoCount}</span>
+              )}
+            </div>
+            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', fontSize: 16, lineHeight: 1 }}>✕</button>
+          </div>
+          {/* Task list */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 8px' }}>
+            {tasks.length === 0 && (
+              <div style={{ padding: '8px 6px', color: 'var(--fg3)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>Loading events…</div>
+            )}
+            {tasks.map(t => {
+              const tagColor = t.tag ? (tagColors[t.tag] || 'var(--fg3)') : null;
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 6px', borderRadius: 7,
+                  opacity: t.done ? 0.45 : 1, transition: 'opacity 0.2s' }}>
+                  <button onClick={() => onToggleTask(t.id)} style={{
+                    width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${t.done ? 'var(--green)' : 'var(--bdr)'}`,
+                    background: t.done ? 'var(--green)' : 'transparent', flexShrink: 0, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {t.done && <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><polyline points="2,6 5,9 10,3"/></svg>}
+                  </button>
+                  <span style={{ flex: 1, fontSize: 12, color: t.priority === 'high' ? 'var(--red)' : 'var(--fg2)',
+                    textDecoration: t.done ? 'line-through' : 'none', lineHeight: 1.4 }}>{t.text}</span>
+                  {t.tag && tagColor && (
+                    <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', fontWeight: 700, color: tagColor,
+                      border: `1px solid ${tagColor}`, borderRadius: 3, padding: '1px 4px', flexShrink: 0,
+                      textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.85 }}>{t.tag}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {/* Add task */}
+          <form onSubmit={handleAdd} style={{ padding: '8px 10px', borderTop: '1px solid var(--bdr)', display: 'flex', gap: 6 }}>
+            <input value={taskInput} onChange={e => setTaskInput(e.target.value)} placeholder="+ Add task…"
+              style={{ flex: 1, padding: '6px 10px', background: 'var(--surf)', border: '1px solid var(--bdr)', borderRadius: 7,
+                fontSize: 12, color: 'var(--fg)', outline: 'none', fontFamily: 'inherit' }} />
+            <button type="submit" style={{ padding: '6px 10px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>+</button>
+          </form>
+        </div>
+      )}
+
+      {/* Toggle pill */}
+      <button onClick={() => setOpen(o => !o)} style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '9px 16px', background: 'var(--bg)', border: '1px solid var(--bdr)', borderRadius: 24,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.4)', cursor: 'pointer', color: 'var(--fg)',
+        fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-mono)', letterSpacing: '0.06em',
+        textTransform: 'uppercase', transition: 'all 0.15s',
+      }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+        Tasks
+        {todoCount > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 800, background: 'var(--red)', color: 'white', borderRadius: 10, padding: '1px 6px', marginLeft: 2 }}>{todoCount}</span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+
+function Sidebar({ page, onNav, collapsed, onCollapse }) {
   return (
     <aside className={`sidebar${collapsed?' collapsed':''}`}>
       {/* Logo / collapse */}
@@ -246,63 +336,6 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
           </button>
         ))}
       </div>
-
-      <div className="sidebar-div" />
-
-      {/* Holdings — reads from same localStorage key as PortfolioPage */}
-      <SidebarHoldings page={page} onNav={onNav} collapsed={collapsed} />
-
-      {/* Tasks */}
-      {!collapsed && (
-        <>
-          <div className="sidebar-div" />
-          <div className="sidebar-tasks">
-            <button className="tasks-header" onClick={() => setTasksOpen(o => !o)}>
-              <div className="sidebar-section-label" style={{margin:0}}>TASKS</div>
-              <div style={{display:'flex',alignItems:'center',gap:6}}>
-                {todoCount > 0 && <span className="task-badge">{todoCount}</span>}
-                <span className="tasks-caret">{tasksOpen ? '▴' : '▾'}</span>
-              </div>
-            </button>
-            {tasksOpen && (
-              <div className="tasks-list" style={{overflowY:'auto',flex:1}}>
-                {tasks.length === 0 && (
-                  <div style={{padding:'8px 4px',color:'var(--fg3)',fontSize:10,fontFamily:'var(--font-mono)'}}>
-                    Loading events…
-                  </div>
-                )}
-                {tasks.map(t => {
-                  const tagColors = {
-                    fed:'#F59E0B', boj:'#EF4444', macro:'#8B5CF6',
-                    earnings:'#3B82F6', alert:'#FF6B6B', routine:'var(--fg3)',
-                  };
-                  const tagColor = t.tag ? (tagColors[t.tag] || 'var(--fg3)') : null;
-                  return (
-                    <div key={t.id} className={`task-item${t.done?' done':''}`}>
-                      <button className={`task-check${t.done?' checked':''}`} onClick={() => onToggleTask(t.id)}>
-                        {t.done && <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="2,6 5,9 10,3"/></svg>}
-                      </button>
-                      <span className={`task-text${t.priority==='high'?' task-urgent':''}`}>{t.text}</span>
-                      {t.tag && tagColor && (
-                        <span style={{
-                          fontSize:8, fontFamily:'var(--font-mono)', fontWeight:700,
-                          color:tagColor, border:`1px solid ${tagColor}`,
-                          borderRadius:3, padding:'1px 4px', flexShrink:0,
-                          textTransform:'uppercase', letterSpacing:'0.05em', opacity:0.85,
-                        }}>{t.tag}</span>
-                      )}
-                    </div>
-                  );
-                })}
-                <form onSubmit={handleAdd} className="task-add-form">
-                  <input className="task-input" value={taskInput}
-                    onChange={e => setTaskInput(e.target.value)} placeholder="+ Add task…" />
-                </form>
-              </div>
-            )}
-          </div>
-        </>
-      )}
 
       {/* Footer */}
       {!collapsed && (
@@ -655,9 +688,10 @@ function App() {
 
       <Sidebar
         page={page} onNav={setPage}
-        tasks={tasks} onAddTask={addTask} onToggleTask={toggleTask}
         collapsed={collapsed} onCollapse={() => setCollapse(o => !o)}
       />
+
+      <FloatingTasks tasks={tasks} onAddTask={addTask} onToggleTask={toggleTask} />
 
       {/* Mobile ticker strip — shown below topbar on phones */}
       <MobileTicker />

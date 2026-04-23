@@ -2042,23 +2042,37 @@ function initials(name) {
 }
 
 // Build edges between contacts that share company / school / location
-function buildEdges(contacts) {
-  const edges = [];
-  for (let i = 0; i < contacts.length; i++) {
-    for (let j = i + 1; j < contacts.length; j++) {
-      const a = contacts[i], b = contacts[j];
-      if (a.company && b.company && a.company.trim().toLowerCase() === b.company.trim().toLowerCase())
-        edges.push({ source: a.id, target: b.id, type: 'company', color: '#3B82F6' });
-      if (a.school && b.school && a.school.trim().toLowerCase() === b.school.trim().toLowerCase())
-        edges.push({ source: a.id, target: b.id, type: 'school', color: '#22c55e' });
-      if (a.location && b.location && a.location.trim().toLowerCase() === b.location.trim().toLowerCase())
-        edges.push({ source: a.id, target: b.id, type: 'location', color: '#F59E0B' });
+function buildEdges(contacts, filters = { company: true, school: true, location: false }) {
+  // Group contacts by field, then connect pairs — but cap group size to prevent hairballs
+  function groupEdges(field, type, color, maxGroupSize) {
+    if (!filters[type]) return [];
+    const groups = {};
+    for (const c of contacts) {
+      const key = c[field]?.trim()?.toLowerCase();
+      if (!key) continue;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(c.id);
     }
+    const edges = [], seen = new Set();
+    for (const members of Object.values(groups)) {
+      if (members.length < 2 || members.length > maxGroupSize) continue;
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          const k = [members[i], members[j]].sort().join('|');
+          if (!seen.has(k)) { seen.add(k); edges.push({ source: members[i], target: members[j], type, color }); }
+        }
+      }
+    }
+    return edges;
   }
-  return edges;
+  return [
+    ...groupEdges('company',  'company',  '#4a9eff', 12),  // up to 12 per company
+    ...groupEdges('school',   'school',   '#4ade80', 12),  // up to 12 per school
+    ...groupEdges('location', 'location', '#fbbf24',  6),  // cap at 6 for location (off by default)
+  ];
 }
 
-function NetworkGraph({ contacts, onSelectNode, selectedId }) {
+function NetworkGraph({ contacts, onSelectNode, selectedId, edgeFilters }) {
   const containerRef = React.useRef(null);
   const svgRef       = React.useRef(null);
   const animRef      = React.useRef(null);
@@ -2099,25 +2113,26 @@ function NetworkGraph({ contacts, onSelectNode, selectedId }) {
         vx: 0, vy: 0,
       };
     });
-    const e = buildEdges(contacts);
+    const e = buildEdges(contacts, edgeFilters);
     nodesRef.current = n;
     setNodes([...n]);
     setEdges(e);
-  }, [contacts.length, size.w]);
+  }, [contacts.length, size.w, JSON.stringify(edgeFilters)]);
 
   // Force simulation
   React.useEffect(() => {
     if (nodes.length === 0) return;
     let frame = 0;
     let running = true;
-    const simEdges = buildEdges(contacts);
+    const simEdges = buildEdges(contacts, edgeFilters);
     const simNodes = nodesRef.current.map(n => ({ ...n }));
 
     function tick() {
-      if (!running || frame > 400) return;
+      if (!running || frame > 500) return;
       frame++;
       const { w, h } = size;
-      const repulsion = 3500, springLen = 140, springK = 0.035, damping = 0.78, gravity = 0.018;
+      // Stronger repulsion + longer springs = much more spread out
+      const repulsion = 9000, springLen = 220, springK = 0.018, damping = 0.74, gravity = 0.006;
       const cx = w / 2, cy = h / 2;
       const deg = {};
       for (const e of simEdges) { deg[e.source] = (deg[e.source]||0)+1; deg[e.target] = (deg[e.target]||0)+1; }
@@ -2402,6 +2417,7 @@ function NetworkingPage() {
   const [form, setForm]             = React.useState({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
   const [editing, setEditing]       = React.useState(null); // contact being edited
   const [editForm, setEditForm]     = React.useState({});
+  const [edgeFilters, setEdgeFilters] = React.useState({ company: true, school: true, location: false });
 
   // Load from backend
   React.useEffect(() => {
@@ -2462,7 +2478,7 @@ function NetworkingPage() {
   }
 
   const selected = contacts.find(c => c.id === selectedId);
-  const edges     = buildEdges(contacts);
+  const edges     = buildEdges(contacts, edgeFilters);
 
   // Group contacts by company / school / location
   function groupBy(field) {
@@ -2533,6 +2549,19 @@ function NetworkingPage() {
           <p className="page-sub">{contacts.length} contacts · {edges.length} connections</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {/* Edge filters — only shown in graph view */}
+          {view === 'graph' && (
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[['company','Co.','#4a9eff'], ['school','School','#4ade80'], ['location','City','#fbbf24']].map(([type, label, color]) => (
+                <button key={type} onClick={() => setEdgeFilters(f => ({ ...f, [type]: !f[type] }))}
+                  style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${edgeFilters[type] ? color : 'var(--bdr)'}`,
+                    background: edgeFilters[type] ? `${color}22` : 'var(--surf)', color: edgeFilters[type] ? color : 'var(--fg3)',
+                    cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'all 0.15s' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           {/* View toggle */}
           <div style={{ display: 'flex', background: 'var(--surf)', borderRadius: 8, padding: 3, border: '1px solid var(--bdr)' }}>
             {[['graph', '⬡'], ['list', '≡']].map(([v, icon]) => (
@@ -2589,7 +2618,7 @@ function NetworkingPage() {
 
       {contacts.length > 0 && view === 'graph' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <NetworkGraph contacts={contacts} onSelectNode={setSelectedId} selectedId={selectedId} />
+          <NetworkGraph contacts={contacts} onSelectNode={setSelectedId} selectedId={selectedId} edgeFilters={edgeFilters} />
 
           {/* Selected contact detail card */}
           {selected && (
@@ -2755,7 +2784,13 @@ function AssistantPage() {
         body: JSON.stringify({ message: msg, conversationId: activeId }),
       });
       const data = await res.json();
-      if (data.conversationId) {
+      if (!res.ok) {
+        const errMsg = data.error || 'Something went wrong.';
+        const hint = errMsg.includes('API key') || res.status === 500
+          ? `${errMsg}\n\nMake sure ANTHROPIC_API_KEY is set in your Render environment variables.`
+          : errMsg;
+        setMessages(p => [...p, { role: 'assistant', content: hint, timestamp: new Date() }]);
+      } else if (data.conversationId) {
         setActiveId(data.conversationId);
         setMessages(p => [...p, { role: 'assistant', content: data.message, timestamp: new Date() }]);
         // Update conversation list
@@ -2766,7 +2801,7 @@ function AssistantPage() {
         });
       }
     } catch (err) {
-      setMessages(p => [...p, { role: 'assistant', content: 'Error reaching backend. Check that ANTHROPIC_API_KEY is set on Render.', timestamp: new Date() }]);
+      setMessages(p => [...p, { role: 'assistant', content: 'Could not reach the backend. Is Render still deploying?', timestamp: new Date() }]);
     }
     setLoading(false);
     inputRef.current?.focus();
