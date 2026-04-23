@@ -1,0 +1,9 @@
+{
+  "name": "torii",
+  "version": "1.0.0",
+  "description": "Torii Japan Market Hub",
+  "scripts": {
+    "start": "node server/server.js",
+    "install-deps": "cd server && npm install"
+  }
+}
