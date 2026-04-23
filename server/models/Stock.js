@@ -24,6 +24,9 @@ const stockSchema = new mongoose.Schema({
   marketCap: String,
   peRatio: Number,
   dividend: Number,
+  volume:    Number,
+  avgVolume: Number,
+  name:      String,
   lastUpdated: {
     type: Date,
     default: Date.now

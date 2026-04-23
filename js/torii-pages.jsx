@@ -972,7 +972,7 @@ function WatchlistPage({ onNav }) {
                 placeholder="e.g., NVDA"
                 value={addForm.symbol}
                 onChange={e => setAddForm(p => ({...p, symbol: e.target.value}))}
-                style={{width:'100%',padding:'8px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf1)',color:'var(--fg)'}}
+                style={{width:'100%',padding:'8px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf)',color:'var(--fg)'}}
               />
             </div>
             <div style={{flex:1}}>
@@ -982,7 +982,7 @@ function WatchlistPage({ onNav }) {
                 placeholder="Company name"
                 value={addForm.name}
                 onChange={e => setAddForm(p => ({...p, name: e.target.value}))}
-                style={{width:'100%',padding:'8px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf1)',color:'var(--fg)'}}
+                style={{width:'100%',padding:'8px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf)',color:'var(--fg)'}}
               />
             </div>
             <button type="submit" className="btn-primary" style={{padding:'8px 16px',fontSize:13}}>
@@ -1147,12 +1147,12 @@ function AlertsPanel({ onClose }) {
             placeholder="Symbol (e.g., NVDA)"
             value={newAlert.symbol}
             onChange={e => setNewAlert(p => ({ ...p, symbol: e.target.value }))}
-            style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf1)', color: 'var(--fg)' }}
+            style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)' }}
           />
           <select
             value={newAlert.alertType}
             onChange={e => setNewAlert(p => ({ ...p, alertType: e.target.value }))}
-            style={{ padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf1)', color: 'var(--fg)' }}
+            style={{ padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)' }}
           >
             <option value="above">Price ≥</option>
             <option value="below">Price ≤</option>
@@ -1163,7 +1163,7 @@ function AlertsPanel({ onClose }) {
             value={newAlert.targetPrice}
             onChange={e => setNewAlert(p => ({ ...p, targetPrice: e.target.value }))}
             step="0.01"
-            style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf1)', color: 'var(--fg)' }}
+            style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)' }}
           />
           <button type="submit" style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600 }}>
             Add
@@ -1214,4 +1214,803 @@ function AlertsPanel({ onClose }) {
   );
 }
 
-Object.assign(window, { PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel });
+// ─── EARNINGS CALENDAR PAGE ───────────────────────────────────────────────────
+
+const ECOCAL_2026 = [
+  { date:'2026-04-28', name:'FOMC Meeting',      desc:'Fed rate decision — Apr 28–29',             tag:'fed',   priority:'high'   },
+  { date:'2026-04-29', name:'Q1 GDP Release',    desc:'First estimate of Q1 2026 GDP growth',      tag:'macro', priority:'high'   },
+  { date:'2026-04-30', name:'BOJ Meeting',       desc:'Bank of Japan policy — Apr 30–May 1',       tag:'boj',   priority:'high'   },
+  { date:'2026-04-30', name:'PCE Inflation',     desc:'March PCE personal spending data',           tag:'macro', priority:'medium' },
+  { date:'2026-05-01', name:'US Jobs Report',    desc:'April nonfarm payrolls',                    tag:'macro', priority:'high'   },
+  { date:'2026-05-02', name:'Berkshire AGM',     desc:'Berkshire Hathaway annual meeting',         tag:'event', priority:'low'    },
+  { date:'2026-05-12', name:'US CPI Release',    desc:'April CPI inflation data',                  tag:'macro', priority:'high'   },
+  { date:'2026-05-29', name:'PCE Inflation',     desc:'April PCE personal spending',               tag:'macro', priority:'medium' },
+  { date:'2026-06-05', name:'US Jobs Report',    desc:'May nonfarm payrolls',                      tag:'macro', priority:'medium' },
+  { date:'2026-06-10', name:'US CPI Release',    desc:'May CPI inflation data',                    tag:'macro', priority:'medium' },
+  { date:'2026-06-15', name:'BOJ Meeting',       desc:'Bank of Japan policy — Jun 15–16',          tag:'boj',   priority:'medium' },
+  { date:'2026-06-16', name:'FOMC Meeting',      desc:'Fed rate decision — Jun 16–17',             tag:'fed',   priority:'high'   },
+  { date:'2026-07-10', name:'US Jobs Report',    desc:'June nonfarm payrolls',                     tag:'macro', priority:'medium' },
+  { date:'2026-07-14', name:'US CPI Release',    desc:'June CPI inflation data',                   tag:'macro', priority:'medium' },
+  { date:'2026-07-28', name:'FOMC Meeting',      desc:'Fed rate decision — Jul 28–29',             tag:'fed',   priority:'high'   },
+  { date:'2026-07-29', name:'Q2 GDP Release',    desc:'First estimate of Q2 2026 GDP growth',      tag:'macro', priority:'high'   },
+  { date:'2026-07-29', name:'BOJ Meeting',       desc:'Bank of Japan policy — Jul 29–30',          tag:'boj',   priority:'medium' },
+  { date:'2026-08-11', name:'US CPI Release',    desc:'July CPI inflation data',                   tag:'macro', priority:'medium' },
+  { date:'2026-09-15', name:'FOMC Meeting',      desc:'Fed rate decision — Sep 15–16',             tag:'fed',   priority:'high'   },
+  { date:'2026-09-16', name:'BOJ Meeting',       desc:'Bank of Japan policy — Sep 16–17',          tag:'boj',   priority:'medium' },
+  { date:'2026-11-03', name:'FOMC Meeting',      desc:'Fed rate decision — Nov 3–4',               tag:'fed',   priority:'high'   },
+  { date:'2026-12-08', name:'FOMC Meeting',      desc:'Fed rate decision — Dec 8–9',               tag:'fed',   priority:'high'   },
+];
+
+function EarningsPage({ defaultTab }) {
+  const [earnings, setEarnings]     = React.useState([]);
+  const [loading, setLoading]       = React.useState(true);
+  const [activeTab, setActiveTab]   = React.useState(defaultTab || 'earnings');
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/earnings/calendar`)
+      .then(r => r.ok ? r.json() : { earningsCalendar: [] })
+      .then(d => { setEarnings(d.earningsCalendar || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const tagStyle = tag => {
+    const map = { fed:'#F59E0B', boj:'#EF4444', macro:'#8B5CF6', event:'#10B981' };
+    return { background: (map[tag]||'#666') + '22', color: map[tag]||'#999',
+      border: `1px solid ${(map[tag]||'#666')}44`, borderRadius:4,
+      padding:'2px 7px', fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em' };
+  };
+
+  const priBadge = p => {
+    const c = p==='high'?'#EF4444':p==='medium'?'#F59E0B':'#6B7280';
+    return { width:6, height:6, borderRadius:'50%', background:c, flexShrink:0 };
+  };
+
+  const hourLabel = h => h==='bmo'?'pre-market':h==='amc'?'after-close':'';
+
+  const today = new Date().toISOString().split('T')[0];
+  const grouped = {};
+  for (const e of earnings) {
+    if (!grouped[e.date]) grouped[e.date] = [];
+    grouped[e.date].push(e);
+  }
+  const sortedDates = Object.keys(grouped).sort();
+
+  const ecoUpcoming = ECOCAL_2026
+    .filter(e => e.date >= today)
+    .sort((a,b) => a.date.localeCompare(b.date));
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Earnings & Calendar</h1>
+          <p className="page-sub">Upcoming earnings reports · macro events</p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:'flex',gap:4,marginBottom:20,background:'var(--surf)',borderRadius:10,padding:4,width:'fit-content'}}>
+        {[['earnings','Earnings Reports'],['ecocal','Economic Calendar']].map(([id,label]) => (
+          <button key={id} onClick={() => setActiveTab(id)}
+            style={{padding:'7px 18px',borderRadius:7,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,
+              background:activeTab===id?'var(--surf2)':'transparent',
+              color:activeTab===id?'var(--fg)':'var(--fg3)',transition:'all 0.15s'}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'earnings' && (
+        loading ? (
+          <div className="card" style={{textAlign:'center',padding:40,color:'var(--fg3)'}}>
+            Loading earnings calendar…
+          </div>
+        ) : earnings.length === 0 ? (
+          <div className="card" style={{textAlign:'center',padding:40}}>
+            <div style={{fontSize:32,marginBottom:12}}>📅</div>
+            <div style={{color:'var(--fg3)',fontSize:14}}>No earnings data — requires Finnhub API key with earnings access</div>
+          </div>
+        ) : (
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            {sortedDates.map(date => {
+              const d = new Date(date + 'T12:00:00Z');
+              const isPast = date < today;
+              return (
+                <div key={date}>
+                  <div style={{fontSize:11,fontWeight:700,color:'var(--fg3)',letterSpacing:'0.08em',
+                    textTransform:'uppercase',marginBottom:8,fontFamily:'var(--font-mono)'}}>
+                    {d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}
+                    {date === today && <span style={{marginLeft:8,color:'var(--red)',fontSize:10}}>TODAY</span>}
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                    {grouped[date].map(e => (
+                      <div key={e.symbol} className="card"
+                        style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12,
+                          opacity:isPast?0.55:1}}>
+                        <div style={{width:40,height:40,borderRadius:8,background:'var(--red-dim)',
+                          display:'flex',alignItems:'center',justifyContent:'center',
+                          color:'var(--red)',fontWeight:800,fontSize:13,fontFamily:'var(--font-mono)',flexShrink:0}}>
+                          {e.symbol.slice(0,3)}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontWeight:700,fontSize:14,color:'var(--fg)'}}>{e.symbol}</div>
+                          <div style={{fontSize:12,color:'var(--fg3)',marginTop:2}}>
+                            {hourLabel(e.hour) || 'Report date'}
+                            {e.epsEstimate != null && ` · EPS est: $${e.epsEstimate}`}
+                            {e.revenueEstimate != null && ` · Rev est: $${(e.revenueEstimate/1e9).toFixed(1)}B`}
+                          </div>
+                        </div>
+                        <span style={{fontSize:11,color:'var(--fg3)',fontFamily:'var(--font-mono)',
+                          background:'var(--surf)',padding:'4px 10px',borderRadius:5}}>
+                          {e.hour==='bmo'?'🌅 Pre':e.hour==='amc'?'🌆 Post':'📊'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {activeTab === 'ecocal' && (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {ecoUpcoming.map((evt, i) => {
+            const d = new Date(evt.date + 'T12:00:00Z');
+            const isToday = evt.date === today;
+            const daysAway = Math.round((new Date(evt.date) - new Date(today)) / 86400000);
+            return (
+              <div key={i} className="card" style={{padding:'14px 18px',display:'flex',gap:14,alignItems:'center'}}>
+                <div style={{width:52,textAlign:'center',flexShrink:0}}>
+                  <div style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)',textTransform:'uppercase'}}>
+                    {d.toLocaleDateString('en-US',{month:'short'})}
+                  </div>
+                  <div style={{fontSize:22,fontWeight:800,color:isToday?'var(--red)':'var(--fg)',lineHeight:1.1}}>
+                    {d.getUTCDate()}
+                  </div>
+                  <div style={{fontSize:9,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>
+                    {isToday?'TODAY':daysAway<=7?`${daysAway}d`:''}
+                  </div>
+                </div>
+                <div style={{borderLeft:'2px solid var(--bdr)',paddingLeft:14,flex:1}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                    <div style={priBadge(evt.priority)} />
+                    <span style={{fontWeight:700,fontSize:14,color:'var(--fg)'}}>{evt.name}</span>
+                    <span style={tagStyle(evt.tag)}>{evt.tag}</span>
+                  </div>
+                  <div style={{fontSize:12,color:'var(--fg3)'}}>{evt.desc}</div>
+                </div>
+                <div>
+                  <span style={{...priBadge(evt.priority), width:'auto', height:'auto', borderRadius:4,
+                    background:evt.priority==='high'?'#EF444422':evt.priority==='medium'?'#F59E0B22':'#6B728022',
+                    color:evt.priority==='high'?'#EF4444':evt.priority==='medium'?'#F59E0B':'#6B7280',
+                    padding:'3px 8px', fontSize:10, fontWeight:700,
+                    textTransform:'uppercase',letterSpacing:'0.06em', border:'none'}}>
+                    {evt.priority}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── TOOLS PAGE (Position Sizing Calculator + Cost Basis P&L) ─────────────────
+
+function ToolsPage() {
+  const [tab, setTab] = React.useState('sizing');
+
+  // Position Sizing Calculator state
+  const [capital, setCapital]       = React.useState('100000');
+  const [riskPct, setRiskPct]       = React.useState('1');
+  const [entryPrice, setEntryPrice] = React.useState('');
+  const [stopPrice, setStopPrice]   = React.useState('');
+  const [targetPrice, setTargetPrice] = React.useState('');
+
+  // Cost Basis / P&L state
+  const [positions, setPositions] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('torii_portfolio') || '[]'); } catch { return []; }
+  });
+  const [liveData, setLiveData] = React.useState({});
+  const [loadingPL, setLoadingPL] = React.useState(true);
+
+  React.useEffect(() => {
+    if (tab !== 'pnl' || positions.length === 0) { setLoadingPL(false); return; }
+    setLoadingPL(true);
+    Promise.all(positions.map(p =>
+      fetch(`${API_URL}/stocks/live/${p.ticker}`).then(r => r.ok ? r.json() : null).catch(() => null)
+    )).then(results => {
+      const map = {};
+      positions.forEach((p, i) => { if (results[i]) map[p.ticker] = results[i]; });
+      setLiveData(map);
+      setLoadingPL(false);
+    });
+  }, [tab, positions.length]);
+
+  // Sizing calc
+  const capNum   = parseFloat(capital) || 0;
+  const riskNum  = parseFloat(riskPct) || 0;
+  const entryNum = parseFloat(entryPrice) || 0;
+  const stopNum  = parseFloat(stopPrice) || 0;
+  const targetNum = parseFloat(targetPrice) || 0;
+  const riskDollar = capNum * (riskNum / 100);
+  const riskPerShare = entryNum && stopNum ? Math.abs(entryNum - stopNum) : 0;
+  const shares = riskPerShare > 0 ? Math.floor(riskDollar / riskPerShare) : 0;
+  const positionValue = shares * entryNum;
+  const positionPct   = capNum > 0 ? (positionValue / capNum) * 100 : 0;
+  const rewardRisk    = targetNum && riskPerShare > 0
+    ? Math.abs(targetNum - entryNum) / riskPerShare : 0;
+
+  const inp = (val, set, placeholder, prefix='$') => (
+    <div style={{flex:1}}>
+      <div style={{fontSize:11,color:'var(--fg3)',marginBottom:5,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em'}}>{placeholder}</div>
+      <div style={{position:'relative'}}>
+        <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--fg3)',fontSize:13}}>{prefix}</span>
+        <input type="number" value={val} onChange={e=>set(e.target.value)} placeholder="0"
+          style={{width:'100%',padding:'9px 10px 9px 24px',border:'1px solid var(--bdr)',borderRadius:8,
+            fontSize:14,background:'var(--surf)',color:'var(--fg)',boxSizing:'border-box'}} />
+      </div>
+    </div>
+  );
+
+  const stat = (label, value, color='var(--fg)') => (
+    <div style={{flex:1,background:'var(--surf)',borderRadius:10,padding:'14px 18px',minWidth:120}}>
+      <div style={{fontSize:10,color:'var(--fg3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:800,color,fontFamily:'var(--font-mono)'}}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Tools</h1>
+          <p className="page-sub">Position sizing · cost basis · P&amp;L analysis</p>
+        </div>
+      </div>
+
+      <div style={{display:'flex',gap:4,marginBottom:24,background:'var(--surf)',borderRadius:10,padding:4,width:'fit-content'}}>
+        {[['sizing','Position Sizing'],['pnl','Cost Basis & P&L']].map(([id,label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            style={{padding:'7px 18px',borderRadius:7,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,
+              background:tab===id?'var(--surf2)':'transparent',
+              color:tab===id?'var(--fg)':'var(--fg3)',transition:'all 0.15s'}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'sizing' && (
+        <div style={{display:'flex',flexDirection:'column',gap:16,maxWidth:640}}>
+          <div className="card">
+            <div style={{fontSize:12,color:'var(--fg3)',marginBottom:16,letterSpacing:'0.04em'}}>
+              ACCOUNT SETTINGS
+            </div>
+            <div style={{display:'flex',gap:12}}>
+              {inp(capital, setCapital, 'Account Capital')}
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,color:'var(--fg3)',marginBottom:5,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em'}}>Risk per Trade</div>
+                <div style={{position:'relative'}}>
+                  <input type="number" value={riskPct} onChange={e=>setRiskPct(e.target.value)} placeholder="1" step="0.1" min="0.1" max="10"
+                    style={{width:'100%',padding:'9px 28px 9px 10px',border:'1px solid var(--bdr)',borderRadius:8,
+                      fontSize:14,background:'var(--surf)',color:'var(--fg)',boxSizing:'border-box'}} />
+                  <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',color:'var(--fg3)',fontSize:13}}>%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{fontSize:12,color:'var(--fg3)',marginBottom:16,letterSpacing:'0.04em'}}>TRADE DETAILS</div>
+            <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+              {inp(entryPrice, setEntryPrice, 'Entry Price')}
+              {inp(stopPrice, setStopPrice, 'Stop Loss')}
+              {inp(targetPrice, setTargetPrice, 'Target Price')}
+            </div>
+          </div>
+
+          {entryNum > 0 && stopNum > 0 && riskDollar > 0 && (
+            <div className="card" style={{background:'var(--red-dim)',border:'1px solid var(--red)',borderRadius:12}}>
+              <div style={{fontSize:12,color:'var(--red)',marginBottom:14,fontWeight:700,letterSpacing:'0.06em',textTransform:'uppercase'}}>
+                Calculated Position
+              </div>
+              <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                {stat('Shares to Buy', shares > 0 ? shares.toLocaleString() : '—')}
+                {stat('Position Size', `$${positionValue.toLocaleString(undefined,{maximumFractionDigits:0})}`)}
+                {stat('% of Portfolio', `${positionPct.toFixed(1)}%`, positionPct > 20 ? '#EF4444' : 'var(--fg)')}
+                {targetNum > 0 && stat('Risk:Reward', rewardRisk > 0 ? `1:${rewardRisk.toFixed(1)}` : '—',
+                  rewardRisk >= 2 ? '#22c55e' : rewardRisk >= 1 ? '#F59E0B' : '#EF4444')}
+              </div>
+              {positionPct > 25 && (
+                <div style={{marginTop:12,padding:'8px 12px',background:'#EF444422',borderRadius:6,fontSize:12,color:'#EF4444'}}>
+                  ⚠ Position exceeds 25% of portfolio — consider reducing size or risk %
+                </div>
+              )}
+              {rewardRisk > 0 && rewardRisk < 1.5 && (
+                <div style={{marginTop:8,padding:'8px 12px',background:'#F59E0B22',borderRadius:6,fontSize:12,color:'#F59E0B'}}>
+                  ⚠ Risk:Reward below 1:1.5 — consider a better entry or wider target
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="card" style={{fontSize:12,color:'var(--fg3)',lineHeight:1.6}}>
+            <strong style={{color:'var(--fg)'}}>How it works:</strong> Risk dollar = Capital × Risk %.
+            Shares = Risk Dollar ÷ |Entry − Stop|. This ensures each trade risks the same fixed % of your account,
+            controlling drawdown regardless of volatility. Aim for R:R ≥ 2:1.
+          </div>
+        </div>
+      )}
+
+      {tab === 'pnl' && (
+        <div>
+          {loadingPL ? (
+            <div className="card" style={{textAlign:'center',padding:40,color:'var(--fg3)'}}>Loading prices…</div>
+          ) : positions.length === 0 ? (
+            <div className="card" style={{textAlign:'center',padding:40}}>
+              <div style={{fontSize:32,marginBottom:12}}>📊</div>
+              <div style={{color:'var(--fg3)',fontSize:14}}>Add positions in the Portfolio tab to see P&L here</div>
+            </div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:10}}>
+              {positions.map(p => {
+                const live = liveData[p.ticker];
+                const price    = live?.price || 0;
+                const cost     = p.costBasis || 0;
+                const shares   = p.shares || 0;
+                const curVal   = price * shares;
+                const costVal  = cost * shares;
+                const pnlDol   = curVal - costVal;
+                const pnlPct   = costVal > 0 ? (pnlDol / costVal) * 100 : 0;
+                const dayChg   = (live?.change || 0) * shares;
+                const isGain   = pnlDol >= 0;
+                return (
+                  <div key={p.ticker} className="card" style={{padding:'16px 20px'}}>
+                    <div style={{display:'flex',alignItems:'flex-start',gap:16}}>
+                      <div style={{width:44,height:44,borderRadius:10,background:'var(--red-dim)',
+                        display:'flex',alignItems:'center',justifyContent:'center',
+                        color:'var(--red)',fontWeight:800,fontSize:12,fontFamily:'var(--font-mono)',flexShrink:0}}>
+                        {p.ticker.slice(0,4)}
+                      </div>
+                      <div style={{flex:1}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                          <span style={{fontWeight:700,fontSize:15}}>{p.ticker}</span>
+                          <span style={{fontWeight:800,fontSize:16,color:isGain?'#22c55e':'#EF4444',fontFamily:'var(--font-mono)'}}>
+                            {isGain?'+':''}{pnlDol >= 0?'':'-'}${Math.abs(pnlDol).toFixed(2)}
+                          </span>
+                        </div>
+                        <div style={{display:'flex',gap:16,marginTop:8,flexWrap:'wrap'}}>
+                          <div style={{fontSize:12,color:'var(--fg3)'}}>
+                            <span style={{color:'var(--fg2)'}}>{shares} shares</span> @ ${cost.toFixed(2)} cost
+                          </div>
+                          <div style={{fontSize:12,color:'var(--fg3)'}}>
+                            Current: <span style={{color:'var(--fg)'}}>${price.toFixed(2)}</span>
+                          </div>
+                          <div style={{fontSize:12,color:isGain?'#22c55e':'#EF4444',fontWeight:600}}>
+                            {isGain?'+':''}{pnlPct.toFixed(2)}% total return
+                          </div>
+                          <div style={{fontSize:12,color:dayChg>=0?'#22c55e':'#EF4444'}}>
+                            Today: {dayChg>=0?'+':''}{dayChg.toFixed(2)}
+                          </div>
+                        </div>
+                        {/* P&L bar */}
+                        <div style={{marginTop:10,height:4,background:'var(--surf)',borderRadius:2,overflow:'hidden'}}>
+                          <div style={{height:'100%',borderRadius:2,width:`${Math.min(Math.abs(pnlPct),100)}%`,
+                            background:isGain?'#22c55e':'#EF4444',transition:'width 0.5s'}} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {/* Summary */}
+              {(() => {
+                const totalCost = positions.reduce((s,p) => s + (p.costBasis||0)*p.shares, 0);
+                const totalVal  = positions.reduce((s,p) => {
+                  const live = liveData[p.ticker];
+                  return s + (live?.price||0)*p.shares;
+                }, 0);
+                const totalPnl  = totalVal - totalCost;
+                const totalPct  = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+                const isG = totalPnl >= 0;
+                return (
+                  <div className="card" style={{background:isG?'#0f2218':'#1f0f0f',
+                    border:`1px solid ${isG?'#22c55e33':'#ef444433'}`,padding:'16px 20px'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div>
+                        <div style={{fontSize:11,color:'var(--fg3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>Total Portfolio P&L</div>
+                        <div style={{fontSize:11,color:'var(--fg3)'}}>Cost basis: ${totalCost.toLocaleString(undefined,{maximumFractionDigits:0})} · Market value: ${totalVal.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+                      </div>
+                      <div style={{textAlign:'right'}}>
+                        <div style={{fontSize:24,fontWeight:800,color:isG?'#22c55e':'#EF4444',fontFamily:'var(--font-mono)'}}>
+                          {isG?'+':''}{totalPct.toFixed(2)}%
+                        </div>
+                        <div style={{fontSize:14,color:isG?'#22c55e':'#EF4444',fontFamily:'var(--font-mono)'}}>
+                          {isG?'+':''}{totalPnl >= 0 ? '' : '-'}${Math.abs(totalPnl).toFixed(2)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ANALYTICS PAGE (Correlation Heatmap + Unusual Volume) ────────────────────
+
+function AnalyticsPage() {
+  const [tab, setTab]             = React.useState('heatmap');
+  const [matrix, setMatrix]       = React.useState(null);
+  const [tickers, setTickers]     = React.useState([]);
+  const [loadingHM, setLoadingHM] = React.useState(false);
+  const [customTickers, setCustomTickers] = React.useState('NVDA,AAPL,MSFT,GOOGL,TSLA,AMD,META,AMZN');
+  const [unusual, setUnusual]     = React.useState([]);
+  const [loadingUV, setLoadingUV] = React.useState(true);
+
+  // Load unusual volume immediately
+  React.useEffect(() => {
+    fetch(`${API_URL}/analytics/unusual-volume`)
+      .then(r => r.ok ? r.json() : { unusual: [] })
+      .then(d => { setUnusual(d.unusual || []); setLoadingUV(false); })
+      .catch(() => setLoadingUV(false));
+  }, []);
+
+  function fetchCorrelation() {
+    setLoadingHM(true);
+    setMatrix(null);
+    fetch(`${API_URL}/analytics/correlation?tickers=${encodeURIComponent(customTickers)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.matrix) { setMatrix(d.matrix); setTickers(d.tickers); }
+        setLoadingHM(false);
+      })
+      .catch(() => setLoadingHM(false));
+  }
+
+  // Color for correlation value
+  function corrColor(v) {
+    if (v === undefined || v === null) return 'var(--surf)';
+    const abs = Math.abs(v);
+    if (v > 0) {
+      const g = Math.round(34 + (34 * abs)), b = Math.round(34 + (34 * abs));
+      const r = Math.round(34 + abs * 188);
+      return `rgb(${r}, ${g}, ${b})`;
+    } else {
+      const r = Math.round(34 + (34 * abs)), g = Math.round(34 + (34 * abs));
+      const b = Math.round(34 + abs * 100);
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+  }
+
+  function corrColorNew(v) {
+    if (v >= 0.7) return '#22c55e';
+    if (v >= 0.3) return '#a3e635';
+    if (v >= 0)   return '#fbbf24';
+    if (v >= -0.3) return '#f97316';
+    return '#ef4444';
+  }
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Analytics</h1>
+          <p className="page-sub">Correlation heatmap · unusual volume</p>
+        </div>
+      </div>
+
+      <div style={{display:'flex',gap:4,marginBottom:24,background:'var(--surf)',borderRadius:10,padding:4,width:'fit-content'}}>
+        {[['heatmap','Correlation Heatmap'],['unusual','Unusual Volume']].map(([id,label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            style={{padding:'7px 18px',borderRadius:7,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,
+              background:tab===id?'var(--surf2)':'transparent',
+              color:tab===id?'var(--fg)':'var(--fg3)',transition:'all 0.15s'}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'heatmap' && (
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div className="card" style={{display:'flex',gap:12,alignItems:'center'}}>
+            <input
+              value={customTickers}
+              onChange={e => setCustomTickers(e.target.value)}
+              placeholder="NVDA,AAPL,MSFT,AMZN (up to 10)"
+              style={{flex:1,padding:'9px 12px',border:'1px solid var(--bdr)',borderRadius:8,
+                fontSize:13,background:'var(--surf)',color:'var(--fg)'}}
+            />
+            <button onClick={fetchCorrelation} disabled={loadingHM}
+              style={{padding:'9px 20px',background:'var(--red)',color:'white',border:'none',borderRadius:8,
+                fontSize:13,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>
+              {loadingHM ? 'Loading…' : 'Compute'}
+            </button>
+          </div>
+
+          {!matrix && !loadingHM && (
+            <div className="card" style={{textAlign:'center',padding:40}}>
+              <div style={{fontSize:32,marginBottom:12}}>📊</div>
+              <div style={{color:'var(--fg3)',fontSize:14}}>Enter tickers and click Compute to generate the 60-day correlation matrix</div>
+            </div>
+          )}
+
+          {loadingHM && (
+            <div className="card" style={{textAlign:'center',padding:40,color:'var(--fg3)'}}>
+              Fetching 60-day price history for {customTickers.split(',').length} stocks…
+            </div>
+          )}
+
+          {matrix && tickers.length > 0 && (
+            <div className="card">
+              <div style={{overflowX:'auto'}}>
+                <table style={{borderCollapse:'collapse',fontFamily:'var(--font-mono)',fontSize:11}}>
+                  <thead>
+                    <tr>
+                      <th style={{padding:'6px 8px',color:'var(--fg3)',textAlign:'left',minWidth:60}}></th>
+                      {tickers.map(t => (
+                        <th key={t} style={{padding:'6px 8px',color:'var(--fg3)',fontWeight:700,textAlign:'center',minWidth:55}}>{t}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tickers.map(row => (
+                      <tr key={row}>
+                        <td style={{padding:'6px 8px',fontWeight:700,color:'var(--fg)',fontSize:11}}>{row}</td>
+                        {tickers.map(col => {
+                          const v = matrix[row]?.[col];
+                          const isD = row === col;
+                          return (
+                            <td key={col} style={{padding:'6px 4px',textAlign:'center'}}>
+                              <div style={{
+                                width:50,height:32,borderRadius:5,
+                                background:isD?'var(--red-dim)':
+                                  v >= 0.7 ? '#22c55e33' :
+                                  v >= 0.3 ? '#a3e63533' :
+                                  v >= 0   ? '#fbbf2422' :
+                                  v >= -0.3? '#f9731622' : '#ef444433',
+                                display:'flex',alignItems:'center',justifyContent:'center',
+                                color:isD?'var(--red)':corrColorNew(v),
+                                fontWeight:700,fontSize:11,
+                              }}>
+                                {v != null ? (isD ? '1.00' : v.toFixed(2)) : '—'}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Legend */}
+              <div style={{display:'flex',gap:16,marginTop:16,flexWrap:'wrap',fontSize:11,color:'var(--fg3)'}}>
+                {[['#22c55e33','#22c55e','≥ 0.70 Strong positive'],['#a3e63533','#a3e635','0.30–0.70 Moderate'],
+                  ['#fbbf2422','#fbbf24','0–0.30 Weak/None'],['#ef444433','#ef4444','< 0 Negative']].map(([bg,c,label]) => (
+                  <div key={label} style={{display:'flex',alignItems:'center',gap:6}}>
+                    <div style={{width:24,height:16,borderRadius:3,background:bg,border:`1px solid ${c}44`}} />
+                    <span style={{color:c}}>{label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'unusual' && (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <div className="card" style={{padding:'12px 16px',background:'var(--surf)',fontSize:12,color:'var(--fg3)'}}>
+            Stocks trading at ≥1.3× average volume from portfolio watchlist. Updates every 5 min.
+            <span style={{marginLeft:8,color:'var(--fg3)',fontSize:11}}>
+              Note: Dark pool flow data requires premium data subscriptions (CBOE, Unusual Whales).
+              Volume ratios shown here use standard exchange data.
+            </span>
+          </div>
+          {loadingUV ? (
+            <div className="card" style={{textAlign:'center',padding:40,color:'var(--fg3)'}}>Loading…</div>
+          ) : unusual.length === 0 ? (
+            <div className="card" style={{textAlign:'center',padding:40}}>
+              <div style={{fontSize:32,marginBottom:12}}>📈</div>
+              <div style={{color:'var(--fg3)',fontSize:14}}>No unusual volume detected in portfolio stocks right now</div>
+            </div>
+          ) : (
+            unusual.map(s => {
+              const up = (s.changePercent||0) >= 0;
+              const ratioColor = s.ratio >= 3 ? '#EF4444' : s.ratio >= 2 ? '#F59E0B' : '#22c55e';
+              return (
+                <div key={s.symbol} className="card" style={{padding:'14px 18px',display:'flex',gap:16,alignItems:'center'}}>
+                  <div style={{width:44,height:44,borderRadius:10,background:'var(--red-dim)',
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    color:'var(--red)',fontWeight:800,fontSize:12,fontFamily:'var(--font-mono)',flexShrink:0}}>
+                    {s.symbol.slice(0,4)}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                      <span style={{fontWeight:700,fontSize:15}}>{s.symbol}</span>
+                      <span style={{fontWeight:700,fontSize:15,color:up?'#22c55e':'#EF4444',fontFamily:'var(--font-mono)'}}>
+                        ${(s.price||0).toFixed(2)} <span style={{fontSize:12}}>{up?'+':''}{(s.changePercent||0).toFixed(2)}%</span>
+                      </span>
+                    </div>
+                    <div style={{display:'flex',gap:12,fontSize:12,color:'var(--fg3)'}}>
+                      <span>Vol: <strong style={{color:'var(--fg)'}}>{s.volume?.toLocaleString()}</strong></span>
+                      <span>Avg: <strong style={{color:'var(--fg)'}}>{s.avgVolume?.toLocaleString()}</strong></span>
+                      <span style={{color:ratioColor,fontWeight:700}}>{s.ratio.toFixed(1)}× avg</span>
+                    </div>
+                  </div>
+                  <div style={{textAlign:'center',background:ratioColor+'22',border:`1px solid ${ratioColor}44`,
+                    borderRadius:8,padding:'8px 14px'}}>
+                    <div style={{fontSize:18,fontWeight:800,color:ratioColor,fontFamily:'var(--font-mono)'}}>{s.ratio.toFixed(1)}×</div>
+                    <div style={{fontSize:10,color:'var(--fg3)',fontWeight:600}}>VOLUME</div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PUSH NOTIFICATIONS SETTINGS ─────────────────────────────────────────────
+
+function PushSettingsPage() {
+  const [status, setStatus]         = React.useState('idle'); // idle | requesting | subscribed | denied | unsupported
+  const [vapidKey, setVapidKey]     = React.useState(null);
+  const [email, setEmail]           = React.useState('');
+  const [emailSaved, setEmailSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    // Check existing subscription
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setStatus('unsupported'); return;
+    }
+    navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => {
+      if (sub) setStatus('subscribed');
+    });
+    // Fetch VAPID public key
+    fetch(`${API_URL}/push/vapid-public`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.key) setVapidKey(d.key); })
+      .catch(() => {});
+  }, []);
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+  }
+
+  async function subscribe() {
+    if (!vapidKey) { alert('Push notifications not configured on server (VAPID keys missing)'); return; }
+    setStatus('requesting');
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') { setStatus('denied'); return; }
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      });
+      await fetch(`${API_URL}/push/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      setStatus('subscribed');
+    } catch (err) {
+      console.error('Push subscribe error:', err);
+      setStatus('idle');
+      alert('Could not subscribe: ' + err.message);
+    }
+  }
+
+  async function unsubscribe() {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch(`${API_URL}/push/subscribe`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+        await sub.unsubscribe();
+      }
+      setStatus('idle');
+    } catch (err) {
+      alert('Could not unsubscribe: ' + err.message);
+    }
+  }
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Notifications</h1>
+          <p className="page-sub">Push alerts · daily email digest</p>
+        </div>
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:16,maxWidth:560}}>
+        {/* Push Notifications */}
+        <div className="card">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Browser Push Notifications</div>
+              <div style={{fontSize:12,color:'var(--fg3)'}}>Receive real-time alerts when price targets are hit</div>
+            </div>
+            <div style={{width:10,height:10,borderRadius:'50%',marginTop:4,
+              background:status==='subscribed'?'#22c55e':status==='denied'?'#EF4444':'#6B7280'}} />
+          </div>
+
+          {status === 'unsupported' && (
+            <div style={{padding:'12px',background:'#F59E0B22',borderRadius:8,fontSize:13,color:'#F59E0B'}}>
+              Your browser doesn't support push notifications. Try Chrome or Firefox.
+            </div>
+          )}
+          {status === 'subscribed' && (
+            <div>
+              <div style={{padding:'10px 14px',background:'#22c55e22',borderRadius:8,fontSize:13,color:'#22c55e',marginBottom:12}}>
+                ✓ Push notifications are active on this device
+              </div>
+              <button onClick={unsubscribe}
+                style={{padding:'8px 16px',background:'var(--surf)',color:'var(--fg3)',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,cursor:'pointer'}}>
+                Unsubscribe
+              </button>
+            </div>
+          )}
+          {status === 'denied' && (
+            <div style={{padding:'12px',background:'#EF444422',borderRadius:8,fontSize:13,color:'#EF4444'}}>
+              Notifications blocked. Enable them in your browser settings → Site permissions.
+            </div>
+          )}
+          {(status === 'idle' || status === 'requesting') && status !== 'unsupported' && (
+            <button onClick={subscribe} disabled={status==='requesting'}
+              style={{padding:'10px 20px',background:'var(--red)',color:'white',border:'none',borderRadius:8,
+                fontSize:13,fontWeight:600,cursor:'pointer'}}>
+              {status === 'requesting' ? 'Requesting permission…' : 'Enable Push Notifications'}
+            </button>
+          )}
+
+          {!vapidKey && status !== 'unsupported' && (
+            <div style={{marginTop:12,padding:'10px 14px',background:'var(--surf)',borderRadius:8,fontSize:12,color:'var(--fg3)'}}>
+              To enable push notifications, set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in your Render environment variables.
+              Generate keys with: <code style={{fontFamily:'var(--font-mono)',color:'var(--fg)'}}>web-push generate-vapid-keys</code>
+            </div>
+          )}
+        </div>
+
+        {/* Email Digest */}
+        <div className="card">
+          <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Daily Email Digest</div>
+          <div style={{fontSize:12,color:'var(--fg3)',marginBottom:16}}>
+            Sent weekdays at 7am ET — portfolio summary, top movers, upcoming events
+          </div>
+          <div style={{padding:'12px 14px',background:'var(--surf)',borderRadius:8,fontSize:12,color:'var(--fg3)',lineHeight:1.6}}>
+            Configure in Render environment variables:<br/>
+            <code style={{fontFamily:'var(--font-mono)',color:'var(--fg)'}}>EMAIL_FROM</code> — sender Gmail address<br/>
+            <code style={{fontFamily:'var(--font-mono)',color:'var(--fg)'}}>EMAIL_PASS</code> — Gmail App Password<br/>
+            <code style={{fontFamily:'var(--font-mono)',color:'var(--fg)'}}>EMAIL_TO</code> — recipient email address
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, {
+  PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
+  EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage,
+});

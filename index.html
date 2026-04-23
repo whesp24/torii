@@ -212,7 +212,8 @@ input,textarea{font-family:inherit;}
   margin-left:auto;
 }
 .collapse-btn:hover{background:var(--surf2);color:var(--fg);}
-.sidebar-section{padding:10px 8px 4px;}
+.sidebar-section{padding:10px 8px 4px;overflow-y:auto;flex-shrink:0;}
+.sidebar-section.nav-section{max-height:calc(100vh - 220px);overflow-y:auto;}
 .sidebar-section-label{
   font-family:var(--font-mono);font-size:8px;font-weight:600;
   letter-spacing:0.14em;text-transform:uppercase;
@@ -701,6 +702,11 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 window.TWEAK_DEFAULTS = TWEAK_DEFAULTS;
+
+// Register service worker for push notifications
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW register failed:', err));
+}
 
 // Restore last page position
 const savedPage = localStorage.getItem('tpage');

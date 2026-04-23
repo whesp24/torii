@@ -3,13 +3,18 @@
 const SHELL_API = 'https://torii-backend.onrender.com/api';
 
 const NAV = [
-  { id:'overview',  label:'Markets',   icon:'markets'   },
-  { id:'portfolio', label:'Portfolio', icon:'portfolio' },
-  { id:'japan',     label:'Japan',     icon:'japan'     },
-  { id:'news',      label:'News',      icon:'news'      },
-  { id:'voices',    label:'Voices',    icon:'voices'    },
-  { id:'network',   label:'Network',   icon:'network'   },
-  { id:'projects',  label:'Projects',  icon:'projects'  },
+  { id:'overview',   label:'Markets',   icon:'markets'   },
+  { id:'portfolio',  label:'Portfolio', icon:'portfolio' },
+  { id:'japan',      label:'Japan',     icon:'japan'     },
+  { id:'news',       label:'News',      icon:'news'      },
+  { id:'voices',     label:'Voices',    icon:'voices'    },
+  { id:'watchlist',  label:'Watchlist', icon:'watchlist' },
+  { id:'alerts',     label:'Alerts',    icon:'alerts'    },
+  { id:'earnings',   label:'Earnings',  icon:'earnings'  },
+  { id:'ecocal',     label:'Calendar',  icon:'calendar'  },
+  { id:'tools',      label:'Tools',     icon:'tools'     },
+  { id:'analytics',  label:'Analytics', icon:'analytics' },
+  { id:'push',       label:'Notify',    icon:'push'      },
 ];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -22,8 +27,13 @@ function NavIcon({ id, active }) {
   if (id==='japan')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M5 6V4h14v2"/><path d="M8 6v12"/><path d="M16 6v12"/><path d="M3 18h18"/></svg>;
   if (id==='news')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg>;
   if (id==='voices')    return <svg {...s} viewBox="0 0 24 24" fill={active?'var(--red)':'var(--fg3)'} stroke="none"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>;
-  if (id==='network')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="2.5"/><circle cx="4.5" cy="19" r="2"/><circle cx="19.5" cy="19" r="2"/><path d="M12 7.5v4l-5.5 5M12 11.5l5.5 5"/></svg>;
-  if (id==='projects')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="11" rx="1.5"/><path d="M14 18h7M14 21h4"/></svg>;
+  if (id==='watchlist') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>;
+  if (id==='alerts')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="12" y1="2" x2="12" y2="4"/></svg>;
+  if (id==='earnings')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="5"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="10" x2="22" y2="10"/><polyline points="8 14 10 16 16 12"/></svg>;
+  if (id==='calendar')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="5"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="10" x2="22" y2="10"/><path d="M7 14h1m4 0h1m4 0h1M7 18h1m4 0h1"/></svg>;
+  if (id==='tools')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>;
+  if (id==='analytics') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="18" y="3" width="4" height="18" rx="1"/><rect x="10" y="8" width="4" height="13" rx="1"/><rect x="2" y="13" width="4" height="8" rx="1"/></svg>;
+  if (id==='push')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>;
   return null;
 }
 
@@ -213,7 +223,7 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
       </div>
 
       {/* Nav */}
-      <div className="sidebar-section">
+      <div className="sidebar-section nav-section">
         {!collapsed && <div className="sidebar-section-label">VIEWS</div>}
         {NAV.map(({ id, label, icon }) => (
           <button key={id} className={`nav-item${page===id?' active':''}`} onClick={() => onNav(id)}>
@@ -540,13 +550,18 @@ function App() {
       />
 
       <main className="main-scroll">
-        {page==='overview'  && <OverviewPage  onNav={setPage} />}
-        {page==='portfolio' && <PortfolioPage onNav={setPage} />}
-        {page==='japan'     && <JapanPage />}
-        {page==='news'      && <NewsPage />}
-        {page==='voices'    && <VoicesPage />}
-        {page==='network'   && <NetworkingPage />}
-        {page==='projects'  && <ProjectsPage />}
+        {page==='overview'   && <OverviewPage  onNav={setPage} />}
+        {page==='portfolio'  && <PortfolioPage onNav={setPage} />}
+        {page==='japan'      && <JapanPage />}
+        {page==='news'       && <NewsPage />}
+        {page==='voices'     && <VoicesPage />}
+        {page==='watchlist'  && <WatchlistPage />}
+        {page==='alerts'     && <AlertsPanel />}
+        {page==='earnings'   && <EarningsPage defaultTab="earnings" />}
+        {page==='ecocal'     && <EarningsPage defaultTab="ecocal" />}
+        {page==='tools'      && <ToolsPage />}
+        {page==='analytics'  && <AnalyticsPage />}
+        {page==='push'       && <PushSettingsPage />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 

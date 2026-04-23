@@ -28,6 +28,7 @@ export async function fetchLiveQuote(symbol) {
           name: p.name || sym,
           price, change, changePercent,
           volume: q.v || 0,
+          avgVolume: 0, // Finnhub free tier doesn't provide avg volume
           marketCap: p.marketCapitalization ? p.marketCapitalization * 1e6 : null,
           high52Week: null,
           low52Week: null,
@@ -167,6 +168,7 @@ export async function fetchYahooQuote(symbol) {
     name: meta.shortName || meta.longName || meta.symbol || sym,
     price, change, changePercent,
     volume: meta.regularMarketVolume ?? 0,
+    avgVolume: meta.averageDailyVolume10Day || meta.averageDailyVolume3Month || 0,
     marketCap: null,
     high52Week: meta.fiftyTwoWeekHigh ?? null,
     low52Week: meta.fiftyTwoWeekLow ?? null,
@@ -190,7 +192,8 @@ export async function fetchAndUpdateStocks() {
         await Stock.findOneAndUpdate(
           { symbol },
           { symbol, name: data.name, price: data.price, change: data.change,
-            changePercent: data.changePercent, volume: data.volume, lastUpdated: new Date() },
+            changePercent: data.changePercent, volume: data.volume, avgVolume: data.avgVolume,
+            lastUpdated: new Date() },
           { upsert: true, new: true }
         );
         console.log(`✓ Updated ${symbol} @ ${data.price}`);

@@ -13,6 +13,7 @@ import { updateAllKPIs, initializeKPIs } from './services/kpiService.js';
 import { initializeTasks } from './services/taskService.js';
 import { initializeWatchlist } from './services/watchlistService.js';
 import { checkAllAlerts } from './services/alertService.js';
+import { sendDailyDigest } from './services/emailService.js';
 import stockRoutes from './routes/stocks.js';
 import newsRoutes from './routes/news.js';
 import tweetRoutes from './routes/tweets.js';
@@ -21,6 +22,9 @@ import kpiRoutes from './routes/kpis.js';
 import taskRoutes from './routes/tasks.js';
 import watchlistRoutes from './routes/watchlist.js';
 import alertRoutes from './routes/alerts.js';
+import earningsRoutes from './routes/earnings.js';
+import analyticsRoutes from './routes/analytics.js';
+import pushRoutes from './routes/push.js';
 
 dotenv.config();
 
@@ -47,6 +51,9 @@ app.use('/api/kpis', kpiRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/watchlist', watchlistRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/earnings', earningsRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/push', pushRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -98,6 +105,12 @@ cron.schedule('*/10 * * * *', () => {
 cron.schedule('0 9 * * *', () => {
   console.log('Generating daily briefing...');
   generateAndSaveBriefing();
+});
+
+// Daily digest email at 7am ET (12:00 UTC)
+cron.schedule('0 12 * * 1-5', () => {
+  console.log('Sending daily digest email...');
+  sendDailyDigest().catch(err => console.error('Email error:', err));
 });
 
 app.listen(PORT, () => {
