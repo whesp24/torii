@@ -2059,110 +2059,171 @@ function buildEdges(contacts) {
 }
 
 function NetworkGraph({ contacts, onSelectNode, selectedId }) {
-  const W = 680, H = 460;
-  const svgRef = React.useRef(null);
-  const [nodes, setNodes] = React.useState([]);
-  const [edges, setEdges] = React.useState([]);
-  const animRef = React.useRef(null);
-  const dragRef = React.useRef(null);
+  const containerRef = React.useRef(null);
+  const svgRef       = React.useRef(null);
+  const animRef      = React.useRef(null);
+  const dragRef      = React.useRef(null);   // { id, offsetX, offsetY }
+  const panRef       = React.useRef(null);   // { startX, startY, tx, ty }
+  const nodesRef     = React.useRef([]);
 
-  // Init nodes with random positions
+  const [nodes,     setNodes]     = React.useState([]);
+  const [edges,     setEdges]     = React.useState([]);
+  const [transform, setTransform] = React.useState({ x: 0, y: 0, k: 1 });
+  const [size,      setSize]      = React.useState({ w: 800, h: 560 });
+
+  // Measure container
   React.useEffect(() => {
-    const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.3;
-    const n = contacts.map((c, i) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => {
+      setSize({ w: e.contentRect.width, h: e.contentRect.height });
+    });
+    ro.observe(el);
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
+  // Build graph when contacts change
+  React.useEffect(() => {
+    if (contacts.length === 0) { setNodes([]); setEdges([]); return; }
+    const { w, h } = size;
+    const cx = w / 2, cy = h / 2;
+    const r  = Math.min(w, h) * 0.28;
+    const n  = contacts.map((c, i) => {
       const angle = (i / contacts.length) * 2 * Math.PI;
       return {
-        id: c.id, label: c.name, company: c.company, school: c.school, location: c.location,
-        x: cx + r * Math.cos(angle) + (Math.random() - 0.5) * 40,
-        y: cy + r * Math.sin(angle) + (Math.random() - 0.5) * 40,
+        id: c.id, label: c.name, company: c.company,
+        school: c.school, location: c.location,
+        x: cx + r * Math.cos(angle) + (Math.random() - 0.5) * 60,
+        y: cy + r * Math.sin(angle) + (Math.random() - 0.5) * 60,
         vx: 0, vy: 0,
       };
     });
-    setNodes(n);
-    setEdges(buildEdges(contacts));
-  }, [contacts.length]);
+    const e = buildEdges(contacts);
+    nodesRef.current = n;
+    setNodes([...n]);
+    setEdges(e);
+  }, [contacts.length, size.w]);
 
-  // Force-directed simulation
+  // Force simulation
   React.useEffect(() => {
     if (nodes.length === 0) return;
-    let running = true;
     let frame = 0;
-    let simNodes = nodes.map(n => ({ ...n }));
+    let running = true;
     const simEdges = buildEdges(contacts);
+    const simNodes = nodesRef.current.map(n => ({ ...n }));
 
     function tick() {
-      if (!running || frame > 300) return;
+      if (!running || frame > 400) return;
       frame++;
-      const repulsion = 2800, springLen = 120, springK = 0.04, damping = 0.82, gravity = 0.025;
-      const cx = W / 2, cy = H / 2;
+      const { w, h } = size;
+      const repulsion = 3500, springLen = 140, springK = 0.035, damping = 0.78, gravity = 0.018;
+      const cx = w / 2, cy = h / 2;
+      const deg = {};
+      for (const e of simEdges) { deg[e.source] = (deg[e.source]||0)+1; deg[e.target] = (deg[e.target]||0)+1; }
 
       for (let i = 0; i < simNodes.length; i++) {
-        // Skip dragged node
-        if (dragRef.current?.id === simNodes[i].id) continue;
-        let fx = 0, fy = 0;
         const ni = simNodes[i];
+        if (dragRef.current?.id === ni.id) continue;
+        let fx = 0, fy = 0;
 
-        // Repulsion from all other nodes
         for (let j = 0; j < simNodes.length; j++) {
           if (i === j) continue;
           const nj = simNodes[j];
           const dx = ni.x - nj.x || 0.01, dy = ni.y - nj.y || 0.01;
-          const d2 = dx * dx + dy * dy;
-          const d = Math.sqrt(d2) || 1;
+          const d2 = dx*dx + dy*dy, d = Math.sqrt(d2) || 1;
           const f = repulsion / d2;
-          fx += (dx / d) * f;
-          fy += (dy / d) * f;
+          fx += (dx/d)*f; fy += (dy/d)*f;
         }
-
-        // Spring attraction along edges
         for (const e of simEdges) {
           if (e.source !== ni.id && e.target !== ni.id) continue;
           const otherId = e.source === ni.id ? e.target : e.source;
           const nj = simNodes.find(n => n.id === otherId);
           if (!nj) continue;
-          const dx = nj.x - ni.x, dy = nj.y - ni.y;
-          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const dx = nj.x-ni.x, dy = nj.y-ni.y;
+          const d = Math.sqrt(dx*dx+dy*dy)||1;
           const stretch = (d - springLen) * springK;
-          fx += (dx / d) * stretch;
-          fy += (dy / d) * stretch;
+          fx += (dx/d)*stretch; fy += (dy/d)*stretch;
         }
-
-        // Gravity toward center
         fx += (cx - ni.x) * gravity;
         fy += (cy - ni.y) * gravity;
-
         ni.vx = (ni.vx + fx) * damping;
         ni.vy = (ni.vy + fy) * damping;
-        ni.x = Math.max(28, Math.min(W - 28, ni.x + ni.vx));
-        ni.y = Math.max(28, Math.min(H - 28, ni.y + ni.vy));
+        ni.x = Math.max(60, Math.min(w-60, ni.x + ni.vx));
+        ni.y = Math.max(40, Math.min(h-40, ni.y + ni.vy));
       }
-
+      nodesRef.current = simNodes;
       setNodes([...simNodes]);
       animRef.current = requestAnimationFrame(tick);
     }
-
     animRef.current = requestAnimationFrame(tick);
-    return () => { running = false; if (animRef.current) cancelAnimationFrame(animRef.current); };
+    return () => { running = false; cancelAnimationFrame(animRef.current); };
   }, [contacts.length]);
 
-  // Drag handlers
-  function handleMouseDown(e, nodeId) {
+  // Degree map for node sizing
+  const degree = {};
+  for (const e of edges) { degree[e.source]=(degree[e.source]||0)+1; degree[e.target]=(degree[e.target]||0)+1; }
+
+  // Node color: dominant edge type → color, isolated → dim gray
+  function nodeColor(nodeId, isSelected) {
+    if (isSelected) return '#E0001E';
+    const ne = edges.filter(e => e.source===nodeId||e.target===nodeId);
+    if (ne.length === 0) return '#4a4a5a';
+    const types = ne.map(e=>e.type);
+    const dominant = ['company','school','location'].find(t=>types.includes(t)) || types[0];
+    return dominant==='company'?'#4a9eff':dominant==='school'?'#4ade80':'#fbbf24';
+  }
+
+  // Node radius: 4px base, +2px per connection, max 10
+  function nodeRadius(nodeId) {
+    const d = degree[nodeId] || 0;
+    return Math.min(4 + d * 2, 12);
+  }
+
+  // ── Pointer interactions ──────────────────────────────────────────────────────
+
+  // Convert screen coords → SVG world coords
+  function screenToWorld(cx, cy) {
+    const { x, y, k } = transform;
+    return { wx: (cx - x) / k, wy: (cy - y) / k };
+  }
+
+  function getClientXY(e) {
+    if (e.touches) return { cx: e.touches[0].clientX, cy: e.touches[0].clientY };
+    return { cx: e.clientX, cy: e.clientY };
+  }
+
+  function svgClientOffset(e) {
+    const rect = svgRef.current.getBoundingClientRect();
+    const { cx, cy } = getClientXY(e);
+    return { cx: cx - rect.left, cy: cy - rect.top };
+  }
+
+  function onNodePointerDown(e, nodeId) {
+    e.stopPropagation();
     e.preventDefault();
-    const svg = svgRef.current;
-    const pt = svg.createSVGPoint();
-    dragRef.current = { id: nodeId };
+    const { cx, cy } = svgClientOffset(e);
+    const { wx, wy } = screenToWorld(cx, cy);
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node) return;
+    dragRef.current = { id: nodeId, dx: wx - node.x, dy: wy - node.y };
 
     function onMove(ev) {
-      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-      const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
-      pt.x = clientX; pt.y = clientY;
-      const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-      setNodes(prev => prev.map(n => n.id === nodeId
-        ? { ...n, x: Math.max(28, Math.min(W - 28, svgP.x)), y: Math.max(28, Math.min(H - 28, svgP.y)), vx: 0, vy: 0 }
-        : n
-      ));
+      const { cx: mx, cy: my } = svgClientOffset(ev);
+      const { wx: wx2, wy: wy2 } = screenToWorld(mx, my);
+      nodesRef.current = nodesRef.current.map(n =>
+        n.id === nodeId ? { ...n, x: wx2 - dragRef.current.dx, y: wy2 - dragRef.current.dy, vx: 0, vy: 0 } : n
+      );
+      setNodes([...nodesRef.current]);
     }
-    function onUp() {
+    function onUp(ev) {
+      // If barely moved → treat as click (select)
+      const { cx: ux, cy: uy } = svgClientOffset(ev);
+      const { wx: wx2, wy: wy2 } = screenToWorld(ux, uy);
+      const node2 = nodesRef.current.find(n => n.id === nodeId);
+      if (node2 && Math.hypot(wx2-node2.x, wy2-node2.y) < 6) {
+        onSelectNode(nodeId === selectedId ? null : nodeId);
+      }
       dragRef.current = null;
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -2175,70 +2236,159 @@ function NetworkGraph({ contacts, onSelectNode, selectedId }) {
     window.addEventListener('touchend', onUp);
   }
 
-  if (contacts.length === 0) return null;
+  function onSvgPointerDown(e) {
+    if (e.target !== svgRef.current && e.target.closest('g[data-node]')) return;
+    const { cx, cy } = svgClientOffset(e);
+    panRef.current = { startX: cx, startY: cy, tx: transform.x, ty: transform.y };
+
+    function onMove(ev) {
+      if (!panRef.current) return;
+      const { cx: mx, cy: my } = svgClientOffset(ev);
+      setTransform(t => ({ ...t, x: panRef.current.tx + (mx - panRef.current.startX), y: panRef.current.ty + (my - panRef.current.startY) }));
+    }
+    function onUp() {
+      panRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }
+
+  function onWheel(e) {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.12 : 0.88;
+    const { cx, cy } = svgClientOffset(e);
+    setTransform(t => {
+      const k2 = Math.max(0.15, Math.min(5, t.k * factor));
+      // Zoom toward cursor
+      const x2 = cx - (cx - t.x) * (k2 / t.k);
+      const y2 = cy - (cy - t.y) * (k2 / t.k);
+      return { x: x2, y: y2, k: k2 };
+    });
+  }
 
   const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+  const selected = contacts.find(c => c.id === selectedId);
 
   return (
-    <div style={{ position: 'relative', width: '100%', overflow: 'hidden', borderRadius: 12, background: 'var(--surf)', border: '1px solid var(--bdr)' }}>
-      {/* Legend */}
-      <div style={{ position: 'absolute', top: 10, left: 12, display: 'flex', gap: 10, zIndex: 10 }}>
-        {[['#3B82F6', 'Company'], ['#22c55e', 'School'], ['#F59E0B', 'Location']].map(([color, label]) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--fg3)', fontFamily: 'var(--font-mono)' }}>
-            <div style={{ width: 16, height: 2, background: color, borderRadius: 1 }} />
-            {label}
-          </div>
-        ))}
+    <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Graph canvas */}
+      <div ref={containerRef} style={{ flex: 1, borderRadius: 12, overflow: 'hidden', background: '#0d0d12', position: 'relative', minHeight: 400 }}>
+        <svg ref={svgRef} width="100%" height="100%"
+          style={{ display: 'block', cursor: 'grab', touchAction: 'none', userSelect: 'none' }}
+          onMouseDown={onSvgPointerDown}
+          onTouchStart={onSvgPointerDown}
+          onWheel={onWheel}>
+
+          <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
+            {/* Edges — straight, thin, colored */}
+            {edges.map((e, i) => {
+              const s = nodeMap[e.source], t = nodeMap[e.target];
+              if (!s || !t) return null;
+              const isConnectedToSelected = selectedId && (e.source===selectedId||e.target===selectedId);
+              return (
+                <line key={i}
+                  x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                  stroke={e.color}
+                  strokeWidth={isConnectedToSelected ? 1.2 : 0.6}
+                  strokeOpacity={isConnectedToSelected ? 0.8 : 0.3}
+                />
+              );
+            })}
+
+            {/* Nodes */}
+            {nodes.map(n => {
+              const isSelected  = n.id === selectedId;
+              const r           = nodeRadius(n.id);
+              const color       = nodeColor(n.id, isSelected);
+              const isConnected = selectedId && edges.some(e => (e.source===n.id||e.target===n.id) && (e.source===selectedId||e.target===selectedId));
+              const dimmed      = selectedId && !isSelected && !isConnected;
+              return (
+                <g key={n.id} data-node="1"
+                  onMouseDown={ev => onNodePointerDown(ev, n.id)}
+                  onTouchStart={ev => onNodePointerDown(ev, n.id)}
+                  style={{ cursor: 'pointer', opacity: dimmed ? 0.3 : 1 }}>
+
+                  {/* Glow behind selected/connected nodes */}
+                  {(isSelected || isConnected) && (
+                    <circle cx={n.x} cy={n.y} r={r + 6}
+                      fill={color} fillOpacity={isSelected ? 0.25 : 0.12} />
+                  )}
+
+                  {/* Node dot */}
+                  <circle cx={n.x} cy={n.y} r={r}
+                    fill={color}
+                    fillOpacity={isSelected ? 1 : 0.85}
+                  />
+
+                  {/* Label — floats to the right of the dot */}
+                  <text x={n.x + r + 5} y={n.y}
+                    dominantBaseline="central"
+                    fontSize={Math.min(10 + r * 0.3, 12)}
+                    fontFamily="'Space Grotesk',system-ui,sans-serif"
+                    fontWeight={isSelected ? 700 : 400}
+                    fill={isSelected ? '#fff' : dimmed ? '#555' : '#aaa'}
+                    style={{ pointerEvents: 'none' }}>
+                    {n.label}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+
+        {/* Legend overlay */}
+        <div style={{ position:'absolute', bottom:10, left:12, display:'flex', gap:12, pointerEvents:'none' }}>
+          {[['#4a9eff','Company'],['#4ade80','School'],['#fbbf24','Location']].map(([c,l]) => (
+            <div key={l} style={{ display:'flex', alignItems:'center', gap:5, fontSize:10, color:'#666', fontFamily:'var(--font-mono)' }}>
+              <div style={{ width:6, height:6, borderRadius:'50%', background:c }} />
+              {l}
+            </div>
+          ))}
+        </div>
+
+        {/* Zoom hint */}
+        <div style={{ position:'absolute', bottom:10, right:12, fontSize:10, color:'#444', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>
+          scroll to zoom · drag to pan
+        </div>
+
+        {/* Zoom controls */}
+        <div style={{ position:'absolute', top:10, right:12, display:'flex', flexDirection:'column', gap:4 }}>
+          {[['＋', 1.25], ['−', 0.8], ['⊙', null]].map(([label, factor]) => (
+            <button key={label} onClick={() => {
+              if (!factor) { setTransform({ x: 0, y: 0, k: 1 }); return; }
+              setTransform(t => ({ x: t.x, y: t.y, k: Math.max(0.15, Math.min(5, t.k * factor)) }));
+            }} style={{ width:28, height:28, background:'#1a1a24', border:'1px solid #2a2a38', borderRadius:6, color:'#aaa', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', cursor: 'grab', touchAction: 'none' }}>
-        {/* Edges */}
-        {edges.map((e, i) => {
-          const s = nodeMap[e.source], t = nodeMap[e.target];
-          if (!s || !t) return null;
-          const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2 - 20;
-          return (
-            <path key={i}
-              d={`M${s.x},${s.y} Q${mx},${my} ${t.x},${t.y}`}
-              fill="none" stroke={e.color} strokeWidth="1.5" strokeOpacity="0.5"
-            />
-          );
-        })}
-
-        {/* Nodes */}
-        {nodes.map(n => {
-          const isSelected = n.id === selectedId;
-          const nodeEdges = edges.filter(e => e.source === n.id || e.target === n.id);
-          const connColors = [...new Set(nodeEdges.map(e => e.color))];
-          return (
-            <g key={n.id} transform={`translate(${n.x},${n.y})`}
-              onMouseDown={ev => handleMouseDown(ev, n.id)}
-              onTouchStart={ev => handleMouseDown(ev, n.id)}
-              onClick={() => onSelectNode(n.id === selectedId ? null : n.id)}
-              style={{ cursor: 'pointer' }}>
-              {/* Glow ring for selected */}
-              {isSelected && (
-                <circle r="20" fill="var(--red)" fillOpacity="0.15" stroke="var(--red)" strokeWidth="1.5" />
-              )}
-              {/* Connection type ring */}
-              {connColors.length > 0 && !isSelected && (
-                <circle r="18" fill="none" stroke={connColors[0]} strokeWidth="1.5" strokeOpacity="0.4" />
-              )}
-              {/* Avatar circle */}
-              <circle r="14" fill="var(--surf2)" stroke={isSelected ? 'var(--red)' : 'var(--bdr2)'} strokeWidth={isSelected ? 2 : 1} />
-              <text textAnchor="middle" dominantBaseline="central" fontSize="9" fontWeight="700"
-                fontFamily="var(--font-mono)" fill={isSelected ? 'var(--red)' : 'var(--fg)'}>
-                {initials(n.label)}
-              </text>
-              {/* Name label */}
-              <text y="22" textAnchor="middle" fontSize="8.5" fontWeight="600"
-                fontFamily="var(--font-ui)" fill="var(--fg2)">
-                {n.label?.split(' ')[0]}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+      {/* Selected contact detail */}
+      {selected && (
+        <div style={{ marginTop:10, padding:'12px 16px', background:'var(--surf)', borderRadius:10, border:'1px solid var(--bdr)', display:'flex', gap:12, alignItems:'flex-start' }}>
+          <div style={{ width:38, height:38, borderRadius:'50%', background:'var(--red-dim)', color:'var(--red)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'var(--font-mono)', fontWeight:800, fontSize:12, flexShrink:0 }}>
+            {initials(selected.name)}
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>{selected.name}</div>
+            {selected.role && <div style={{ fontSize:12, color:'var(--fg3)', marginBottom:6 }}>{selected.role}</div>}
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {selected.company  && <span style={{ fontSize:11, padding:'2px 7px', background:'#4a9eff22', color:'#4a9eff', border:'1px solid #4a9eff44', borderRadius:4 }}>🏢 {selected.company}</span>}
+              {selected.school   && <span style={{ fontSize:11, padding:'2px 7px', background:'#4ade8022', color:'#4ade80', border:'1px solid #4ade8044', borderRadius:4 }}>🎓 {selected.school}</span>}
+              {selected.location && <span style={{ fontSize:11, padding:'2px 7px', background:'#fbbf2422', color:'#fbbf24', border:'1px solid #fbbf2444', borderRadius:4 }}>📍 {selected.location}</span>}
+            </div>
+            {selected.notes && <div style={{ fontSize:11, color:'var(--fg3)', marginTop:6, fontStyle:'italic' }}>{selected.notes}</div>}
+          </div>
+          <button onClick={() => onSelectNode(null)} style={{ color:'var(--fg3)', background:'none', border:'none', fontSize:16, cursor:'pointer', padding:4 }}>✕</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2250,6 +2400,8 @@ function NetworkingPage() {
   const [selectedId, setSelectedId] = React.useState(null);
   const [loadingNet, setLoadingNet] = React.useState(true);
   const [form, setForm]             = React.useState({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
+  const [editing, setEditing]       = React.useState(null); // contact being edited
+  const [editForm, setEditForm]     = React.useState({});
 
   // Load from backend
   React.useEffect(() => {
@@ -2286,6 +2438,29 @@ function NetworkingPage() {
     if (selectedId === id) setSelectedId(null);
   }
 
+  function startEdit(contact) {
+    setEditing(contact);
+    setEditForm({ name: contact.name || '', role: contact.role || '', company: contact.company || '', school: contact.school || '', location: contact.location || '', linkedIn: contact.linkedIn || '', notes: contact.notes || '' });
+  }
+
+  function saveEdit(e) {
+    e.preventDefault();
+    if (!editForm.name.trim() || !editing) return;
+    fetch(`${API_URL}/contacts/${editing.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editForm),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(saved => {
+        if (saved) {
+          setContacts(p => p.map(c => c.id === editing.id ? { ...saved, id: saved._id } : c));
+        }
+        setEditing(null);
+      })
+      .catch(() => setEditing(null));
+  }
+
   const selected = contacts.find(c => c.id === selectedId);
   const edges     = buildEdges(contacts);
 
@@ -2308,8 +2483,50 @@ function NetworkingPage() {
     </div>
   );
 
+  const editFieldInput = (label, field, placeholder) => (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+      <input value={editForm[field] || ''} onChange={e => setEditForm(p => ({ ...p, [field]: e.target.value }))} placeholder={placeholder}
+        style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
+    </div>
+  );
+
   return (
     <div className="page-root">
+      {/* Edit Modal */}
+      {editing && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div style={{ background: 'var(--bg)', border: '1px solid var(--bdr)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 540, maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Edit Contact</div>
+              <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--fg3)' }}>✕</button>
+            </div>
+            <form onSubmit={saveEdit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                {editFieldInput('Name *', 'name', 'Full name')}
+                {editFieldInput('Role', 'role', 'e.g. Partner at a16z')}
+                {editFieldInput('Company', 'company', 'Current employer')}
+                {editFieldInput('School', 'school', 'e.g. Wharton')}
+                {editFieldInput('Location', 'location', 'e.g. San Francisco')}
+                {editFieldInput('LinkedIn', 'linkedIn', 'URL or username')}
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes</div>
+                <textarea value={editForm.notes || ''} onChange={e => setEditForm(p => ({ ...p, notes: e.target.value }))} placeholder="How you met, context, follow-ups…" rows={2}
+                  style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', resize: 'vertical', boxSizing: 'border-box' }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                <button type="button" onClick={() => setEditing(null)}
+                  style={{ padding: '9px 18px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit"
+                  style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <h1 className="page-title">Network</h1>
@@ -2401,10 +2618,16 @@ function NetworkingPage() {
                   );
                 })()}
               </div>
-              <button onClick={() => removeContact(selected.id)}
-                style={{ padding: '4px 8px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>
-                Remove
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <button onClick={() => startEdit(selected)}
+                  style={{ padding: '4px 10px', background: 'var(--surf2)', color: 'var(--fg)', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
+                  Edit
+                </button>
+                <button onClick={() => removeContact(selected.id)}
+                  style={{ padding: '4px 10px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>
+                  Remove
+                </button>
+              </div>
             </div>
           )}
 
@@ -2448,13 +2671,17 @@ function NetworkingPage() {
                       {[c.role, c.school, c.location].filter(Boolean).join(' · ')}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     {c.linkedIn && (
                       <a href={c.linkedIn.startsWith('http') ? c.linkedIn : `https://linkedin.com/in/${c.linkedIn}`} target="_blank" rel="noreferrer"
                         style={{ padding: '4px 8px', fontSize: 11, background: '#0A66C222', color: '#0A66C2', border: '1px solid #0A66C244', borderRadius: 5, textDecoration: 'none' }}>
                         in
                       </a>
                     )}
+                    <button onClick={() => startEdit(c)}
+                      style={{ padding: '4px 8px', background: 'var(--surf2)', color: 'var(--fg)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
+                      Edit
+                    </button>
                     <button onClick={() => removeContact(c.id)}
                       style={{ padding: '4px 8px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer' }}>
                       ✕
