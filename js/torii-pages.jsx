@@ -1,6 +1,6 @@
 // ─── TORII SUB-PAGES: Portfolio, Japan, News, Voices, Stock ──────────────────
 
-const API_URL = 'https://torii-backend.onrender.com/api';
+const API_URL = '/api';
 
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
@@ -479,6 +479,8 @@ function VoicesPage() {
 function StockPage({ ticker, onBack }) {
   const h = MOCK.portfolio.find(h => h.ticker === ticker);
   const spark = MOCK.sparklines[ticker] || [];
+  const [timeframe, setTimeframe] = React.useState('5D');
+
   if (!h) return <div className="page-root"><div className="page-header"><h1 className="page-title">Not found</h1></div></div>;
 
   const up = h.pct >= 0;
@@ -487,6 +489,16 @@ function StockPage({ ticker, onBack }) {
   const dayPnL = h.change * h.shares;
 
   const newsItems = MOCK.news.slice(0,3);
+
+  const timeframes = ['1D', '5D', '1M', '3M', '1Y', 'All'];
+  const chartData = spark.slice(-{
+    '1D': 1,
+    '5D': 5,
+    '1M': 22,
+    '3M': 66,
+    '1Y': 252,
+    'All': spark.length
+  }[timeframe]);
 
   return (
     <div className="page-root">
@@ -509,7 +521,7 @@ function StockPage({ ticker, onBack }) {
           <div style={{display:'flex',alignItems:'baseline',gap:12}}>
             <span style={{fontSize:36,fontWeight:900,fontFamily:'var(--font-mono)',letterSpacing:'-0.04em'}}>${h.price.toFixed(2)}</span>
             <span style={{fontSize:16,fontWeight:600,fontFamily:'var(--font-mono)',color}}>
-              {up?'+':''}{h.pct.toFixed(2)}% today
+              {up?'+':''}{h.pct.toFixed(2)}% {timeframe === '1D' ? 'today' : 'period'}
             </span>
           </div>
         </div>
@@ -518,10 +530,22 @@ function StockPage({ ticker, onBack }) {
         </a>
       </div>
 
-      {/* 7-day chart */}
+      {/* Timeframe selector and chart */}
       <div className="card" style={{marginBottom:14}}>
-        <div className="section-label">7-Day Price</div>
-        <AreaChart data={spark} height={120} showDates={false} />
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <div className="section-label" style={{margin:0}}>Price History</div>
+          <div style={{display:'flex',gap:6}}>
+            {timeframes.map(tf => (
+              <button key={tf}
+                onClick={() => setTimeframe(tf)}
+                style={{padding:'6px 12px',fontSize:11,fontWeight:timeframe===tf?700:400,background:timeframe===tf?'var(--red)':'var(--surf2)',color:timeframe===tf?'white':'var(--fg)',border:'none',borderRadius:6,cursor:'pointer'}}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+        </div>
+        <AreaChart data={chartData} height={140} showDates={false} />
       </div>
 
       {/* Position stats */}
@@ -558,4 +582,332 @@ function StockPage({ ticker, onBack }) {
   );
 }
 
-Object.assign(window, { PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage });
+// ─── WATCHLIST PAGE ───────────────────────────────────────────────────────────
+
+function WatchlistPage({ onNav }) {
+  const [watchlist, setWatchlist] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [filter, setFilter] = React.useState('all');
+  const [addForm, setAddForm] = React.useState({ symbol: '', name: '' });
+  const [showAdd, setShowAdd] = React.useState(false);
+
+  React.useEffect(() => {
+    const fetchWatchlist = async () => {
+      try {
+        const response = await fetch(`${API_URL}/watchlist`);
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setWatchlist(data);
+        } else {
+          setWatchlist([]);
+        }
+      } catch (e) {
+        console.error('Watchlist fetch error:', e);
+        setWatchlist([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchWatchlist();
+  }, []);
+
+  function handleAddToWatchlist(e) {
+    e.preventDefault();
+    if (!addForm.symbol.trim()) return;
+
+    fetch(`${API_URL}/watchlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: addForm.symbol.toUpperCase(),
+        name: addForm.name || addForm.symbol,
+        category: 'stock'
+      })
+    })
+      .then(r => r.json())
+      .then(item => {
+        setWatchlist(p => [...p, item]);
+        setAddForm({ symbol: '', name: '' });
+        setShowAdd(false);
+      })
+      .catch(e => console.error('Error adding to watchlist:', e));
+  }
+
+  function handleRemoveFromWatchlist(symbol) {
+    fetch(`${API_URL}/watchlist/${symbol}`, { method: 'DELETE' })
+      .then(() => {
+        setWatchlist(p => p.filter(w => w.symbol !== symbol));
+      })
+      .catch(e => console.error('Error removing from watchlist:', e));
+  }
+
+  const filtered = filter === 'all' ? watchlist : watchlist.filter(w => w.category === filter);
+  const categories = [...new Set(watchlist.map(w => w.category))];
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Watchlist</h1>
+          <p className="page-sub">Track securities · alerts · notes</p>
+        </div>
+        <button className="btn-primary" onClick={() => setShowAdd(!showAdd)} style={{padding:'8px 16px',fontSize:13}}>
+          {showAdd ? '✕' : '+ Add'} Security
+        </button>
+      </div>
+
+      {/* Add Form */}
+      {showAdd && (
+        <div className="card" style={{marginBottom:16}}>
+          <form onSubmit={handleAddToWatchlist} style={{display:'flex',gap:12,alignItems:'flex-end'}}>
+            <div style={{flex:1}}>
+              <label style={{fontSize:12,color:'var(--fg3)',display:'block',marginBottom:6}}>Symbol</label>
+              <input
+                type="text"
+                placeholder="e.g., NVDA"
+                value={addForm.symbol}
+                onChange={e => setAddForm(p => ({...p, symbol: e.target.value}))}
+                style={{width:'100%',padding:'8px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf1)',color:'var(--fg)'}}
+              />
+            </div>
+            <div style={{flex:1}}>
+              <label style={{fontSize:12,color:'var(--fg3)',display:'block',marginBottom:6}}>Name (optional)</label>
+              <input
+                type="text"
+                placeholder="Company name"
+                value={addForm.name}
+                onChange={e => setAddForm(p => ({...p, name: e.target.value}))}
+                style={{width:'100%',padding:'8px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf1)',color:'var(--fg)'}}
+              />
+            </div>
+            <button type="submit" className="btn-primary" style={{padding:'8px 16px',fontSize:13}}>
+              Add
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Filter buttons */}
+      {categories.length > 0 && (
+        <div style={{display:'flex',gap:8,marginBottom:16,overflowX:'auto'}}>
+          <button
+            onClick={() => setFilter('all')}
+            style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:filter==='all'?600:400,background:filter==='all'?'var(--red)':'var(--surf2)',color:filter==='all'?'white':'var(--fg)',border:'none',cursor:'pointer'}}
+          >
+            All ({watchlist.length})
+          </button>
+          {categories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setFilter(cat)}
+              style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:filter===cat?600:400,background:filter===cat?'var(--red)':'var(--surf2)',color:filter===cat?'white':'var(--fg)',border:'none',cursor:'pointer',textTransform:'capitalize'}}
+            >
+              {cat} ({watchlist.filter(w=>w.category===cat).length})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Watchlist Table */}
+      {loading ? (
+        <div style={{padding:40,textAlign:'center',color:'var(--fg3)'}}>Loading watchlist...</div>
+      ) : filtered.length === 0 ? (
+        <div style={{padding:40,textAlign:'center',color:'var(--fg3)'}}>
+          No securities in watchlist. Add one to get started.
+        </div>
+      ) : (
+        <div className="card">
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <thead>
+                <tr style={{borderBottom:'1px solid var(--bdr)'}}>
+                  <th style={{padding:'12px 8px',textAlign:'left',fontSize:12,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase'}}>Symbol</th>
+                  <th style={{padding:'12px 8px',textAlign:'left',fontSize:12,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase'}}>Name</th>
+                  <th style={{padding:'12px 8px',textAlign:'right',fontSize:12,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase'}}>Price</th>
+                  <th style={{padding:'12px 8px',textAlign:'right',fontSize:12,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase'}}>Change</th>
+                  <th style={{padding:'12px 8px',textAlign:'left',fontSize:12,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase'}}>Added</th>
+                  <th style={{padding:'12px 8px',textAlign:'center',fontSize:12,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase'}}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((item, i) => {
+                  const up = (item.lastChangePercent || 0) >= 0;
+                  const addedDate = new Date(item.addedAt).toLocaleDateString('en-US', {month:'short',day:'numeric'});
+                  return (
+                    <tr key={item._id} style={{borderBottom:i<filtered.length-1?'1px solid var(--bdr)':'none'}}>
+                      <td style={{padding:'12px 8px',fontSize:13,fontWeight:700,color:'var(--red)'}}>{item.symbol}</td>
+                      <td style={{padding:'12px 8px',fontSize:13,color:'var(--fg)'}}>{item.name || '—'}</td>
+                      <td style={{padding:'12px 8px',fontSize:13,textAlign:'right',fontFamily:'var(--font-mono)',color:'var(--fg)'}}>
+                        ${(item.lastPrice || 0).toFixed(2)}
+                      </td>
+                      <td style={{padding:'12px 8px',fontSize:13,textAlign:'right',fontFamily:'var(--font-mono)',color:up?'var(--green)':'var(--red-loss)'}}>
+                        {up?'+':''}{(item.lastChangePercent || 0).toFixed(2)}%
+                      </td>
+                      <td style={{padding:'12px 8px',fontSize:12,color:'var(--fg3)'}}>{addedDate}</td>
+                      <td style={{padding:'12px 8px',textAlign:'center'}}>
+                        <button
+                          onClick={() => handleRemoveFromWatchlist(item.symbol)}
+                          style={{padding:'4px 10px',fontSize:11,background:'var(--red)',color:'white',border:'none',borderRadius:4,cursor:'pointer'}}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ALERTS PANEL ─────────────────────────────────────────────────────────────
+
+function AlertsPanel({ onClose }) {
+  const [alerts, setAlerts] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [newAlert, setNewAlert] = React.useState({ symbol: '', alertType: 'above', targetPrice: '' });
+
+  React.useEffect(() => {
+    const fetchAlerts = async () => {
+      try {
+        const response = await fetch(`${API_URL}/alerts`);
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setAlerts(data);
+        }
+      } catch (e) {
+        console.error('Alerts fetch error:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAlerts();
+  }, []);
+
+  function handleCreateAlert(e) {
+    e.preventDefault();
+    if (!newAlert.symbol || !newAlert.targetPrice) return;
+
+    fetch(`${API_URL}/alerts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: newAlert.symbol.toUpperCase(),
+        alertType: newAlert.alertType,
+        targetPrice: parseFloat(newAlert.targetPrice)
+      })
+    })
+      .then(r => r.json())
+      .then(alert => {
+        setAlerts(p => [...p, alert]);
+        setNewAlert({ symbol: '', alertType: 'above', targetPrice: '' });
+      })
+      .catch(e => console.error('Error creating alert:', e));
+  }
+
+  function handleToggleAlert(id) {
+    fetch(`${API_URL}/alerts/${id}/toggle`, { method: 'PATCH' })
+      .then(r => r.json())
+      .then(updated => {
+        setAlerts(p => p.map(a => a._id === id ? updated : a));
+      })
+      .catch(e => console.error('Error toggling alert:', e));
+  }
+
+  function handleDeleteAlert(id) {
+    fetch(`${API_URL}/alerts/${id}`, { method: 'DELETE' })
+      .then(() => {
+        setAlerts(p => p.filter(a => a._id !== id));
+      })
+      .catch(e => console.error('Error deleting alert:', e));
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" style={{ maxWidth: '600px' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 12, borderBottom: '1px solid var(--bdr)' }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Price Alerts</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: 'var(--fg3)' }}>×</button>
+        </div>
+
+        {/* Create Alert Form */}
+        <form onSubmit={handleCreateAlert} style={{ display: 'flex', gap: 10, marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid var(--bdr)' }}>
+          <input
+            type="text"
+            placeholder="Symbol (e.g., NVDA)"
+            value={newAlert.symbol}
+            onChange={e => setNewAlert(p => ({ ...p, symbol: e.target.value }))}
+            style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf1)', color: 'var(--fg)' }}
+          />
+          <select
+            value={newAlert.alertType}
+            onChange={e => setNewAlert(p => ({ ...p, alertType: e.target.value }))}
+            style={{ padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf1)', color: 'var(--fg)' }}
+          >
+            <option value="above">Price ≥</option>
+            <option value="below">Price ≤</option>
+          </select>
+          <input
+            type="number"
+            placeholder="Price"
+            value={newAlert.targetPrice}
+            onChange={e => setNewAlert(p => ({ ...p, targetPrice: e.target.value }))}
+            step="0.01"
+            style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 13, background: 'var(--surf1)', color: 'var(--fg)' }}
+          />
+          <button type="submit" style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600 }}>
+            Add
+          </button>
+        </form>
+
+        {/* Alerts List */}
+        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', color: 'var(--fg3)', padding: 20 }}>Loading alerts...</div>
+          ) : alerts.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'var(--fg3)', padding: 20 }}>No alerts set. Create one above.</div>
+          ) : (
+            alerts.map(alert => (
+              <div key={alert._id} style={{ padding: 12, borderBottom: '1px solid var(--bdr)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, color: 'var(--red)', fontSize: 14 }}>{alert.symbol}</span>
+                    <span style={{ fontSize: 12, color: 'var(--fg3)', background: 'var(--surf2)', padding: '2px 8px', borderRadius: 4 }}>
+                      {alert.alertType === 'above' ? '≥' : '≤'} ${alert.targetPrice.toFixed(2)}
+                    </span>
+                    {alert.triggered && <span style={{ fontSize: 11, color: 'var(--green)', fontWeight: 700 }}>✓ TRIGGERED</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--fg3)' }}>
+                    {alert.enabled ? '🟢 Active' : '⚫ Disabled'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => handleToggleAlert(alert._id)}
+                    style={{ padding: '4px 10px', fontSize: 11, background: alert.enabled ? 'var(--red)' : 'var(--surf2)', color: alert.enabled ? 'white' : 'var(--fg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                  >
+                    {alert.enabled ? 'Off' : 'On'}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteAlert(alert._id)}
+                    style={{ padding: '4px 10px', fontSize: 11, background: 'var(--surf2)', color: 'var(--fg3)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                  >
+                    Del
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel });
