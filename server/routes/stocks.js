@@ -15,27 +15,38 @@ router.get('/', async (req, res) => {
 
 // Live on-demand quote for ANY symbol via yahoo-finance2 (no DB needed)
 router.get('/live/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
   try {
     const yahooFinance = (await import('yahoo-finance2')).default;
-    const symbol = req.params.symbol.toUpperCase();
-    const quote = await yahooFinance.quote(symbol);
-    if (!quote?.regularMarketPrice) {
-      return res.status(404).json({ error: `Symbol ${symbol} not found` });
+
+    // Suppress strict validation — some small-caps have incomplete data
+    const quote = await yahooFinance.quote(symbol, {}, { validateResult: false });
+
+    // Accept any available price field
+    const price = quote?.regularMarketPrice
+      ?? quote?.preMarketPrice
+      ?? quote?.postMarketPrice
+      ?? null;
+
+    if (!price) {
+      return res.status(404).json({ error: `No price data for ${symbol}` });
     }
+
     res.json({
       symbol,
-      name: quote.longName || quote.shortName || symbol,
-      price: quote.regularMarketPrice,
+      name: quote.longName || quote.shortName || quote.displayName || symbol,
+      price,
       change: quote.regularMarketChange ?? 0,
       changePercent: quote.regularMarketChangePercent ?? 0,
-      volume: quote.regularMarketVolume,
-      marketCap: quote.marketCap,
-      high52Week: quote.fiftyTwoWeekHigh,
-      low52Week: quote.fiftyTwoWeekLow,
+      volume: quote.regularMarketVolume ?? 0,
+      marketCap: quote.marketCap ?? null,
+      high52Week: quote.fiftyTwoWeekHigh ?? null,
+      low52Week: quote.fiftyTwoWeekLow ?? null,
       lastUpdated: new Date()
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(`Live quote error for ${symbol}:`, error.message);
+    res.status(404).json({ error: `Could not fetch ${symbol}: ${error.message}` });
   }
 });
 

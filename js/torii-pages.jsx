@@ -60,7 +60,11 @@ function PortfolioPage({ onNav }) {
     setAddLoading(true); setAddError('');
     try {
       const r = await fetch(`${API_URL}/stocks/live/${ticker}`);
-      if (!r.ok) { setAddError(`Couldn't find "${ticker}" — check the symbol`); setAddLoading(false); return; }
+      if (!r.ok) {
+        const errData = await r.json().catch(() => ({}));
+        setAddError(errData.error || `Couldn't find "${ticker}" — check the symbol`);
+        setAddLoading(false); return;
+      }
       setPositions(prev => [...prev, { ticker, shares, costBasis: parseFloat(newCost) || 0 }]);
       setShowAdd(false); setNewTicker(''); setNewShares(''); setNewCost('');
     } catch { setAddError('Network error — try again'); }
