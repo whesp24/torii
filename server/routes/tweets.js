@@ -3,10 +3,15 @@ import Tweet from '../models/Tweet.js';
 
 const router = express.Router();
 
-// Get all tweets
+// Curated handles — only these accounts are shown
+const CURATED_HANDLES = ['KevinLMak', 'ContrarianCurse', 'dsundheim', 'jeff_weinstein', 'HannoLustig', 'patrick_oshag'];
+const HANDLE_REGEXES  = CURATED_HANDLES.map(h => new RegExp(`^${h}$`, 'i'));
+
+// Get tweets (curated accounts only — filters out any stale/wrong DB data)
 router.get('/', async (req, res) => {
   try {
-    const tweets = await Tweet.find().sort({ createdAt: -1 }).limit(50);
+    const tweets = await Tweet.find({ authorHandle: { $in: HANDLE_REGEXES } })
+      .sort({ createdAt: -1 }).limit(60);
     res.json(tweets);
   } catch (error) {
     res.status(500).json({ error: error.message });

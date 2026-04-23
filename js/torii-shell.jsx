@@ -1,5 +1,7 @@
 // ─── TORII SHELL: App, Sidebar, Topbar, Notifications, Tasks, CmdPalette ──────
 
+const SHELL_API = 'https://torii-backend.onrender.com/api';
+
 const NAV = [
   { id:'overview',  label:'Markets',   icon:'markets'   },
   { id:'portfolio', label:'Portfolio', icon:'portfolio' },
@@ -118,7 +120,7 @@ function Topbar({ theme, onTheme, notifCount, notifOpen, onNotif }) {
 
   React.useEffect(() => {
     // Fetch live KPIs then refresh every 5 minutes
-    const load = () => fetch('/api/kpis')
+    const load = () => fetch(`${SHELL_API}/kpis`)
       .then(r => r.ok ? r.json() : [])
       .then(kpis => {
         if (kpis && kpis.length > 0) {
@@ -275,7 +277,7 @@ function SidebarHoldings({ page, onNav, collapsed }) {
     try { positions = JSON.parse(localStorage.getItem('torii_portfolio') || '[]'); } catch {}
     if (positions.length === 0) { setHoldings([]); return; }
     Promise.all(positions.slice(0, 8).map(p =>
-      fetch(`/api/stocks/live/${p.ticker}`).then(r => r.ok ? r.json() : null).catch(() => null)
+      fetch(`${SHELL_API}/stocks/live/${p.ticker}`).then(r => r.ok ? r.json() : null).catch(() => null)
         .then(d => ({ ticker: p.ticker, shares: p.shares, price: d?.price || 0, pct: d?.changePercent || 0 }))
     )).then(setHoldings);
   }, []);

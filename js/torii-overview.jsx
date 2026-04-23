@@ -82,43 +82,48 @@ function BriefingCard() {
 // ─── Voices feed panel ───────────────────────────────────────────────────────
 
 const VOICE_FILTERS = ['All','Kevin Mak','SuspendedCap','D. Sundheim','Jeff Weinstein','Hanno Lustig','P. O\'Shag'];
+// Map display name → authorHandle for filter matching
+const FILTER_HANDLE_MAP = {
+  'Kevin Mak':    'kevinlmak',
+  'SuspendedCap': 'contrariancurse',
+  'D. Sundheim':  'dsundheim',
+  'Jeff Weinstein':'jeff_weinstein',
+  'Hanno Lustig': 'hannolustig',
+  "P. O'Shag":    'patrick_oshag',
+};
+const CURATED_HANDLES_LOWER = Object.values(FILTER_HANDLE_MAP);
 
 function VoicesFeedPanel() {
   const [filter, setFilter] = React.useState('All');
-  const [tweets, setTweets] = React.useState(MOCK.tweets);
+  const [tweets, setTweets] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
     fetch(`${API_URL}/tweets`)
       .then(r => r.json())
       .then(data => {
-        if (data && data.length > 0) {
-          // Transform API tweet data
+        if (Array.isArray(data) && data.length > 0) {
           const transformed = data.map(tweet => ({
             id: tweet._id || Math.random(),
             author: tweet.author || 'Unknown',
-            handle: tweet.authorHandle || 'unknown',
+            handle: (tweet.authorHandle || 'unknown').toLowerCase(),
             name: tweet.author || 'Unknown',
             content: tweet.content || '',
             url: tweet.url || '#',
             createdAt: tweet.createdAt || new Date().toISOString(),
-            likes: tweet.likes || 0,
-            retweets: tweet.retweets || 0,
-            replies: tweet.replies || 0,
             sentiment: tweet.sentiment || 'neutral'
-          }));
+          // Always pre-filter to curated handles only
+          })).filter(t => CURATED_HANDLES_LOWER.includes(t.handle));
           setTweets(transformed);
-        } else {
-          setTweets(MOCK.tweets);
         }
       })
-      .catch(e => {console.error('Tweets API Error:', e); setTweets(MOCK.tweets);})
+      .catch(e => console.error('Tweets API Error:', e))
       .finally(() => setLoading(false));
   }, []);
 
   const displayedTweets = filter === 'All'
-    ? (tweets || MOCK.tweets)
-    : (tweets || MOCK.tweets).filter(t => t.name === filter || t.name.includes(filter.split(' ').pop()));
+    ? tweets
+    : tweets.filter(t => t.handle === (FILTER_HANDLE_MAP[filter] || ''));
 
   return (
     <div className="card voices-panel">
@@ -130,12 +135,18 @@ function VoicesFeedPanel() {
       <div className="filter-strip" style={{marginBottom:12}}>
         {VOICE_FILTERS.map(f => (
           <button key={f} className={`filter-chip ${filter===f?'active':''}`} onClick={() => setFilter(f)}>
-            {f === 'All' ? 'All' : '@'+f.split(' ').pop()}
+            {f === 'All' ? 'All' : '@'+(FILTER_HANDLE_MAP[f]||f.split(' ').pop())}
           </button>
         ))}
       </div>
       {/* Tweets scroll */}
       <div className="voices-scroll">
+        {loading && <div style={{padding:'20px',textAlign:'center',color:'var(--fg3)',fontSize:11,fontFamily:'var(--font-mono)'}}>Loading…</div>}
+        {!loading && displayedTweets.length === 0 && (
+          <div style={{padding:'20px',textAlign:'center',color:'var(--fg3)',fontSize:11,fontFamily:'var(--font-mono)'}}>
+            No tweets yet — check back soon
+          </div>
+        )}
         {displayedTweets.map(t => <TweetCard key={t.id} tweet={t} compact />)}
       </div>
     </div>
@@ -243,7 +254,29 @@ function PortfolioSnap({ onNav }) {
 // ─── Top Headlines ────────────────────────────────────────────────────────────
 
 function HeadlinesCard({ onNav }) {
-  const articles = MOCK.news.filter(a => a.importance !== 'low').slice(0,5);
+  const [articles, setArticles] = React.useState([]);
+  const [loading, setLoading]   = React.useState(true);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/news`)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          // Sort newest first, take top 5
+          const sorted = [...data].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+          setArticles(sorted.slice(0, 5));
+        } else {
+          setArticles(MOCK.news.filter(a => a.importance !== 'low').slice(0, 5));
+        }
+      })
+      .catch(() => setArticles(MOCK.news.filter(a => a.importance !== 'low').slice(0, 5)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const displayArticles = articles.length > 0
+    ? articles
+    : MOCK.news.filter(a => a.importance !== 'low').slice(0, 5);
+
   return (
     <div className="card">
       <div className="card-head">
@@ -251,30 +284,32 @@ function HeadlinesCard({ onNav }) {
         <button className="card-link" onClick={() => onNav('news')}>All news →</button>
       </div>
       <div style={{display:'flex',flexDirection:'column'}}>
-        {articles.map((a,i) => (
-          <a key={a.id} href={a.url} target="_blank" rel="noopener"
+        {loading && [0,1,2,3,4].map(i => (
+          <div key={i} style={{padding:'11px 0',borderBottom:'1px solid var(--bdr)'}}>
+            <Skel w="90%" h={13} />
+          </div>
+        ))}
+        {!loading && displayArticles.map((a, i) => (
+          <a key={a._id || a.id} href={a.url} target="_blank" rel="noopener"
             style={{
               display:'block', padding:'11px 0',
-              borderBottom: i < articles.length-1 ? '1px solid var(--bdr)' : 'none',
+              borderBottom: i < displayArticles.length-1 ? '1px solid var(--bdr)' : 'none',
               textDecoration:'none',
             }}>
             <div style={{display:'flex',gap:8,alignItems:'flex-start'}}>
-              {a.importance === 'high' && (
-                <div style={{width:6,height:6,borderRadius:'50%',background:'#EF4444',flexShrink:0,marginTop:5}} />
-              )}
+              <div style={{width:6,height:6,borderRadius:'50%',background:'var(--red)',flexShrink:0,marginTop:5}} />
               <div style={{flex:1,minWidth:0}}>
                 <div style={{
-                  fontSize:13,lineHeight:1.45,fontWeight:a.importance==='high'?600:400,
+                  fontSize:13,lineHeight:1.45,fontWeight:500,
                   color:'var(--fg)', overflow:'hidden', display:'-webkit-box',
                   WebkitLineClamp:2, WebkitBoxOrient:'vertical',
                   marginBottom:4,
                 }}>{a.title}</div>
                 <div style={{display:'flex',gap:7,alignItems:'center'}}>
-                  <SourceBadge source={a.source} category={a.category} />
+                  <SourceBadge source={a.source || 'News'} category={a.category || 'stocks'} />
                   <span style={{fontSize:9,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(a.publishedAt)}</span>
                 </div>
               </div>
-              {a.importance === 'high' && <ImpBadge importance={a.importance} />}
             </div>
           </a>
         ))}
