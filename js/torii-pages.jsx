@@ -508,13 +508,36 @@ function VoicesPage() {
       .catch(() => setLoading(false));
   }, []);
 
-  // Only show tweets from curated handles
-  const curatedHandles = VOICE_ACCOUNTS.map(a => a.handle.toLowerCase());
-  const curatedTweets = tweets.filter(t => curatedHandles.includes(t.handle.toLowerCase()));
+  // Show curated tweets if available, otherwise fall back to topic news
+  const [topicNews, setTopicNews] = React.useState([]);
+  React.useEffect(() => {
+    fetch(`${API_URL}/news`).then(r => r.json()).then(d => setTopicNews(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
 
-  const displayed = selected === 'all'
-    ? curatedTweets
-    : curatedTweets.filter(t => t.handle.toLowerCase() === selected.toLowerCase());
+  const curatedHandles = VOICE_ACCOUNTS.map(a => a.handle.toLowerCase());
+  const curatedTweets = tweets.filter(t => curatedHandles.includes((t.handle || '').toLowerCase()));
+
+  // Topic keyword map for news fallback
+  const topicMap = {
+    'KevinLMak':       ['japan','nikkei','yen','boj','fx','macro'],
+    'ContrarianCurse': ['equity','sentiment','market','short','bearish','bullish'],
+    'dsundheim':       ['equity','long','short','hedge','fund','position'],
+    'jeff_weinstein':  ['tech','ai','nvidia','software','venture','startup'],
+    'HannoLustig':     ['fed','rates','inflation','bond','treasury','macro'],
+    'patrick_oshag':   ['value','capital','invest','earnings','compounding'],
+  };
+
+  const getNewsForAccount = (handle) => {
+    const keywords = topicMap[handle] || [];
+    return topicNews.filter(n => {
+      const text = ((n.title || '') + ' ' + (n.description || '')).toLowerCase();
+      return keywords.some(k => text.includes(k));
+    }).slice(0, 8);
+  };
+
+  const hasTweets = curatedTweets.length > 0;
+  const displayedTweets = selected === 'all' ? curatedTweets : curatedTweets.filter(t => t.handle.toLowerCase() === selected.toLowerCase());
+  const displayedNews = selected === 'all' ? topicNews.slice(0, 15) : getNewsForAccount(selected);
 
   return (
     <div className="page-root">
@@ -550,17 +573,19 @@ function VoicesPage() {
         ))}
       </div>
 
-      {/* Tweet feed — content from nitter RSS */}
+      {/* Feed */}
       <div style={{display:'flex',flexDirection:'column',gap:10}}>
-        {loading && <div style={{padding:40,textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading feed…</div>}
-        {!loading && displayed.map(t => {
+        {loading && <div style={{padding:40,textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading…</div>}
+
+        {/* Real tweets when available */}
+        {!loading && hasTweets && displayedTweets.map(t => {
           const acct = VOICE_ACCOUNTS.find(a => a.handle.toLowerCase() === t.handle.toLowerCase());
           return (
             <a key={t.id} href={t.url} target="_blank" rel="noopener noreferrer"
               style={{display:'block',textDecoration:'none',background:'var(--surf)',border:'1px solid var(--bdr)',borderRadius:12,padding:'14px 16px'}}>
               <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
-                <div className="voice-avatar" style={{background: acct?.color || 'var(--surf2)', width:38, height:38, fontSize:12, flexShrink:0}}>
-                  {acct?.initials || t.handle.charAt(0).toUpperCase()}
+                <div className="voice-avatar" style={{background:acct?.color||'var(--surf2)',width:38,height:38,fontSize:12,flexShrink:0}}>
+                  {acct?.initials||t.handle.charAt(0).toUpperCase()}
                 </div>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
@@ -569,17 +594,49 @@ function VoicesPage() {
                     <span style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)',marginLeft:'auto'}}>{timeAgo(t.createdAt)}</span>
                   </div>
                   <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.55}}>{t.content}</div>
-                  <div style={{marginTop:8,fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>View on X ↗</div>
                 </div>
               </div>
             </a>
           );
         })}
-        {!loading && displayed.length === 0 && (
-          <div style={{padding:'32px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12,lineHeight:1.6}}>
-            No posts yet from your curated accounts.<br/>
-            The server fetches new posts every 10 minutes via X/nitter RSS.
-          </div>
+
+        {/* Topic news fallback when no tweets */}
+        {!loading && !hasTweets && displayedNews.map((n, i) => {
+          const acct = selected !== 'all' ? VOICE_ACCOUNTS.find(a => a.handle === selected) : null;
+          return (
+            <a key={n._id || i} href={n.url} target="_blank" rel="noopener noreferrer"
+              style={{display:'block',textDecoration:'none',background:'var(--surf)',border:'1px solid var(--bdr)',borderRadius:12,padding:'14px 16px'}}>
+              <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                <div className="voice-avatar" style={{background:acct?.color||'var(--surf2)',width:38,height:38,fontSize:10,flexShrink:0}}>
+                  {acct?.initials || (n.source||'N').charAt(0).toUpperCase()}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
+                    <span style={{fontSize:12,fontWeight:600,color:'var(--fg)'}}>{acct ? acct.name : n.source}</span>
+                    <span style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(n.publishedAt)}</span>
+                    {!acct && n.source && <span style={{fontSize:10,color:'var(--fg3)',marginLeft:'auto'}}>{n.source}</span>}
+                  </div>
+                  <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.5,fontWeight:500}}>{n.title}</div>
+                  {n.description && <div style={{fontSize:11,color:'var(--fg2)',marginTop:3,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{n.description}</div>}
+                </div>
+              </div>
+            </a>
+          );
+        })}
+
+        {/* View on X link for selected account */}
+        {!loading && selected !== 'all' && (() => {
+          const acct = VOICE_ACCOUNTS.find(a => a.handle === selected);
+          return acct ? (
+            <a href={`https://x.com/${acct.handle}`} target="_blank" rel="noopener noreferrer"
+              style={{display:'block',textAlign:'center',padding:'12px',background:'var(--surf)',border:'1px solid var(--bdr)',borderRadius:10,textDecoration:'none',color:'var(--fg3)',fontSize:12,fontFamily:'var(--font-mono)'}}>
+              View @{acct.handle}'s full feed on X ↗
+            </a>
+          ) : null;
+        })()}
+
+        {!loading && !hasTweets && displayedNews.length === 0 && (
+          <div style={{padding:'32px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>No content found yet</div>
         )}
       </div>
     </div>

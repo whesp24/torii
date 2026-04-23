@@ -2,6 +2,11 @@
 
 const API_URL = 'https://torii-backend.onrender.com/api';
 
+// Keep Render free tier alive — ping every 14 min to prevent 15-min sleep
+(function keepAlive() {
+  setInterval(() => fetch(`${API_URL}/health`).catch(() => {}), 14 * 60 * 1000);
+})();
+
 const OVERVIEW_KPIS = [
   { label:'Nikkei 225', sym:'^N225',    src:'japan', dec:0, accent:true },
   { label:'USD / JPY',  sym:'USDJPY=X', src:'japan', dec:2, tag:'FX'    },
@@ -143,8 +148,7 @@ function PortfolioSnap({ onNav }) {
   const [holdings, setHoldings] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
 
-  React.useEffect(() => {
-    // Load user's actual portfolio from localStorage (same key as PortfolioPage)
+  const loadPortfolio = React.useCallback(() => {
     let positions = [];
     try {
       const saved = localStorage.getItem('torii_portfolio');
@@ -168,6 +172,22 @@ function PortfolioSnap({ onNav }) {
         }))
     )).then(res => { setHoldings(res); setLoading(false); });
   }, []);
+
+  React.useEffect(() => {
+    loadPortfolio();
+    // Refresh every 5 minutes
+    const interval = setInterval(loadPortfolio, 5 * 60 * 1000);
+    // Also refresh when user navigates back to this tab / page
+    const onFocus = () => loadPortfolio();
+    const onStorage = (e) => { if (e.key === 'torii_portfolio') loadPortfolio(); };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [loadPortfolio]);
   const total  = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + (h.value || 0), 0) : 0;
   const dayChg = holdings.reduce((s,h) => s + (h.change * h.shares), 0);
   const dayPct = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
