@@ -1,81 +1,95 @@
 import Tweet from '../models/Tweet.js';
-import Parser from 'rss-parser';
 
-const parser = new Parser();
+// StockTwits public API — free, no auth required for reading public streams
+// Replaces nitter.net which shut down in Feb 2024
+const STOCKTWITS_BASE = 'https://api.stocktwits.com/api/2';
+
+// Symbols to pull social chatter for
+const WATCH_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'NFLX', 'GOOGL', 'SPY', 'QQQ'];
 
 export async function fetchAndUpdateTweets() {
   try {
-    // Using Nitter RSS feeds as alternative to Twitter API
-    const feeds = [
-      'https://nitter.net/elonmusk/rss',
-      'https://nitter.net/CNBCnow/rss',
-      'https://nitter.net/wsj/rss'
-    ];
-
-    for (const feedUrl of feeds) {
+    for (const symbol of WATCH_SYMBOLS) {
       try {
-        const feed = await parser.parseURL(feedUrl);
-
-        for (const item of feed.items.slice(0, 5)) {
-          const existingTweet = await Tweet.findOne({ url: item.link });
-
-          if (!existingTweet) {
-            const hashtags = extractHashtags(item.content || item.title);
-            const symbols = extractSymbols(item.content || item.title);
-
-            await Tweet.create({
-              author: feed.title?.split(' /')[0],
-              authorHandle: extractHandle(feedUrl),
-              content: item.title || item.content,
-              url: item.link,
-              createdAt: new Date(item.pubDate),
-              tags: hashtags,
-              mentions: extractMentions(item.content || item.title),
-              relatedSymbols: symbols,
-              sentiment: classifySentiment(item.content || item.title)
-            });
-
-            console.log(`✓ Saved tweet from ${feed.title}`);
+        const url = `${STOCKTWITS_BASE}/streams/symbol/${symbol}.json?limit=20`;
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'ToriiApp/1.0'
           }
+        });
+
+        if (!response.ok) {
+          console.error(`StockTwits error for ${symbol}: ${response.status}`);
+          continue;
         }
-      } catch (feedError) {
-        console.error(`Error parsing feed ${feedUrl}:`, feedError.message);
+
+        const data = await response.json();
+
+        if (!data.messages || !Array.isArray(data.messages)) continue;
+
+        for (const msg of data.messages) {
+          // Deduplicate by StockTwits message ID
+          const existingTweet = await Tweet.findOne({ url: `https://stocktwits.com/message/${msg.id}` });
+          if (existingTweet) continue;
+
+          const symbols = msg.symbols?.map(s => s.symbol) || [symbol];
+          const sentiment = msg.entities?.sentiment?.basic?.toLowerCase() ||
+                            classifySentiment(msg.body);
+
+          await Tweet.create({
+            author: msg.user?.name || msg.user?.username || 'Unknown',
+            authorHandle: msg.user?.username || 'unknown',
+            content: msg.body,
+            url: `https://stocktwits.com/message/${msg.id}`,
+            createdAt: new Date(msg.created_at),
+            tags: extractHashtags(msg.body),
+            mentions: extractMentions(msg.body),
+            relatedSymbols: symbols,
+            sentiment: normalizeSentiment(sentiment)
+          });
+
+          console.log(`✓ Saved StockTwits post for $${symbol}`);
+        }
+
+        // Respect rate limits — StockTwits allows ~200 req/hour unauthenticated
+        await sleep(300);
+      } catch (symErr) {
+        console.error(`Error fetching StockTwits for ${symbol}:`, symErr.message);
       }
     }
   } catch (error) {
-    console.error('Tweet update error:', error);
+    console.error('Tweet (StockTwits) update error:', error);
   }
 }
 
-function extractHashtags(text) {
-  const hashtags = text.match(/#\w+/g) || [];
-  return hashtags.map(tag => tag.substring(1));
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function extractMentions(text) {
-  const mentions = text.match(/@\w+/g) || [];
-  return mentions.map(mention => mention.substring(1));
+function extractHashtags(text = '') {
+  return (text.match(/#\w+/g) || []).map(t => t.slice(1));
 }
 
-function extractSymbols(text) {
-  const symbols = text.match(/\$[A-Z]{1,5}/g) || [];
-  return symbols.map(symbol => symbol.substring(1));
+function extractMentions(text = '') {
+  return (text.match(/@\w+/g) || []).map(m => m.slice(1));
 }
 
-function extractHandle(feedUrl) {
-  const match = feedUrl.match(/nitter\.net\/([^\/]+)/);
-  return match ? match[1] : 'unknown';
+function normalizeSentiment(raw = '') {
+  const lower = raw.toLowerCase();
+  if (lower === 'bullish' || lower === 'positive') return 'positive';
+  if (lower === 'bearish' || lower === 'negative') return 'negative';
+  return 'neutral';
 }
 
-function classifySentiment(text) {
-  const positive = ['bull', 'up', 'gain', 'surge', 'bullish', 'strong', 'excellent'];
-  const negative = ['bear', 'down', 'fall', 'crash', 'bearish', 'weak', 'poor'];
-
-  const lowerText = text.toLowerCase();
-  const posCount = positive.filter(word => lowerText.includes(word)).length;
-  const negCount = negative.filter(word => lowerText.includes(word)).length;
-
-  if (posCount > negCount) return 'positive';
-  if (negCount > posCount) return 'negative';
+function classifySentiment(text = '') {
+  const positive = ['bull', 'up', 'gain', 'surge', 'bullish', 'strong', 'excellent', 'buy', 'long'];
+  const negative = ['bear', 'down', 'fall', 'crash', 'bearish', 'weak', 'poor', 'sell', 'short'];
+  const lower = text.toLowerCase();
+  const pos = positive.filter(w => lower.includes(w)).length;
+  const neg = negative.filter(w => lower.includes(w)).length;
+  if (pos > neg) return 'positive';
+  if (neg > pos) return 'negative';
   return 'neutral';
 }
