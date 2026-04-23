@@ -21,7 +21,7 @@ function PortfolioPage({ onNav }) {
   const [newTicker, setNewTicker] = React.useState('');
   const [newShares, setNewShares] = React.useState('');
   const [newCost, setNewCost] = React.useState('');
-  const [addLoading, setAddLoading] = React.useState(false);
+  const [addLoading] = React.useState(false);
   const [addError, setAddError] = React.useState('');
 
   // Persist positions to localStorage
@@ -52,23 +52,15 @@ function PortfolioPage({ onNav }) {
     )).then(res => { setHoldings(res.filter(Boolean)); setLoading(false); });
   }, [positions]);
 
-  const addPosition = async () => {
+  const addPosition = () => {
     const ticker = newTicker.trim().toUpperCase();
     const shares = parseFloat(newShares);
-    if (!ticker || isNaN(shares) || shares <= 0) { setAddError('Enter a valid ticker and share count'); return; }
+    if (!ticker) { setAddError('Enter a ticker symbol'); return; }
+    if (isNaN(shares) || shares <= 0) { setAddError('Enter a valid number of shares'); return; }
     if (positions.find(p => p.ticker === ticker)) { setAddError(`${ticker} is already in your portfolio`); return; }
-    setAddLoading(true); setAddError('');
-    try {
-      const r = await fetch(`${API_URL}/stocks/live/${ticker}`);
-      if (!r.ok) {
-        const errData = await r.json().catch(() => ({}));
-        setAddError(errData.error || `Couldn't find "${ticker}" — check the symbol`);
-        setAddLoading(false); return;
-      }
-      setPositions(prev => [...prev, { ticker, shares, costBasis: parseFloat(newCost) || 0 }]);
-      setShowAdd(false); setNewTicker(''); setNewShares(''); setNewCost('');
-    } catch { setAddError('Network error — try again'); }
-    setAddLoading(false);
+    // Add immediately — price loads in background via useEffect
+    setPositions(prev => [...prev, { ticker, shares, costBasis: parseFloat(newCost) || 0 }]);
+    setShowAdd(false); setNewTicker(''); setNewShares(''); setNewCost(''); setAddError('');
   };
 
   const removePosition = ticker => setPositions(prev => prev.filter(p => p.ticker !== ticker));
