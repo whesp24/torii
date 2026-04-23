@@ -176,17 +176,30 @@ export async function fetchYahooQuote(symbol) {
   };
 }
 
+const STOCK_CACHE_MS = 12 * 60 * 1000; // 12 min — skip Yahoo fetch if data is fresh
+
 // ── Batch stock update (cron job) ─────────────────────────────────────────────
-export async function fetchAndUpdateStocks() {
+export async function fetchAndUpdateStocks({ force = false } = {}) {
   const symbols = [
-    // US equities (Finnhub)
+    // US equities (Finnhub — no rate limit risk)
     'NFLX', 'MSFT', 'GOOGL', 'AAPL', 'NVDA', 'AMD', 'QQQ', 'SPY',
-    // Japan equities (Yahoo Finance)
+    // Japan equities (Yahoo Finance — rate-limit sensitive)
     '7203.T', '9984.T', '6758.T', '6861.T', '8306.T', '6501.T', '8035.T', '9432.T',
   ];
 
   for (const symbol of symbols) {
     try {
+      // For .T stocks that depend on Yahoo, check cache first
+      if (!force && symbol.endsWith('.T')) {
+        const cached = await Stock.findOne({ symbol }).lean();
+        if (cached?.lastUpdated) {
+          const age = Date.now() - new Date(cached.lastUpdated).getTime();
+          if (age < STOCK_CACHE_MS) {
+            console.log(`⏭  ${symbol} cached (${Math.round(age/60000)}m old)`);
+            continue;
+          }
+        }
+      }
       const data = await fetchLiveQuote(symbol);
       if (data && data.price) {
         await Stock.findOneAndUpdate(
@@ -198,7 +211,9 @@ export async function fetchAndUpdateStocks() {
         );
         console.log(`✓ Updated ${symbol} @ ${data.price}`);
       }
-      await new Promise(r => setTimeout(r, 350)); // rate limit buffer
+      // Longer delay for .T stocks to avoid Yahoo rate limits
+      const delay = symbol.endsWith('.T') ? 1500 : 400;
+      await new Promise(r => setTimeout(r, delay));
     } catch (err) {
       console.error(`Error fetching ${symbol}:`, err.message);
     }

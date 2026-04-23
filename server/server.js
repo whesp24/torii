@@ -77,16 +77,25 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../index.html'));
 });
 
-// Initialize data on startup
-initializeKPIs().catch(err => console.error('Error initializing KPIs:', err));
+// Initialize data on startup — staggered to avoid Yahoo 429s on cold start
 initializeTasks().catch(err => console.error('Error initializing tasks:', err));
 initializeWatchlist().catch(err => console.error('Error initializing watchlist:', err));
 
-// Fetch tweets and news immediately on startup so data is fresh without waiting for cron
+// KPIs: cache-aware, only hits Yahoo for stale data
+setTimeout(() => {
+  initializeKPIs().catch(err => console.error('Error initializing KPIs:', err));
+}, 3000);
+
+// Stocks: cache-aware, staggered 20s after KPIs to avoid simultaneous Yahoo bursts
+setTimeout(() => {
+  fetchAndUpdateStocks().catch(err => console.error('Startup stock fetch error:', err));
+}, 20000);
+
+// News + tweets: 30s after startup
 setTimeout(() => {
   fetchAndUpdateTweets().catch(err => console.error('Startup tweet fetch error:', err));
   fetchAndUpdateNews().catch(err => console.error('Startup news fetch error:', err));
-}, 5000); // 5s delay to let MongoDB finish connecting
+}, 30000);
 
 // Scheduled Jobs
 cron.schedule('*/30 * * * *', () => {
@@ -94,7 +103,8 @@ cron.schedule('*/30 * * * *', () => {
   updateAllKPIs();
 });
 
-cron.schedule('*/5 * * * *', () => {
+// Stocks every 15min (was 5min — too aggressive for Yahoo free tier)
+cron.schedule('*/15 * * * *', () => {
   console.log('Running stock update...');
   fetchAndUpdateStocks();
 });

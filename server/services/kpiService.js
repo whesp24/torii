@@ -14,11 +14,25 @@ const KPI_CONFIG = [
   { symbol: '^TNX',     label: '10Y'        },
 ];
 
-export async function updateAllKPIs() {
+const KPI_CACHE_MS = 25 * 60 * 1000; // 25 minutes — don't re-hit Yahoo if fresh
+
+export async function updateAllKPIs({ force = false } = {}) {
   let count = 0;
   for (const cfg of KPI_CONFIG) {
     try {
-      // Indices, forex, commodities — Yahoo with cookie session works better than yahoo-finance2
+      // Skip if cached value is still fresh (avoids Yahoo 429 on cold starts)
+      if (!force) {
+        const existing = await KPI.findOne({ symbol: cfg.symbol }).lean();
+        if (existing?.lastUpdated) {
+          const age = Date.now() - new Date(existing.lastUpdated).getTime();
+          if (age < KPI_CACHE_MS) {
+            console.log(`⏭  KPI ${cfg.label} cached (${Math.round(age/60000)}m old) — skipping`);
+            count++;
+            continue;
+          }
+        }
+      }
+      // Indices, forex, commodities — Yahoo with cookie session
       const q = await fetchYahooQuote(cfg.symbol);
       await KPI.findOneAndUpdate(
         { symbol: cfg.symbol },
@@ -35,7 +49,7 @@ export async function updateAllKPIs() {
       );
       console.log(`✓ KPI ${cfg.label}: ${q.price}`);
       count++;
-      await new Promise(r => setTimeout(r, 500)); // space requests out
+      await new Promise(r => setTimeout(r, 1200)); // 1.2s between requests
     } catch (err) {
       console.error(`Error updating KPI ${cfg.symbol}:`, err.message);
     }
@@ -63,15 +77,9 @@ export async function getKPI(symbol) {
 
 export async function initializeKPIs() {
   try {
-    const count = await KPI.countDocuments();
-    if (count === 0) {
-      console.log('Initializing KPIs...');
-      await updateAllKPIs();
-    } else {
-      // Always refresh on startup
-      console.log('Refreshing KPIs on startup...');
-      await updateAllKPIs();
-    }
+    // Use cache-aware update — only fetches symbols that are stale
+    console.log('Initializing KPIs (cache-aware)...');
+    await updateAllKPIs({ force: false });
   } catch (error) {
     console.error('Error initializing KPIs:', error);
   }
