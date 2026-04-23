@@ -2786,8 +2786,8 @@ function AssistantPage() {
       const data = await res.json();
       if (!res.ok) {
         const errMsg = data.error || 'Something went wrong.';
-        const hint = errMsg.includes('API key') || res.status === 500
-          ? `${errMsg}\n\nMake sure ANTHROPIC_API_KEY is set in your Render environment variables.`
+        const hint = res.status === 500 || res.status === 401 || res.status === 403
+          ? `${errMsg}\n\nMake sure GEMINI_API_KEY is set in your Render environment variables.`
           : errMsg;
         setMessages(p => [...p, { role: 'assistant', content: hint, timestamp: new Date() }]);
       } else if (data.conversationId) {

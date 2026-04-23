@@ -6,7 +6,7 @@ import Contact from '../models/Contact.js';
 import News from '../models/News.js';
 
 const router = express.Router();
-const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_MODEL = 'gemini-2.0-flash';
 
 async function geminiChat(systemPrompt, messages, maxTokens = 1024) {
   const key = process.env.GEMINI_API_KEY;
