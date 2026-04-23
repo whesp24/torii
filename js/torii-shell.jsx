@@ -241,7 +241,7 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
               </div>
             </button>
             {tasksOpen && (
-              <div className="tasks-list">
+              <div className="tasks-list" style={{overflowY:'auto',flex:1}}>
                 {tasks.length === 0 && (
                   <div style={{padding:'8px 4px',color:'var(--fg3)',fontSize:10,fontFamily:'var(--font-mono)'}}>
                     Loading events…
