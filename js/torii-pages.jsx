@@ -2374,7 +2374,7 @@ function NetworkingPage() {
   const [form, setForm]             = React.useState({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
   const [editing, setEditing]       = React.useState(null); // contact being edited
   const [editForm, setEditForm]     = React.useState({});
-  const [edgeFilters, setEdgeFilters] = React.useState({ company: true, school: true, location: false });
+  const [edgeFilters, setEdgeFilters] = React.useState({ company: true, school: true, location: true });
   const [touchingId, setTouchingId] = React.useState(null);
 
   // Load from backend

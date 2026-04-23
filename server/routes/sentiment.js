@@ -1,12 +1,43 @@
 import express from 'express';
 import News from '../models/News.js';
-import Tweet from '../models/Tweet.js';
 
 const router = express.Router();
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const FINNHUB_KEY  = process.env.FINNHUB_API_KEY || '';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODEL = 'llama-3.3-70b-versatile';
+
+// ── Fetch recent headlines from Finnhub company-news API ──────────────────────
+async function fetchFinnhubNews(ticker) {
+  if (!FINNHUB_KEY) return [];
+  const to   = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  try {
+    const r = await fetch(
+      `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&token=${FINNHUB_KEY}`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (!r.ok) return [];
+    const articles = await r.json();
+    return Array.isArray(articles)
+      ? articles.slice(0, 8).map(a => a.headline).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// ── Scan DB news for any mention of ticker in title or description ────────────
+async function fetchDbNews(ticker) {
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  const regex = new RegExp(ticker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const news = await News.find({
+    publishedAt: { $gte: threeDaysAgo },
+    $or: [{ title: regex }, { description: regex }],
+  }).sort({ publishedAt: -1 }).limit(6);
+  return news.map(n => n.title);
+}
 
 // Helper function to call Groq API
 async function callGroqSentiment(ticker, headlines) {
@@ -76,38 +107,33 @@ router.post('/analyze', async (req, res) => {
       tickers.map(async (ticker) => {
         const upperTicker = ticker.toUpperCase();
 
-        // Fetch recent news (last 3 days)
-        const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-        const news = await News.find({
-          relatedStocks: upperTicker,
-          publishedAt: { $gte: threeDaysAgo },
-        })
-          .sort({ publishedAt: -1 })
-          .limit(5);
+        // 1. Try Finnhub company news (best source — per-ticker)
+        let headlines = await fetchFinnhubNews(upperTicker);
 
-        // If no news, return neutral
-        if (news.length === 0) {
+        // 2. Fallback: scan DB news titles for ticker mentions
+        if (headlines.length === 0) {
+          headlines = await fetchDbNews(upperTicker);
+        }
+
+        // If still no news, ask Groq for a market-context assessment
+        if (headlines.length === 0) {
+          const sentimentData = await callGroqSentiment(upperTicker, [
+            `General market context for ${upperTicker} — no specific headlines found. Provide a brief neutral assessment.`
+          ]);
           return {
             ticker: upperTicker,
-            score: 0,
-            label: 'neutral',
-            confidence: 0,
-            drivers: [],
-            headline: 'No recent coverage',
+            ...sentimentData,
+            confidence: Math.max(0, sentimentData.confidence - 0.3), // lower confidence when no news
+            headline: 'No recent headlines — based on general context',
           };
         }
 
-        // Extract headlines
-        const headlines = news.map(n => n.title);
-        const mainHeadline = headlines[0];
-
-        // Call Groq to analyze sentiment
+        // Call Groq to analyze sentiment from headlines
         const sentimentData = await callGroqSentiment(upperTicker, headlines);
-
         return {
           ticker: upperTicker,
           ...sentimentData,
-          headline: mainHeadline,
+          headline: headlines[0],
         };
       })
     );
@@ -152,34 +178,13 @@ router.get('/latest', async (req, res) => {
     const results = await Promise.allSettled(
       tickerList.map(async (ticker) => {
         const upperTicker = ticker.toUpperCase();
-
-        const news = await News.find({
-          relatedStocks: upperTicker,
-          publishedAt: { $gte: threeDaysAgo },
-        })
-          .sort({ publishedAt: -1 })
-          .limit(5);
-
-        if (news.length === 0) {
-          return {
-            ticker: upperTicker,
-            score: 0,
-            label: 'neutral',
-            confidence: 0,
-            drivers: [],
-            headline: 'No recent coverage',
-          };
+        let headlines = await fetchFinnhubNews(upperTicker);
+        if (headlines.length === 0) headlines = await fetchDbNews(upperTicker);
+        if (headlines.length === 0) {
+          return { ticker: upperTicker, score: 0, label: 'neutral', confidence: 0, drivers: [], headline: 'No recent coverage' };
         }
-
-        const headlines = news.map(n => n.title);
-        const mainHeadline = headlines[0];
         const sentimentData = await callGroqSentiment(upperTicker, headlines);
-
-        return {
-          ticker: upperTicker,
-          ...sentimentData,
-          headline: mainHeadline,
-        };
+        return { ticker: upperTicker, ...sentimentData, headline: headlines[0] };
       })
     );
 

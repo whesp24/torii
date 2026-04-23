@@ -1,7 +1,43 @@
 import Stock from '../models/Stock.js';
 
-// ── Finnhub live quote (primary — no IP blocking like Yahoo Finance) ───────────
-// Requires FINNHUB_API_KEY env var (free at finnhub.io — 60 req/min)
+// ── Stooq quote (free, no API key, works from datacenter IPs) ─────────────────
+// Used as primary source for Japanese stocks (.T) and indices
+async function fetchStooqQuote(stooqSymbol) {
+  const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`;
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/csv,text/plain,*/*',
+      'Referer': 'https://stooq.com/',
+    }
+  });
+  if (!r.ok) throw new Error(`Stooq HTTP ${r.status}`);
+  const text = await r.text();
+  if (text.includes('No data') || text.trim() === '') throw new Error('Stooq: no data');
+
+  const lines = text.trim().split('\n').filter(l => l && !l.toLowerCase().startsWith('date'));
+  if (lines.length < 1) throw new Error('Stooq: empty response');
+
+  const parseRow = (line) => {
+    const p = line.split(',');
+    return { close: parseFloat(p[4]) || 0, vol: parseFloat(p[5]) || 0 };
+  };
+  const current = parseRow(lines[lines.length - 1]);
+  const prev    = lines.length >= 2 ? parseRow(lines[lines.length - 2]) : null;
+  if (!current.close || isNaN(current.close)) throw new Error('Stooq: bad close');
+  const prevClose = prev?.close || current.close;
+  const change = current.close - prevClose;
+  const changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0;
+  return { price: current.close, change, changePercent, volume: current.vol };
+}
+
+// Convert Yahoo .T symbol to Stooq .jp format (TSE stocks)
+function toStooqJapan(sym) {
+  // 7203.T → 7203.jp
+  return sym.replace(/\.T$/, '.jp');
+}
+
+// ── Finnhub live quote (primary for US equities) ───────────────────────────────
 export async function fetchLiveQuote(symbol) {
   const sym = symbol.toUpperCase();
   const KEY = process.env.FINNHUB_API_KEY;
@@ -28,10 +64,9 @@ export async function fetchLiveQuote(symbol) {
           name: p.name || sym,
           price, change, changePercent,
           volume: q.v || 0,
-          avgVolume: 0, // Finnhub free tier doesn't provide avg volume
+          avgVolume: 0,
           marketCap: p.marketCapitalization ? p.marketCapitalization * 1e6 : null,
-          high52Week: null,
-          low52Week: null,
+          high52Week: null, low52Week: null,
           lastUpdated: new Date()
         };
       }
@@ -40,23 +75,52 @@ export async function fetchLiveQuote(symbol) {
     }
   }
 
-  // DB cache check for .T stocks — served from cron-updated cache
+  // ── Japan .T stocks: use Stooq (reliable, no rate limits) ───────────────────
   if (sym.endsWith('.T')) {
+    const stooqSym = toStooqJapan(sym);
+    try {
+      const q = await fetchStooqQuote(stooqSym);
+      if (q.price > 0) {
+        // Cache result in DB for chart lookups
+        try {
+          await Stock.findOneAndUpdate(
+            { symbol: sym },
+            { symbol: sym, name: sym, price: q.price, change: q.change,
+              changePercent: q.changePercent, volume: q.volume || 0,
+              avgVolume: 0, lastUpdated: new Date() },
+            { upsert: true }
+          );
+        } catch (_) {}
+        return {
+          symbol: sym, name: sym,
+          price: q.price, change: q.change, changePercent: q.changePercent,
+          volume: q.volume || 0, lastUpdated: new Date()
+        };
+      }
+    } catch (err) {
+      console.warn(`Stooq failed for ${stooqSym}: ${err.message}`);
+    }
+
+    // Stooq failed — serve DB cache regardless of age (beats showing "—")
     try {
       const cached = await Stock.findOne({ symbol: sym });
-      const age = cached ? Date.now() - new Date(cached.lastUpdated).getTime() : Infinity;
-      if (cached && age < 20 * 60 * 1000) { // < 20 min old
-        console.log(`Serving ${sym} from DB cache (${Math.round(age/60000)}m old)`);
+      if (cached?.price > 0) {
+        console.log(`Serving ${sym} from DB cache (stale fallback)`);
         return {
-          symbol: sym, name: cached.name, price: cached.price,
+          symbol: sym, name: cached.name || sym, price: cached.price,
           change: cached.change, changePercent: cached.changePercent,
           volume: cached.volume, lastUpdated: cached.lastUpdated
         };
       }
     } catch (_) {}
+
+    // Last resort: Yahoo Finance
+    try { return await fetchYahooQuote(sym); } catch (e) {
+      throw new Error(`All sources failed for ${sym}: ${e.message}`);
+    }
   }
 
-  // Fallback: Yahoo Finance chart API with session cookie
+  // Fallback for other symbols: Yahoo Finance chart API with session cookie
   return fetchYahooQuote(sym);
 }
 
@@ -183,14 +247,14 @@ export async function fetchAndUpdateStocks({ force = false } = {}) {
   const symbols = [
     // US equities (Finnhub — no rate limit risk)
     'NFLX', 'MSFT', 'GOOGL', 'AAPL', 'NVDA', 'AMD', 'QQQ', 'SPY',
-    // Japan equities (Yahoo Finance — rate-limit sensitive)
+    // Japan equities — now uses Stooq (fast, no rate limits)
     '7203.T', '9984.T', '6758.T', '6861.T', '8306.T', '6501.T', '8035.T', '9432.T',
+    '6702.T', '7267.T', '6954.T', '4519.T', '9433.T', '8316.T',
   ];
 
   for (const symbol of symbols) {
     try {
-      // For .T stocks that depend on Yahoo, check cache first
-      if (!force && symbol.endsWith('.T')) {
+      if (!force) {
         const cached = await Stock.findOne({ symbol }).lean();
         if (cached?.lastUpdated) {
           const age = Date.now() - new Date(cached.lastUpdated).getTime();
@@ -204,15 +268,15 @@ export async function fetchAndUpdateStocks({ force = false } = {}) {
       if (data && data.price) {
         await Stock.findOneAndUpdate(
           { symbol },
-          { symbol, name: data.name, price: data.price, change: data.change,
-            changePercent: data.changePercent, volume: data.volume, avgVolume: data.avgVolume,
-            lastUpdated: new Date() },
+          { symbol, name: data.name || symbol, price: data.price, change: data.change,
+            changePercent: data.changePercent, volume: data.volume || 0,
+            avgVolume: data.avgVolume || 0, lastUpdated: new Date() },
           { upsert: true, new: true }
         );
         console.log(`✓ Updated ${symbol} @ ${data.price}`);
       }
-      // Longer delay for .T stocks to avoid Yahoo rate limits
-      const delay = symbol.endsWith('.T') ? 1500 : 400;
+      // Stooq requests are fast — short delay to be polite
+      const delay = symbol.endsWith('.T') ? 600 : 400;
       await new Promise(r => setTimeout(r, delay));
     } catch (err) {
       console.error(`Error fetching ${symbol}:`, err.message);

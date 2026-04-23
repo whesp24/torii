@@ -5,6 +5,7 @@ import News from '../models/News.js';
 import Deal from '../models/Deal.js';
 import Meeting from '../models/Meeting.js';
 import KPI from '../models/KPI.js';
+import { fetchLiveQuote } from './stockService.js';
 
 async function llmChat(prompt, maxTokens = 700) {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -37,34 +38,42 @@ export async function generateAndSaveBriefing({ force = false } = {}) {
       KPI.find().lean(),
     ]);
 
-    // Fetch stocks for all position tickers + top movers
-    const positionTickers = positions.map(p => p.ticker);
-    const [positionStocks, topStocks] = await Promise.all([
-      positionTickers.length > 0 ? Stock.find({ symbol: { $in: positionTickers } }).lean() : [],
-      Stock.find().sort({ changePercent: -1 }).limit(20).lean(),
-    ]);
-    // Merge: position stocks take priority, then top movers for display
-    const stockMap = {};
-    for (const s of topStocks) stockMap[s.symbol] = s;
-    for (const s of positionStocks) stockMap[s.symbol] = s; // override with position-specific data
-    const stocks = Object.values(stockMap);
-
-    // Portfolio summary
+    // Fetch live prices for each position directly (bypasses stale DB cache)
+    const stocks = []; // still used for topMovers section
     let portfolioLines = [];
     let totalValue = 0, totalDayPnl = 0;
     if (positions.length > 0) {
-      for (const p of positions) {
-        const stock = stockMap[p.ticker];
-        // Use live price if available, else fall back to costBasis
-        const price = stock?.price ?? p.costBasis;
+      const liveQuotes = await Promise.allSettled(
+        positions.map(p =>
+          fetchLiveQuote(p.ticker).then(q => ({ ticker: p.ticker, ...q }))
+        )
+      );
+
+      for (let i = 0; i < positions.length; i++) {
+        const p = positions[i];
+        const result = liveQuotes[i];
+        let price = p.costBasis; // fallback
+        let change = 0, changePercent = 0;
+
+        if (result.status === 'fulfilled' && result.value?.price > 0) {
+          price = result.value.price;
+          change = result.value.change || 0;
+          changePercent = result.value.changePercent || 0;
+        } else {
+          console.warn(`Briefing: could not get live price for ${p.ticker}, using costBasis`);
+        }
+
         const value = p.shares * price;
-        const dayPnl = stock ? (stock.change || 0) * p.shares : 0;
+        const dayPnl = change * p.shares;
         totalValue += value;
         totalDayPnl += dayPnl;
-        const pctStr = stock ? `${stock.changePercent >= 0 ? '+' : ''}${(stock.changePercent || 0).toFixed(2)}%` : 'N/A';
+        const pctStr = `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`;
         portfolioLines.push(`  ${p.ticker}: $${value.toFixed(0)} | ${pctStr} today (${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(0)})`);
       }
     }
+
+    // Top movers from DB for the topMovers summary field
+    const topStocks = await Stock.find().sort({ changePercent: -1 }).limit(20).lean();
 
     const get = (sym) => kpis.find(k => k.symbol === sym);
     const fmt = (k, dec = 2) => k ? `${k.price.toFixed(dec)} (${k.changePercent >= 0 ? '+' : ''}${k.changePercent.toFixed(2)}%)` : 'N/A';
@@ -123,7 +132,7 @@ Be direct. Reference actual numbers and names from the data above. No filler.`;
         date: today,
         marketSentiment,
         summary,
-        topMovers: stocks.filter(s => Math.abs(s.changePercent || 0) > 1).slice(0, 5).map(s => ({
+        topMovers: topStocks.filter(s => Math.abs(s.changePercent || 0) > 1).slice(0, 5).map(s => ({
           symbol: s.symbol || s.ticker, change: s.changePercent, reason: `$${s.price?.toFixed(2)}`
         })),
         keyNews: news.slice(0, 3).map(n => ({ title: n.title, summary: n.description || '', impact: 'neutral' })),
