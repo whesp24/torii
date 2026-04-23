@@ -6,36 +6,25 @@ import Contact from '../models/Contact.js';
 import News from '../models/News.js';
 
 const router = express.Router();
-const GEMINI_MODEL = 'gemini-2.0-flash';
-
-async function geminiChat(systemPrompt, messages, maxTokens = 1024) {
-  const key = process.env.GEMINI_API_KEY;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
-
-  // Convert OpenAI-style messages to Gemini format
-  const contents = messages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
-
-  const body = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents,
-    generationConfig: { maxOutputTokens: maxTokens },
-  };
-
-  const res = await fetch(url, {
+async function llmChat(systemPrompt, messages, maxTokens = 1024) {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: {
+      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: maxTokens,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    }),
   });
-
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Gemini error ${res.status}: ${err}`);
+    throw new Error(`LLM error ${res.status}: ${err}`);
   }
   const data = await res.json();
-  return data.candidates[0].content.parts[0].text;
+  return data.choices[0].message.content;
 }
 
 // Build system prompt injected with live user data
@@ -162,7 +151,7 @@ router.post('/chat', async (req, res) => {
       content: m.content,
     }));
 
-    const assistantText = await geminiChat(systemPrompt, apiMessages, 1024);
+    const assistantText = await llmChat(systemPrompt, apiMessages, 1024);
     convo.messages.push({ role: 'assistant', content: assistantText });
 
     await convo.save();

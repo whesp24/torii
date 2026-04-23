@@ -4,22 +4,22 @@ import Contact from '../models/Contact.js';
 import Stock from '../models/Stock.js';
 
 const router = express.Router();
-const GEMINI_MODEL = 'gemini-2.0-flash';
-
-async function geminiChat(prompt, maxTokens = 700) {
-  const key = process.env.GEMINI_API_KEY;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
-  const res = await fetch(url, {
+async function llmChat(prompt, maxTokens = 700) {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: maxTokens },
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content: prompt }],
     }),
   });
-  if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+  if (!res.ok) throw new Error(`LLM error ${res.status}`);
   const data = await res.json();
-  return data.candidates[0].content.parts[0].text;
+  return data.choices[0].message.content;
 }
 
 // GET all meetings
@@ -112,7 +112,7 @@ Structure your response with these sections:
 
 Be punchy. No fluff. This should take 60 seconds to read.`;
 
-    const brief = await geminiChat(prompt, 700);
+    const brief = await llmChat(prompt, 700);
     await Meeting.findByIdAndUpdate(meeting._id, { brief });
 
     res.json({ brief });

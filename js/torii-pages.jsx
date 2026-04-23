@@ -2787,7 +2787,7 @@ function AssistantPage() {
       if (!res.ok) {
         const errMsg = data.error || 'Something went wrong.';
         const hint = res.status === 500 || res.status === 401 || res.status === 403
-          ? `${errMsg}\n\nMake sure GEMINI_API_KEY is set in your Render environment variables.`
+          ? `${errMsg}\n\nMake sure GROQ_API_KEY is set in your Render environment variables.`
           : errMsg;
         setMessages(p => [...p, { role: 'assistant', content: hint, timestamp: new Date() }]);
       } else if (data.conversationId) {
@@ -2967,7 +2967,7 @@ function AssistantPage() {
             </button>
           </div>
           <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 5, textAlign: 'center' }}>
-            Powered by Claude · Live data injected from your dashboard
+            Powered by Llama 3.3 (Groq) · Live data injected from your dashboard
           </div>
         </div>
       </div>
