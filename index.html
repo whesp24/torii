@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <title>Torii — Japan Market Hub</title>
+<!-- PWA / iOS Web App -->
+<link rel="manifest" href="/manifest.json"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Torii"/>
+<meta name="theme-color" content="#07070D"/>
+<meta name="mobile-web-app-capable" content="yes"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
@@ -655,22 +662,116 @@ input,textarea{font-family:inherit;}
   flex-shrink: 0;
 }
 
-/* ── MOBILE ──────────────────────────────────────────── */
-@media(max-width:900px){
-  .app-shell{grid-template-columns:1fr;grid-template-rows:auto 1fr;grid-template-areas:"topbar" "main";}
+/* ── MOBILE BOTTOM NAV ───────────────────────────────── */
+.mobile-nav{
+  display:none;
+  position:fixed;bottom:0;left:0;right:0;
+  height:60px;background:var(--bg1);
+  border-top:1px solid var(--bdr);
+  z-index:200;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.mobile-nav-inner{
+  display:flex;align-items:stretch;height:60px;
+}
+.mobile-nav-btn{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;background:none;border:none;cursor:pointer;
+  color:var(--fg3);transition:color 0.15s;padding:0;
+  -webkit-tap-highlight-color:transparent;
+}
+.mobile-nav-btn.active{color:var(--red);}
+.mobile-nav-btn svg{flex-shrink:0;}
+.mobile-nav-label{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;}
+
+/* ── MORE SHEET ──────────────────────────────────────── */
+.more-sheet-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:300;
+  animation:fadeIn 0.15s ease;
+}
+.more-sheet{
+  position:fixed;bottom:0;left:0;right:0;
+  background:var(--bg1);border-radius:20px 20px 0 0;
+  border-top:1px solid var(--bdr);padding:12px 0;
+  z-index:301;
+  padding-bottom:calc(16px + env(safe-area-inset-bottom));
+  animation:slideUp 0.2s ease;
+}
+@keyframes slideUp{from{transform:translateY(100%);}to{transform:translateY(0);}}
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+.more-sheet-handle{width:36px;height:4px;background:var(--bdr2);border-radius:2px;margin:0 auto 16px;}
+.more-sheet-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:0 12px;}
+.more-sheet-item{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;padding:14px 8px;border-radius:12px;background:var(--surf);
+  border:none;cursor:pointer;color:var(--fg3);
+  -webkit-tap-highlight-color:transparent;
+  transition:background 0.15s;
+}
+.more-sheet-item.active{color:var(--red);background:var(--red-dim);}
+.more-sheet-item:active{background:var(--surf2);}
+.more-sheet-item-label{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;}
+
+/* ── MOBILE LAYOUT ───────────────────────────────────── */
+@media(max-width:768px){
+  .mobile-nav{display:block;}
+  .app-shell{
+    grid-template-columns:1fr;
+    grid-template-rows:auto 1fr;
+    grid-template-areas:"topbar" "main";
+  }
   .sidebar{display:none;}
-  .main-scroll{padding:16px;padding-bottom:80px;}
-  .kpi-grid{grid-template-columns:repeat(2,1fr);}
+  .main-scroll{
+    padding:12px 14px;
+    padding-bottom:calc(72px + env(safe-area-inset-bottom));
+  }
+  .kpi-grid{grid-template-columns:repeat(2,1fr);gap:8px;}
   .overview-grid{grid-template-columns:1fr;}
   .overview-right{display:none;}
-  .topbar{padding:8px 12px;height:auto;flex-wrap:wrap;gap:6px;}
-  .ticker-track{order:3;flex:0 0 100%;height:36px;}
+  .topbar{
+    padding:10px 14px;height:auto;
+    flex-wrap:nowrap;gap:8px;
+    padding-top:calc(10px + env(safe-area-inset-top));
+  }
+  .ticker-track{display:none;}
+  .topbar-right{gap:8px;}
   .topbar-logo{border-right:none;padding:0;}
   .cmd-hint{display:none;}
   .theme-label{display:none;}
   .sessions{display:none;}
+  .clock{display:none;}
+  .page-root{padding:0;}
+  .page-header{padding:0 0 16px;}
+  .card{border-radius:12px;}
+  /* Mobile hero card */
+  .mobile-hero{
+    background:var(--surf);border-radius:16px;
+    padding:18px 18px 14px;margin-bottom:12px;
+    border:1px solid var(--bdr);
+  }
+  /* Mobile 2×2 grid */
+  .mobile-market-grid{
+    display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;
+  }
+  .mobile-market-card{
+    background:var(--surf);border-radius:12px;
+    padding:14px;border:1px solid var(--bdr);
+    overflow:hidden;
+  }
+  /* Mobile topbar ticker */
+  .mobile-ticker{
+    display:flex;gap:10px;overflow-x:auto;
+    padding:8px 14px 0;margin-top:-2px;
+    scrollbar-width:none;
+  }
+  .mobile-ticker::-webkit-scrollbar{display:none;}
+  .mobile-ticker-chip{
+    display:flex;flex-direction:column;align-items:flex-start;
+    background:var(--surf);border:1px solid var(--bdr);border-radius:8px;
+    padding:6px 10px;flex-shrink:0;min-width:72px;
+  }
 }
-@media(min-width:901px) and (max-width:1200px){
+@media(min-width:769px) and (max-width:1200px){
   .kpi-grid{grid-template-columns:repeat(3,1fr);}
   .overview-grid{grid-template-columns:1fr 300px;}
 }

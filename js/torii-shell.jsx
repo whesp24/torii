@@ -8,6 +8,7 @@ const NAV = [
   { id:'japan',      label:'Japan',     icon:'japan'     },
   { id:'news',       label:'News',      icon:'news'      },
   { id:'voices',     label:'Voices',    icon:'voices'    },
+  { id:'network',    label:'Network',   icon:'network'   },
   { id:'watchlist',  label:'Watchlist', icon:'watchlist' },
   { id:'alerts',     label:'Alerts',    icon:'alerts'    },
   { id:'earnings',   label:'Earnings',  icon:'earnings'  },
@@ -16,6 +17,10 @@ const NAV = [
   { id:'analytics',  label:'Analytics', icon:'analytics' },
   { id:'push',       label:'Notify',    icon:'push'      },
 ];
+
+// Bottom nav items (mobile — first 4 + More)
+const MOBILE_NAV = ['overview','portfolio','japan','news'];
+const MORE_NAV   = ['voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +32,7 @@ function NavIcon({ id, active }) {
   if (id==='japan')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M5 6V4h14v2"/><path d="M8 6v12"/><path d="M16 6v12"/><path d="M3 18h18"/></svg>;
   if (id==='news')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg>;
   if (id==='voices')    return <svg {...s} viewBox="0 0 24 24" fill={active?'var(--red)':'var(--fg3)'} stroke="none"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>;
+  if (id==='network')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="2.5"/><circle cx="4.5" cy="19" r="2"/><circle cx="19.5" cy="19" r="2"/><path d="M12 7.5v4l-5.5 5M12 11.5l5.5 5"/></svg>;
   if (id==='watchlist') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>;
   if (id==='alerts')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="12" y1="2" x2="12" y2="4"/></svg>;
   if (id==='earnings')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="5"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="10" x2="22" y2="10"/><polyline points="8 14 10 16 16 12"/></svg>;
@@ -393,6 +399,96 @@ function CmdPalette({ onNav, onClose, onAction }) {
   );
 }
 
+// ─── Mobile Ticker Strip ─────────────────────────────────────────────────────
+
+function MobileTicker() {
+  const [chips, setChips] = React.useState([]);
+  React.useEffect(() => {
+    fetch(`${SHELL_API}/kpis`).then(r => r.ok ? r.json() : []).then(kpis => {
+      if (kpis?.length) setChips(kpis.map(k => ({
+        label: k.label || k.symbol,
+        price: fmtPrice(k.price, k.price > 100 ? 0 : 2),
+        pct: `${(k.changePercent||0) >= 0 ? '+' : ''}${(k.changePercent||0).toFixed(2)}%`,
+        up: (k.changePercent||0) >= 0,
+      })));
+    }).catch(() => {});
+  }, []);
+  if (chips.length === 0) return null;
+  return (
+    <div className="mobile-ticker">
+      {chips.map((c, i) => (
+        <div key={i} className="mobile-ticker-chip">
+          <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--fg3)', fontWeight: 700, letterSpacing: '0.06em' }}>{c.label}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--fg)', fontFamily: 'var(--font-mono)' }}>{c.price}</span>
+          <span style={{ fontSize: 10, fontWeight: 600, color: c.up ? 'var(--green)' : 'var(--red-loss)' }}>{c.pct}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Mobile Nav + More Sheet ──────────────────────────────────────────────────
+
+function MobileNavIcon({ id, active }) {
+  const c = active ? 'var(--red)' : 'var(--fg3)';
+  const s = { width: 22, height: 22 };
+  if (id==='overview')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>;
+  if (id==='portfolio') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>;
+  if (id==='japan')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M5 6V4h14v2"/><path d="M8 6v12"/><path d="M16 6v12"/><path d="M3 18h18"/></svg>;
+  if (id==='news')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg>;
+  if (id==='more')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>;
+  return <NavIcon id={id} active={active} />;
+}
+
+function MoreSheet({ page, onNav, onClose }) {
+  const items = MORE_NAV.map(id => NAV.find(n => n.id === id)).filter(Boolean);
+  return (
+    <>
+      <div className="more-sheet-overlay" onClick={onClose} />
+      <div className="more-sheet">
+        <div className="more-sheet-handle" />
+        <div className="more-sheet-grid">
+          {items.map(({ id, label, icon }) => (
+            <button key={id} className={`more-sheet-item${page===id?' active':''}`}
+              onClick={() => { onNav(id); onClose(); }}>
+              <NavIcon id={icon} active={page===id} />
+              <span className="more-sheet-item-label">{label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function MobileNav({ page, onNav }) {
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  const moreActive = MORE_NAV.includes(page);
+
+  return (
+    <nav className="mobile-nav">
+      <div className="mobile-nav-inner">
+        {MOBILE_NAV.map(id => {
+          const item = NAV.find(n => n.id === id);
+          return (
+            <button key={id} className={`mobile-nav-btn${page===id?' active':''}`}
+              onClick={() => onNav(id)}>
+              <MobileNavIcon id={id} active={page===id} />
+              <span className="mobile-nav-label">{item?.label}</span>
+            </button>
+          );
+        })}
+        <button className={`mobile-nav-btn${moreActive?' active':''}`}
+          onClick={() => setMoreOpen(o => !o)}>
+          <MobileNavIcon id="more" active={moreActive} />
+          <span className="mobile-nav-label">More</span>
+        </button>
+      </div>
+      {moreOpen && <MoreSheet page={page} onNav={onNav} onClose={() => setMoreOpen(false)} />}
+    </nav>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 function loadPortfolio() {
@@ -549,12 +645,16 @@ function App() {
         collapsed={collapsed} onCollapse={() => setCollapse(o => !o)}
       />
 
+      {/* Mobile ticker strip — shown below topbar on phones */}
+      <MobileTicker />
+
       <main className="main-scroll">
         {page==='overview'   && <OverviewPage  onNav={setPage} />}
         {page==='portfolio'  && <PortfolioPage onNav={setPage} />}
         {page==='japan'      && <JapanPage />}
         {page==='news'       && <NewsPage />}
         {page==='voices'     && <VoicesPage />}
+        {page==='network'    && <NetworkingPage />}
         {page==='watchlist'  && <WatchlistPage />}
         {page==='alerts'     && <AlertsPanel />}
         {page==='earnings'   && <EarningsPage defaultTab="earnings" />}
@@ -564,6 +664,8 @@ function App() {
         {page==='push'       && <PushSettingsPage />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
+
+      <MobileNav page={page} onNav={setPage} />
 
       {/* ⌘K hint */}
       <button className="cmd-hint" onClick={() => setCmdOpen(true)} title="Command palette (⌘K)">

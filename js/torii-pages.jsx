@@ -2010,7 +2010,432 @@ function PushSettingsPage() {
   );
 }
 
+// ─── NETWORKING PAGE (Spider Web Graph + List View) ──────────────────────────
+
+const NET_KEY = 'torii_contacts';
+
+function loadContacts() {
+  try { return JSON.parse(localStorage.getItem(NET_KEY) || '[]'); } catch { return []; }
+}
+
+function uid() { return Math.random().toString(36).slice(2, 10); }
+
+function initials(name) {
+  if (!name) return '?';
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+}
+
+// Build edges between contacts that share company / school / location
+function buildEdges(contacts) {
+  const edges = [];
+  for (let i = 0; i < contacts.length; i++) {
+    for (let j = i + 1; j < contacts.length; j++) {
+      const a = contacts[i], b = contacts[j];
+      if (a.company && b.company && a.company.trim().toLowerCase() === b.company.trim().toLowerCase())
+        edges.push({ source: a.id, target: b.id, type: 'company', color: '#3B82F6' });
+      if (a.school && b.school && a.school.trim().toLowerCase() === b.school.trim().toLowerCase())
+        edges.push({ source: a.id, target: b.id, type: 'school', color: '#22c55e' });
+      if (a.location && b.location && a.location.trim().toLowerCase() === b.location.trim().toLowerCase())
+        edges.push({ source: a.id, target: b.id, type: 'location', color: '#F59E0B' });
+    }
+  }
+  return edges;
+}
+
+function NetworkGraph({ contacts, onSelectNode, selectedId }) {
+  const W = 680, H = 460;
+  const svgRef = React.useRef(null);
+  const [nodes, setNodes] = React.useState([]);
+  const [edges, setEdges] = React.useState([]);
+  const animRef = React.useRef(null);
+  const dragRef = React.useRef(null);
+
+  // Init nodes with random positions
+  React.useEffect(() => {
+    const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.3;
+    const n = contacts.map((c, i) => {
+      const angle = (i / contacts.length) * 2 * Math.PI;
+      return {
+        id: c.id, label: c.name, company: c.company, school: c.school, location: c.location,
+        x: cx + r * Math.cos(angle) + (Math.random() - 0.5) * 40,
+        y: cy + r * Math.sin(angle) + (Math.random() - 0.5) * 40,
+        vx: 0, vy: 0,
+      };
+    });
+    setNodes(n);
+    setEdges(buildEdges(contacts));
+  }, [contacts.length]);
+
+  // Force-directed simulation
+  React.useEffect(() => {
+    if (nodes.length === 0) return;
+    let running = true;
+    let frame = 0;
+    let simNodes = nodes.map(n => ({ ...n }));
+    const simEdges = buildEdges(contacts);
+
+    function tick() {
+      if (!running || frame > 300) return;
+      frame++;
+      const repulsion = 2800, springLen = 120, springK = 0.04, damping = 0.82, gravity = 0.025;
+      const cx = W / 2, cy = H / 2;
+
+      for (let i = 0; i < simNodes.length; i++) {
+        // Skip dragged node
+        if (dragRef.current?.id === simNodes[i].id) continue;
+        let fx = 0, fy = 0;
+        const ni = simNodes[i];
+
+        // Repulsion from all other nodes
+        for (let j = 0; j < simNodes.length; j++) {
+          if (i === j) continue;
+          const nj = simNodes[j];
+          const dx = ni.x - nj.x || 0.01, dy = ni.y - nj.y || 0.01;
+          const d2 = dx * dx + dy * dy;
+          const d = Math.sqrt(d2) || 1;
+          const f = repulsion / d2;
+          fx += (dx / d) * f;
+          fy += (dy / d) * f;
+        }
+
+        // Spring attraction along edges
+        for (const e of simEdges) {
+          if (e.source !== ni.id && e.target !== ni.id) continue;
+          const otherId = e.source === ni.id ? e.target : e.source;
+          const nj = simNodes.find(n => n.id === otherId);
+          if (!nj) continue;
+          const dx = nj.x - ni.x, dy = nj.y - ni.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const stretch = (d - springLen) * springK;
+          fx += (dx / d) * stretch;
+          fy += (dy / d) * stretch;
+        }
+
+        // Gravity toward center
+        fx += (cx - ni.x) * gravity;
+        fy += (cy - ni.y) * gravity;
+
+        ni.vx = (ni.vx + fx) * damping;
+        ni.vy = (ni.vy + fy) * damping;
+        ni.x = Math.max(28, Math.min(W - 28, ni.x + ni.vx));
+        ni.y = Math.max(28, Math.min(H - 28, ni.y + ni.vy));
+      }
+
+      setNodes([...simNodes]);
+      animRef.current = requestAnimationFrame(tick);
+    }
+
+    animRef.current = requestAnimationFrame(tick);
+    return () => { running = false; if (animRef.current) cancelAnimationFrame(animRef.current); };
+  }, [contacts.length]);
+
+  // Drag handlers
+  function handleMouseDown(e, nodeId) {
+    e.preventDefault();
+    const svg = svgRef.current;
+    const pt = svg.createSVGPoint();
+    dragRef.current = { id: nodeId };
+
+    function onMove(ev) {
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      pt.x = clientX; pt.y = clientY;
+      const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+      setNodes(prev => prev.map(n => n.id === nodeId
+        ? { ...n, x: Math.max(28, Math.min(W - 28, svgP.x)), y: Math.max(28, Math.min(H - 28, svgP.y)), vx: 0, vy: 0 }
+        : n
+      ));
+    }
+    function onUp() {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }
+
+  if (contacts.length === 0) return null;
+
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  return (
+    <div style={{ position: 'relative', width: '100%', overflow: 'hidden', borderRadius: 12, background: 'var(--surf)', border: '1px solid var(--bdr)' }}>
+      {/* Legend */}
+      <div style={{ position: 'absolute', top: 10, left: 12, display: 'flex', gap: 10, zIndex: 10 }}>
+        {[['#3B82F6', 'Company'], ['#22c55e', 'School'], ['#F59E0B', 'Location']].map(([color, label]) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--fg3)', fontFamily: 'var(--font-mono)' }}>
+            <div style={{ width: 16, height: 2, background: color, borderRadius: 1 }} />
+            {label}
+          </div>
+        ))}
+      </div>
+
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', cursor: 'grab', touchAction: 'none' }}>
+        {/* Edges */}
+        {edges.map((e, i) => {
+          const s = nodeMap[e.source], t = nodeMap[e.target];
+          if (!s || !t) return null;
+          const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2 - 20;
+          return (
+            <path key={i}
+              d={`M${s.x},${s.y} Q${mx},${my} ${t.x},${t.y}`}
+              fill="none" stroke={e.color} strokeWidth="1.5" strokeOpacity="0.5"
+            />
+          );
+        })}
+
+        {/* Nodes */}
+        {nodes.map(n => {
+          const isSelected = n.id === selectedId;
+          const nodeEdges = edges.filter(e => e.source === n.id || e.target === n.id);
+          const connColors = [...new Set(nodeEdges.map(e => e.color))];
+          return (
+            <g key={n.id} transform={`translate(${n.x},${n.y})`}
+              onMouseDown={ev => handleMouseDown(ev, n.id)}
+              onTouchStart={ev => handleMouseDown(ev, n.id)}
+              onClick={() => onSelectNode(n.id === selectedId ? null : n.id)}
+              style={{ cursor: 'pointer' }}>
+              {/* Glow ring for selected */}
+              {isSelected && (
+                <circle r="20" fill="var(--red)" fillOpacity="0.15" stroke="var(--red)" strokeWidth="1.5" />
+              )}
+              {/* Connection type ring */}
+              {connColors.length > 0 && !isSelected && (
+                <circle r="18" fill="none" stroke={connColors[0]} strokeWidth="1.5" strokeOpacity="0.4" />
+              )}
+              {/* Avatar circle */}
+              <circle r="14" fill="var(--surf2)" stroke={isSelected ? 'var(--red)' : 'var(--bdr2)'} strokeWidth={isSelected ? 2 : 1} />
+              <text textAnchor="middle" dominantBaseline="central" fontSize="9" fontWeight="700"
+                fontFamily="var(--font-mono)" fill={isSelected ? 'var(--red)' : 'var(--fg)'}>
+                {initials(n.label)}
+              </text>
+              {/* Name label */}
+              <text y="22" textAnchor="middle" fontSize="8.5" fontWeight="600"
+                fontFamily="var(--font-ui)" fill="var(--fg2)">
+                {n.label?.split(' ')[0]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function NetworkingPage() {
+  const [contacts, setContacts]   = React.useState(loadContacts);
+  const [view, setView]           = React.useState('graph');
+  const [showAdd, setShowAdd]     = React.useState(false);
+  const [selectedId, setSelectedId] = React.useState(null);
+  const [form, setForm]           = React.useState({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
+
+  React.useEffect(() => {
+    localStorage.setItem(NET_KEY, JSON.stringify(contacts));
+  }, [contacts]);
+
+  function addContact(e) {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    setContacts(p => [...p, { ...form, id: uid(), addedAt: new Date().toISOString() }]);
+    setForm({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
+    setShowAdd(false);
+  }
+
+  function removeContact(id) {
+    setContacts(p => p.filter(c => c.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  }
+
+  const selected = contacts.find(c => c.id === selectedId);
+  const edges     = buildEdges(contacts);
+
+  // Group contacts by company / school / location
+  function groupBy(field) {
+    const groups = {};
+    for (const c of contacts) {
+      const key = c[field]?.trim() || 'Unknown';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(c);
+    }
+    return Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+  }
+
+  const fieldInput = (label, field, placeholder) => (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+      <input value={form[field]} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))} placeholder={placeholder}
+        style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
+    </div>
+  );
+
+  return (
+    <div className="page-root">
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <h1 className="page-title">Network</h1>
+          <p className="page-sub">{contacts.length} contacts · {edges.length} connections</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {/* View toggle */}
+          <div style={{ display: 'flex', background: 'var(--surf)', borderRadius: 8, padding: 3, border: '1px solid var(--bdr)' }}>
+            {[['graph', '⬡'], ['list', '≡']].map(([v, icon]) => (
+              <button key={v} onClick={() => setView(v)}
+                style={{ padding: '5px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 14,
+                  background: view === v ? 'var(--surf2)' : 'transparent', color: view === v ? 'var(--fg)' : 'var(--fg3)' }}>
+                {icon}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setShowAdd(o => !o)}
+            style={{ padding: '7px 14px', background: showAdd ? 'var(--surf2)' : 'var(--red)', color: showAdd ? 'var(--fg)' : 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            {showAdd ? '✕' : '+ Add'}
+          </button>
+        </div>
+      </div>
+
+      {/* Add Contact Form */}
+      {showAdd && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--fg)' }}>New Contact</div>
+          <form onSubmit={addContact} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {fieldInput('Name *', 'name', 'Full name')}
+              {fieldInput('Role', 'role', 'e.g. Partner at a16z')}
+              {fieldInput('Company', 'company', 'Current employer')}
+              {fieldInput('School', 'school', 'e.g. Wharton')}
+              {fieldInput('Location', 'location', 'e.g. San Francisco')}
+              {fieldInput('LinkedIn', 'linkedIn', 'URL or username')}
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes</div>
+              <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} placeholder="How you met, context, follow-ups…" rows={2}
+                style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', resize: 'vertical', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="submit" style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                Add to Network
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {contacts.length === 0 && (
+        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🕸</div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>Build your network graph</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, maxWidth: 320, margin: '0 auto' }}>
+            Add contacts and the graph will automatically connect people who share companies, schools, or locations.
+          </div>
+        </div>
+      )}
+
+      {contacts.length > 0 && view === 'graph' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <NetworkGraph contacts={contacts} onSelectNode={setSelectedId} selectedId={selectedId} />
+
+          {/* Selected contact detail card */}
+          {selected && (
+            <div className="card" style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--red-dim)', color: 'var(--red)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>
+                {initials(selected.name)}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{selected.name}</div>
+                {selected.role && <div style={{ fontSize: 12, color: 'var(--fg3)', marginBottom: 6 }}>{selected.role}</div>}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {selected.company && <span style={{ fontSize: 11, padding: '2px 8px', background: '#3B82F622', color: '#3B82F6', border: '1px solid #3B82F644', borderRadius: 4 }}>🏢 {selected.company}</span>}
+                  {selected.school  && <span style={{ fontSize: 11, padding: '2px 8px', background: '#22c55e22', color: '#22c55e', border: '1px solid #22c55e44', borderRadius: 4 }}>🎓 {selected.school}</span>}
+                  {selected.location && <span style={{ fontSize: 11, padding: '2px 8px', background: '#F59E0B22', color: '#F59E0B', border: '1px solid #F59E0B44', borderRadius: 4 }}>📍 {selected.location}</span>}
+                </div>
+                {selected.notes && <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 8, fontStyle: 'italic' }}>{selected.notes}</div>}
+                {/* Mutual connections */}
+                {(() => {
+                  const mutuals = edges.filter(e => e.source === selectedId || e.target === selectedId);
+                  if (mutuals.length === 0) return null;
+                  return (
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--fg3)' }}>
+                      {mutuals.length} connection{mutuals.length !== 1 ? 's' : ''} —
+                      {[...new Set(mutuals.map(e => e.type))].join(', ')}
+                    </div>
+                  );
+                })()}
+              </div>
+              <button onClick={() => removeContact(selected.id)}
+                style={{ padding: '4px 8px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>
+                Remove
+              </button>
+            </div>
+          )}
+
+          {/* Cluster summary */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+            {[['Company', 'company', '#3B82F6'], ['School', 'school', '#22c55e'], ['Location', 'location', '#F59E0B']].map(([label, field, color]) => {
+              const groups = groupBy(field).filter(([k]) => k !== 'Unknown');
+              if (groups.length === 0) return null;
+              const top = groups[0];
+              return (
+                <div key={field} className="card" style={{ padding: '12px 14px', borderTop: `2px solid ${color}` }}>
+                  <div style={{ fontSize: 10, color: 'var(--fg3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{label}</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--fg)', marginBottom: 2 }}>{top[0]}</div>
+                  <div style={{ fontSize: 11, color }}>
+                    {top[1].length} contact{top[1].length !== 1 ? 's' : ''}
+                    {groups.length > 1 ? ` · ${groups.length} ${label.toLowerCase()}s` : ''}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {contacts.length > 0 && view === 'list' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {/* Group by company */}
+          {groupBy('company').map(([company, members]) => (
+            <div key={company}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#3B82F6', letterSpacing: '0.1em', textTransform: 'uppercase', padding: '4px 0 6px', fontFamily: 'var(--font-mono)' }}>
+                🏢 {company} · {members.length}
+              </div>
+              {members.map(c => (
+                <div key={c.id} className="card" style={{ padding: '12px 16px', marginBottom: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--red-dim)', color: 'var(--red)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: 11, flexShrink: 0 }}>
+                    {initials(c.name)}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{c.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 1 }}>
+                      {[c.role, c.school, c.location].filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {c.linkedIn && (
+                      <a href={c.linkedIn.startsWith('http') ? c.linkedIn : `https://linkedin.com/in/${c.linkedIn}`} target="_blank" rel="noreferrer"
+                        style={{ padding: '4px 8px', fontSize: 11, background: '#0A66C222', color: '#0A66C2', border: '1px solid #0A66C244', borderRadius: 5, textDecoration: 'none' }}>
+                        in
+                      </a>
+                    )}
+                    <button onClick={() => removeContact(c.id)}
+                      style={{ padding: '4px 8px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer' }}>
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
-  EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage,
+  EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
 });

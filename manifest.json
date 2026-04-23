@@ -1,0 +1,22 @@
+{
+  "name": "Torii Market Hub",
+  "short_name": "Torii",
+  "description": "Japan & US markets, portfolio tracking, and financial intelligence",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07070D",
+  "theme_color": "#E0001E",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' fill='%2307070D'/%3E%3Crect x='20' y='50' width='152' height='17' rx='8' fill='%23E0001E'/%3E%3Crect x='34' y='67' width='124' height='10' rx='5' fill='%23E0001E' opacity='0.5'/%3E%3Crect x='52' y='77' width='14' height='88' rx='7' fill='%23E0001E'/%3E%3Crect x='126' y='77' width='14' height='88' rx='7' fill='%23E0001E'/%3E%3Crect x='52' y='15' width='14' height='47' rx='7' fill='%23E0001E'/%3E%3Crect x='126' y='15' width='14' height='47' rx='7' fill='%23E0001E'/%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%2307070D'/%3E%3Crect x='54' y='133' width='404' height='46' rx='22' fill='%23E0001E'/%3E%3Crect x='90' y='179' width='332' height='27' rx='13' fill='%23E0001E' opacity='0.5'/%3E%3Crect x='138' y='206' width='37' height='234' rx='18' fill='%23E0001E'/%3E%3Crect x='337' y='206' width='37' height='234' rx='18' fill='%23E0001E'/%3E%3Crect x='138' y='40' width='37' height='125' rx='18' fill='%23E0001E'/%3E%3Crect x='337' y='40' width='37' height='125' rx='18' fill='%23E0001E'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
