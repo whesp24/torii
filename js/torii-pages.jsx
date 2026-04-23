@@ -4575,7 +4575,7 @@ function MacroPage() {
       .catch(() => {});
   }
 
-  const yieldSeries = ['DGS2','DGS5','DGS10','DGS30'];
+  const yieldSeries = ['DGS2','DGS5','DGS10'];
   const yieldData   = indicators.filter(i => yieldSeries.includes(i.id));
   const otherData   = indicators.filter(i => !yieldSeries.includes(i.id));
 
@@ -4660,7 +4660,7 @@ function MacroPage() {
                   </div>
                 </>
               ) : (
-                <div style={{ fontSize:13, color:'var(--fg3)' }}>No FRED key</div>
+                <div style={{ fontSize:12, color:'var(--fg3)', lineHeight:1.4 }}>{s.error || 'No data'}</div>
               )}
             </div>
           );
