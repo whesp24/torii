@@ -16,11 +16,15 @@ const NAV = [
   { id:'tools',      label:'Tools',     icon:'tools'     },
   { id:'analytics',  label:'Analytics', icon:'analytics' },
   { id:'push',       label:'Notify',    icon:'push'      },
+  { id:'assistant',  label:'AI',        icon:'assistant' },
+  { id:'notes',      label:'Notes',     icon:'notes'     },
+  { id:'deals',      label:'Deals',     icon:'deals'     },
+  { id:'meetings',   label:'Meetings',  icon:'meetings'  },
 ];
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push'];
+const MORE_NAV   = ['voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push','assistant','notes','deals','meetings'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +44,10 @@ function NavIcon({ id, active }) {
   if (id==='tools')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>;
   if (id==='analytics') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="18" y="3" width="4" height="18" rx="1"/><rect x="10" y="8" width="4" height="13" rx="1"/><rect x="2" y="13" width="4" height="8" rx="1"/></svg>;
   if (id==='push')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>;
+  if (id==='assistant') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h8M8 14h5"/></svg>;
+  if (id==='notes')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>;
+  if (id==='deals')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+  if (id==='meetings')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="5"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="10" x2="22" y2="10"/><path d="M12 14v4m-2-2h4"/></svg>;
   return null;
 }
 
@@ -668,6 +676,10 @@ function App() {
         {page==='tools'      && <ToolsPage />}
         {page==='analytics'  && <AnalyticsPage />}
         {page==='push'       && <PushSettingsPage />}
+        {page==='assistant'  && <AssistantPage />}
+        {page==='notes'      && <NotesPage />}
+        {page==='deals'      && <DealsPage />}
+        {page==='meetings'   && <MeetingsPage />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 

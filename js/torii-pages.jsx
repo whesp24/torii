@@ -2697,7 +2697,900 @@ function NetworkingPage() {
   );
 }
 
+// ─── AI ASSISTANT PAGE ────────────────────────────────────────────────────────
+
+const QUICK_PROMPTS = [
+  "What's moved the most in my watchlist today?",
+  "Summarize my portfolio P&L",
+  "Who in my network works in private credit?",
+  "What are the key macro risks this week?",
+  "Draft talking points for my next investor meeting",
+];
+
+function AssistantPage() {
+  const [conversations, setConversations] = React.useState([]);
+  const [activeId,      setActiveId]      = React.useState(null);
+  const [messages,      setMessages]      = React.useState([]);
+  const [input,         setInput]         = React.useState('');
+  const [loading,       setLoading]       = React.useState(false);
+  const [loadingConvos, setLoadingConvos] = React.useState(true);
+  const [sidebarOpen,   setSidebarOpen]   = React.useState(true);
+  const bottomRef = React.useRef(null);
+  const inputRef  = React.useRef(null);
+
+  // Load conversation list
+  React.useEffect(() => {
+    fetch(`${API_URL}/assistant/conversations`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setConversations(data); setLoadingConvos(false); })
+      .catch(() => setLoadingConvos(false));
+  }, []);
+
+  // Load messages when conversation selected
+  React.useEffect(() => {
+    if (!activeId) { setMessages([]); return; }
+    fetch(`${API_URL}/assistant/conversations/${activeId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(c => { if (c) setMessages(c.messages || []); })
+      .catch(() => {});
+  }, [activeId]);
+
+  // Scroll to bottom on new message
+  React.useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  async function sendMessage(text) {
+    const msg = (text || input).trim();
+    if (!msg || loading) return;
+    setInput('');
+    setLoading(true);
+    const optimistic = { role: 'user', content: msg, timestamp: new Date() };
+    setMessages(p => [...p, optimistic]);
+
+    try {
+      const res = await fetch(`${API_URL}/assistant/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, conversationId: activeId }),
+      });
+      const data = await res.json();
+      if (data.conversationId) {
+        setActiveId(data.conversationId);
+        setMessages(p => [...p, { role: 'assistant', content: data.message, timestamp: new Date() }]);
+        // Update conversation list
+        setConversations(prev => {
+          const exists = prev.find(c => c._id === data.conversationId);
+          if (exists) return prev.map(c => c._id === data.conversationId ? { ...c, title: data.title, updatedAt: new Date() } : c);
+          return [{ _id: data.conversationId, title: data.title, updatedAt: new Date() }, ...prev];
+        });
+      }
+    } catch (err) {
+      setMessages(p => [...p, { role: 'assistant', content: 'Error reaching backend. Check that ANTHROPIC_API_KEY is set on Render.', timestamp: new Date() }]);
+    }
+    setLoading(false);
+    inputRef.current?.focus();
+  }
+
+  function newConversation() {
+    setActiveId(null);
+    setMessages([]);
+    inputRef.current?.focus();
+  }
+
+  function deleteConversation(id, e) {
+    e.stopPropagation();
+    fetch(`${API_URL}/assistant/conversations/${id}`, { method: 'DELETE' }).catch(() => {});
+    setConversations(p => p.filter(c => c._id !== id));
+    if (activeId === id) newConversation();
+  }
+
+  function formatTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function renderContent(text) {
+    // Simple markdown: bold, code blocks, bullets
+    return text
+      .split('\n')
+      .map((line, i) => {
+        if (line.startsWith('**') && line.endsWith('**')) {
+          return <div key={i} style={{ fontWeight: 700, marginTop: 8, marginBottom: 2, color: 'var(--fg)' }}>{line.slice(2, -2)}</div>;
+        }
+        if (line.startsWith('• ') || line.startsWith('- ') || line.startsWith('* ')) {
+          return <div key={i} style={{ paddingLeft: 12, marginBottom: 2 }}>· {line.slice(2)}</div>;
+        }
+        if (line === '') return <div key={i} style={{ height: 6 }} />;
+        // Inline bold
+        const parts = line.split(/\*\*(.+?)\*\*/g);
+        return (
+          <div key={i} style={{ marginBottom: 1 }}>
+            {parts.map((p, j) => j % 2 === 1 ? <strong key={j}>{p}</strong> : p)}
+          </div>
+        );
+      });
+  }
+
+  const isNew = !activeId && messages.length === 0;
+
+  return (
+    <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden' }}>
+      {/* Conversation sidebar */}
+      {sidebarOpen && (
+        <div style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--bdr)', background: 'var(--bg)' }}>
+          <div style={{ padding: '14px 12px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--bdr)' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Conversations</span>
+            <button onClick={newConversation}
+              style={{ padding: '4px 10px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+              + New
+            </button>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 8px' }}>
+            {loadingConvos && <div style={{ padding: 12, fontSize: 12, color: 'var(--fg3)' }}>Loading…</div>}
+            {!loadingConvos && conversations.length === 0 && (
+              <div style={{ padding: 12, fontSize: 12, color: 'var(--fg3)' }}>No conversations yet</div>
+            )}
+            {conversations.map(c => (
+              <div key={c._id} onClick={() => setActiveId(c._id)}
+                style={{ padding: '8px 10px', borderRadius: 8, marginBottom: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+                  background: activeId === c._id ? 'var(--surf2)' : 'transparent' }}>
+                <div style={{ flex: 1, fontSize: 12, color: activeId === c._id ? 'var(--fg)' : 'var(--fg2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {c.title || 'Untitled'}
+                </div>
+                <button onClick={e => deleteConversation(c._id, e)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--fg3)', opacity: 0, flexShrink: 0,
+                    transition: 'opacity 0.15s' }}
+                  onMouseEnter={e => e.target.style.opacity = 1}
+                  onMouseLeave={e => e.target.style.opacity = 0}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Chat area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Header */}
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--bdr)', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+          <button onClick={() => setSidebarOpen(o => !o)}
+            style={{ background: 'none', border: '1px solid var(--bdr)', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 14, color: 'var(--fg3)' }}>
+            ☰
+          </button>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--fg)' }}>AI Assistant</div>
+            <div style={{ fontSize: 11, color: 'var(--fg3)' }}>Context-aware · knows your portfolio, watchlist & network</div>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {isNew && (
+            <div style={{ maxWidth: 560, margin: '0 auto', width: '100%' }}>
+              <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                <div style={{ fontSize: 40, marginBottom: 10 }}>✦</div>
+                <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, color: 'var(--fg)' }}>What can I help with?</div>
+                <div style={{ fontSize: 13, color: 'var(--fg3)' }}>I have your live portfolio, watchlist, network, and market data.</div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {QUICK_PROMPTS.map(p => (
+                  <button key={p} onClick={() => sendMessage(p)}
+                    style={{ padding: '12px 16px', background: 'var(--surf)', border: '1px solid var(--bdr)', borderRadius: 10, fontSize: 13, color: 'var(--fg2)', cursor: 'pointer', textAlign: 'left',
+                      transition: 'background 0.15s' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surf2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'var(--surf)'}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((m, i) => (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '100%' }}>
+              <div style={{
+                maxWidth: '72%', padding: '12px 16px', borderRadius: m.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                background: m.role === 'user' ? 'var(--red)' : 'var(--surf)',
+                color: m.role === 'user' ? 'white' : 'var(--fg)',
+                fontSize: 13, lineHeight: 1.6,
+                border: m.role === 'assistant' ? '1px solid var(--bdr)' : 'none',
+              }}>
+                {m.role === 'assistant' ? renderContent(m.content) : m.content}
+              </div>
+              {m.timestamp && (
+                <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 3, padding: '0 4px' }}>
+                  {formatTime(m.timestamp)}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg3)', fontSize: 13 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--red)', animation: 'pulse 1s infinite' }} />
+              Thinking…
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Input */}
+        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--bdr)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 8, background: 'var(--surf)', border: '1px solid var(--bdr)', borderRadius: 12, padding: '8px 12px', alignItems: 'flex-end' }}>
+            <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              placeholder="Ask anything… (Enter to send, Shift+Enter for newline)"
+              rows={1}
+              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 13, color: 'var(--fg)', lineHeight: 1.5, maxHeight: 120, overflowY: 'auto', fontFamily: 'inherit' }}
+            />
+            <button onClick={() => sendMessage()} disabled={!input.trim() || loading}
+              style={{ padding: '6px 14px', background: input.trim() && !loading ? 'var(--red)' : 'var(--surf2)', color: input.trim() && !loading ? 'white' : 'var(--fg3)',
+                border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: input.trim() && !loading ? 'pointer' : 'default', flexShrink: 0, transition: 'all 0.15s' }}>
+              ↑
+            </button>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 5, textAlign: 'center' }}>
+            Powered by Claude · Live data injected from your dashboard
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── NOTES PAGE ───────────────────────────────────────────────────────────────
+
+function NotesPage() {
+  const [notes,      setNotes]      = React.useState([]);
+  const [loading,    setLoading]    = React.useState(true);
+  const [search,     setSearch]     = React.useState('');
+  const [showForm,   setShowForm]   = React.useState(false);
+  const [editing,    setEditing]    = React.useState(null);  // note being edited
+  const [form,       setForm]       = React.useState({ title: '', body: '', ticker: '', tags: '' });
+  const [expanded,   setExpanded]   = React.useState(null);  // note id expanded
+
+  React.useEffect(() => {
+    const params = search ? `?search=${encodeURIComponent(search)}` : '';
+    fetch(`${API_URL}/notes${params}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setNotes(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [search]);
+
+  const EMPTY_FORM = { title: '', body: '', ticker: '', tags: '' };
+
+  function openNew() {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setShowForm(true);
+  }
+
+  function openEdit(note, e) {
+    e.stopPropagation();
+    setEditing(note);
+    setForm({ title: note.title, body: note.body || '', ticker: note.ticker || '', tags: (note.tags || []).join(', ') });
+    setShowForm(true);
+  }
+
+  async function saveNote(e) {
+    e.preventDefault();
+    if (!form.title.trim()) return;
+    const payload = {
+      title: form.title.trim(),
+      body:  form.body,
+      ticker: form.ticker.trim().toUpperCase() || undefined,
+      tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),
+    };
+    if (editing) {
+      const res = await fetch(`${API_URL}/notes/${editing._id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const updated = await res.json();
+      setNotes(p => p.map(n => n._id === editing._id ? updated : n));
+    } else {
+      const res = await fetch(`${API_URL}/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const created = await res.json();
+      setNotes(p => [created, ...p]);
+    }
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  async function deleteNote(id, e) {
+    e.stopPropagation();
+    await fetch(`${API_URL}/notes/${id}`, { method: 'DELETE' });
+    setNotes(p => p.filter(n => n._id !== id));
+    if (expanded === id) setExpanded(null);
+  }
+
+  async function togglePin(note, e) {
+    e.stopPropagation();
+    const res = await fetch(`${API_URL}/notes/${note._id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !note.pinned }) });
+    const updated = await res.json();
+    setNotes(p => p.map(n => n._id === note._id ? updated : n));
+  }
+
+  function relativeTime(ts) {
+    const diff = Date.now() - new Date(ts);
+    const h = Math.floor(diff / 3600000);
+    if (h < 1) return 'just now';
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d ago`;
+    return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  return (
+    <div className="page-root">
+      {/* Note form modal */}
+      {showForm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowForm(false); }}>
+          <div style={{ background: 'var(--bg)', border: '1px solid var(--bdr)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 560 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{editing ? 'Edit Note' : 'New Note'}</div>
+              <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--fg3)' }}>✕</button>
+            </div>
+            <form onSubmit={saveNote} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <input value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="Title *" required
+                style={{ width: '100%', padding: '9px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 14, fontWeight: 600, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
+              <textarea value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} placeholder="Notes, thesis, research…" rows={6}
+                style={{ width: '100%', padding: '9px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.6 }} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Linked Ticker</div>
+                  <input value={form.ticker} onChange={e => setForm(p => ({ ...p, ticker: e.target.value }))} placeholder="e.g. AAPL"
+                    style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Tags (comma-sep)</div>
+                  <input value={form.tags} onChange={e => setForm(p => ({ ...p, tags: e.target.value }))} placeholder="e.g. thesis, japan, macro"
+                    style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button type="button" onClick={() => setShowForm(false)}
+                  style={{ padding: '9px 18px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit"
+                  style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                  {editing ? 'Save Changes' : 'Create Note'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <h1 className="page-title">Research Notes</h1>
+          <p className="page-sub">{notes.length} note{notes.length !== 1 ? 's' : ''}</p>
+        </div>
+        <button onClick={openNew}
+          style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
+          + Note
+        </button>
+      </div>
+
+      {/* Search */}
+      <div style={{ marginBottom: 16, position: 'relative' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search notes…"
+          style={{ width: '100%', padding: '10px 16px 10px 36px', border: '1px solid var(--bdr)', borderRadius: 10, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
+        <div style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg3)', fontSize: 14 }}>⌕</div>
+      </div>
+
+      {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)', fontSize: 13 }}>Loading…</div>}
+
+      {!loading && notes.length === 0 && (
+        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📝</div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No notes yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 16 }}>Capture investment theses, meeting prep, research — linked to tickers and contacts.</div>
+          <button onClick={openNew} style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            Create your first note
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {notes.map(note => (
+          <div key={note._id} className="card" style={{ cursor: 'pointer', transition: 'border-color 0.15s', borderColor: expanded === note._id ? 'var(--red)' : undefined }}
+            onClick={() => setExpanded(expanded === note._id ? null : note._id)}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                  {note.pinned && <span style={{ fontSize: 10, color: 'var(--amber)' }}>📌</span>}
+                  <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg)' }}>{note.title}</span>
+                  {note.ticker && <span style={{ fontSize: 10, padding: '1px 6px', background: 'var(--red-dim)', color: 'var(--red)', borderRadius: 4, fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{note.ticker}</span>}
+                  {(note.tags || []).map(t => (
+                    <span key={t} style={{ fontSize: 10, padding: '1px 6px', background: 'var(--surf2)', color: 'var(--fg3)', borderRadius: 4 }}>{t}</span>
+                  ))}
+                </div>
+                {note.body && !expanded !== note._id && (
+                  <div style={{ fontSize: 12, color: 'var(--fg3)', lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: expanded === note._id ? 'unset' : 2, WebkitBoxOrient: 'vertical' }}>
+                    {note.body}
+                  </div>
+                )}
+                {expanded === note._id && note.body && (
+                  <div style={{ fontSize: 13, color: 'var(--fg2)', lineHeight: 1.7, marginTop: 8, whiteSpace: 'pre-wrap' }}>{note.body}</div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--fg3)' }}>{relativeTime(note.updatedAt)}</span>
+                <button onClick={e => togglePin(note, e)} title={note.pinned ? 'Unpin' : 'Pin'}
+                  style={{ background: 'none', border: '1px solid var(--bdr)', borderRadius: 5, padding: '3px 7px', cursor: 'pointer', fontSize: 11, color: note.pinned ? 'var(--amber)' : 'var(--fg3)' }}>
+                  📌
+                </button>
+                <button onClick={e => openEdit(note, e)}
+                  style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 11, color: 'var(--fg)', fontWeight: 600 }}>
+                  Edit
+                </button>
+                <button onClick={e => deleteNote(note._id, e)}
+                  style={{ background: 'none', border: '1px solid var(--bdr)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 11, color: 'var(--fg3)' }}>
+                  ✕
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── DEAL FLOW PAGE ───────────────────────────────────────────────────────────
+
+const DEAL_STAGES = [
+  { id: 'watching',   label: 'Watching',   color: '#6b7280' },
+  { id: 'thesis',     label: 'Thesis',     color: '#3B82F6' },
+  { id: 'conviction', label: 'Conviction', color: '#A855F7' },
+  { id: 'position',   label: 'In Position', color: '#22c55e' },
+  { id: 'passed',     label: 'Passed',     color: '#ef4444' },
+  { id: 'exited',     label: 'Exited',     color: '#f59e0b' },
+];
+
+const PRIORITY_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
+
+function DealsPage() {
+  const [deals,    setDeals]    = React.useState([]);
+  const [loading,  setLoading]  = React.useState(true);
+  const [showForm, setShowForm] = React.useState(false);
+  const [selected, setSelected] = React.useState(null);  // deal _id expanded
+  const [form,     setForm]     = React.useState({ company: '', ticker: '', stage: 'watching', thesis: '', targetPrice: '', catalysts: '', risks: '', notes: '', priority: 'medium' });
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/deals`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setDeals(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const EMPTY_FORM = { company: '', ticker: '', stage: 'watching', thesis: '', targetPrice: '', catalysts: '', risks: '', notes: '', priority: 'medium' };
+
+  async function saveDeal(e) {
+    e.preventDefault();
+    if (!form.company.trim()) return;
+    const payload = {
+      ...form,
+      ticker: form.ticker?.toUpperCase() || undefined,
+      targetPrice: form.targetPrice ? Number(form.targetPrice) : undefined,
+      catalysts: form.catalysts.split('\n').map(s => s.trim()).filter(Boolean),
+      risks:     form.risks.split('\n').map(s => s.trim()).filter(Boolean),
+    };
+    if (selected && deals.find(d => d._id === selected)) {
+      const res = await fetch(`${API_URL}/deals/${selected}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const updated = await res.json();
+      setDeals(p => p.map(d => d._id === selected ? updated : d));
+    } else {
+      const res = await fetch(`${API_URL}/deals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const created = await res.json();
+      setDeals(p => [created, ...p]);
+    }
+    setShowForm(false);
+    setForm(EMPTY_FORM);
+    setSelected(null);
+  }
+
+  function openEdit(deal) {
+    setSelected(deal._id);
+    setForm({
+      company: deal.company, ticker: deal.ticker || '', stage: deal.stage,
+      thesis: deal.thesis || '', targetPrice: deal.targetPrice || '',
+      catalysts: (deal.catalysts || []).join('\n'), risks: (deal.risks || []).join('\n'),
+      notes: deal.notes || '', priority: deal.priority || 'medium',
+    });
+    setShowForm(true);
+  }
+
+  async function moveStage(deal, dir) {
+    const idx = DEAL_STAGES.findIndex(s => s.id === deal.stage);
+    const next = DEAL_STAGES[idx + dir];
+    if (!next) return;
+    const res = await fetch(`${API_URL}/deals/${deal._id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stage: next.id }) });
+    const updated = await res.json();
+    setDeals(p => p.map(d => d._id === deal._id ? updated : d));
+  }
+
+  async function deleteDeal(id, e) {
+    e.stopPropagation();
+    await fetch(`${API_URL}/deals/${id}`, { method: 'DELETE' });
+    setDeals(p => p.filter(d => d._id !== id));
+    if (selected === id) setSelected(null);
+  }
+
+  const byStage = Object.fromEntries(DEAL_STAGES.map(s => [s.id, deals.filter(d => d.stage === s.id)]));
+
+  const fieldStyle = { width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' };
+
+  return (
+    <div className="page-root">
+      {/* Deal form modal */}
+      {showForm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) { setShowForm(false); setSelected(null); } }}>
+          <div style={{ background: 'var(--bg)', border: '1px solid var(--bdr)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 580, maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{selected && deals.find(d => d._id === selected) ? 'Edit Deal' : 'New Deal'}</div>
+              <button onClick={() => { setShowForm(false); setSelected(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--fg3)' }}>✕</button>
+            </div>
+            <form onSubmit={saveDeal} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+                <div><div style={labelStyle}>Company *</div><input value={form.company} onChange={e => setForm(p => ({ ...p, company: e.target.value }))} placeholder="Company name" required style={fieldStyle} /></div>
+                <div><div style={labelStyle}>Ticker</div><input value={form.ticker} onChange={e => setForm(p => ({ ...p, ticker: e.target.value }))} placeholder="e.g. AAPL" style={fieldStyle} /></div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                <div><div style={labelStyle}>Stage</div>
+                  <select value={form.stage} onChange={e => setForm(p => ({ ...p, stage: e.target.value }))} style={{ ...fieldStyle }}>
+                    {DEAL_STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  </select>
+                </div>
+                <div><div style={labelStyle}>Priority</div>
+                  <select value={form.priority} onChange={e => setForm(p => ({ ...p, priority: e.target.value }))} style={{ ...fieldStyle }}>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+                <div><div style={labelStyle}>Target Price</div><input type="number" value={form.targetPrice} onChange={e => setForm(p => ({ ...p, targetPrice: e.target.value }))} placeholder="$0.00" style={fieldStyle} /></div>
+              </div>
+              <div><div style={labelStyle}>Investment Thesis</div>
+                <textarea value={form.thesis} onChange={e => setForm(p => ({ ...p, thesis: e.target.value }))} placeholder="Why is this interesting? What's the edge?" rows={3} style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.6 }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div><div style={labelStyle}>Catalysts (one per line)</div>
+                  <textarea value={form.catalysts} onChange={e => setForm(p => ({ ...p, catalysts: e.target.value }))} placeholder="Earnings beat&#10;New product launch&#10;Rate cut" rows={3} style={{ ...fieldStyle, resize: 'vertical' }} />
+                </div>
+                <div><div style={labelStyle}>Risks (one per line)</div>
+                  <textarea value={form.risks} onChange={e => setForm(p => ({ ...p, risks: e.target.value }))} placeholder="Regulatory risk&#10;FX exposure&#10;Competition" rows={3} style={{ ...fieldStyle, resize: 'vertical' }} />
+                </div>
+              </div>
+              <div><div style={labelStyle}>Notes</div>
+                <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} placeholder="Anything else…" rows={2} style={{ ...fieldStyle, resize: 'vertical' }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button type="button" onClick={() => { setShowForm(false); setSelected(null); }} style={{ padding: '9px 18px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Save Deal</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <h1 className="page-title">Deal Flow</h1>
+          <p className="page-sub">{deals.length} deal{deals.length !== 1 ? 's' : ''} tracked</p>
+        </div>
+        <button onClick={() => { setSelected(null); setForm(EMPTY_FORM); setShowForm(true); }}
+          style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+          + Deal
+        </button>
+      </div>
+
+      {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)', fontSize: 13 }}>Loading…</div>}
+
+      {!loading && deals.length === 0 && (
+        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🔭</div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No deals tracked yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 16 }}>Track investment ideas from first look through exit. Build your thesis, log catalysts and risks, move deals through stages.</div>
+          <button onClick={() => { setForm(EMPTY_FORM); setShowForm(true); }} style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            Add your first deal
+          </button>
+        </div>
+      )}
+
+      {/* Pipeline columns */}
+      {deals.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 12 }}>
+          {DEAL_STAGES.map(stage => {
+            const stageDeals = byStage[stage.id] || [];
+            return (
+              <div key={stage.id} style={{ minWidth: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {/* Column header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, background: 'var(--surf)', border: '1px solid var(--bdr)', borderTop: `2px solid ${stage.color}` }}>
+                  <span style={{ fontWeight: 700, fontSize: 12, color: stage.color }}>{stage.label}</span>
+                  <span style={{ fontSize: 11, color: 'var(--fg3)', marginLeft: 'auto' }}>{stageDeals.length}</span>
+                </div>
+                {/* Deal cards */}
+                {stageDeals.map(deal => {
+                  const stageIdx = DEAL_STAGES.findIndex(s => s.id === deal.stage);
+                  return (
+                    <div key={deal._id} className="card" style={{ padding: '12px 14px', cursor: 'pointer' }} onClick={() => openEdit(deal)}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--fg)' }}>{deal.company}</div>
+                          {deal.ticker && <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--red)', marginTop: 1 }}>{deal.ticker}</div>}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                          <span style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, background: `${PRIORITY_COLOR[deal.priority]}22`, color: PRIORITY_COLOR[deal.priority], fontWeight: 700, textTransform: 'uppercase' }}>
+                            {deal.priority}
+                          </span>
+                          <button onClick={e => deleteDeal(deal._id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--fg3)' }}>✕</button>
+                        </div>
+                      </div>
+                      {deal.thesis && <div style={{ fontSize: 11, color: 'var(--fg3)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: 8 }}>{deal.thesis}</div>}
+                      {deal.targetPrice && <div style={{ fontSize: 11, color: 'var(--green)', fontFamily: 'var(--font-mono)' }}>Target: ${deal.targetPrice}</div>}
+                      {/* Stage move buttons */}
+                      <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                        {stageIdx > 0 && <button onClick={e => { e.stopPropagation(); moveStage(deal, -1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 10, cursor: 'pointer', color: 'var(--fg3)' }}>← Back</button>}
+                        {stageIdx < DEAL_STAGES.length - 1 && <button onClick={e => { e.stopPropagation(); moveStage(deal, 1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: `1px solid ${DEAL_STAGES[stageIdx + 1].color}44`, borderRadius: 5, fontSize: 10, cursor: 'pointer', color: DEAL_STAGES[stageIdx + 1].color, fontWeight: 700 }}>Next →</button>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MEETINGS PAGE ────────────────────────────────────────────────────────────
+
+function MeetingsPage() {
+  const [meetings,  setMeetings]  = React.useState([]);
+  const [contacts,  setContacts]  = React.useState([]);
+  const [loading,   setLoading]   = React.useState(true);
+  const [showForm,  setShowForm]  = React.useState(false);
+  const [expanded,  setExpanded]  = React.useState(null);  // meeting _id
+  const [genBrief,  setGenBrief]  = React.useState(null);  // meeting _id generating brief
+  const [savingNotes, setSavingNotes] = React.useState(null);
+  const [form, setForm] = React.useState({ contactName: '', contactId: '', company: '', date: '', type: 'call', agenda: '' });
+
+  React.useEffect(() => {
+    Promise.all([
+      fetch(`${API_URL}/meetings`).then(r => r.ok ? r.json() : []),
+      fetch(`${API_URL}/contacts`).then(r => r.ok ? r.json() : []),
+    ])
+      .then(([m, c]) => {
+        setMeetings(m);
+        setContacts(c.map(x => ({ ...x, id: x._id })));
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  async function createMeeting(e) {
+    e.preventDefault();
+    const res = await fetch(`${API_URL}/meetings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    const created = await res.json();
+    setMeetings(p => [...p, created].sort((a, b) => new Date(a.date) - new Date(b.date)));
+    setShowForm(false);
+    setForm({ contactName: '', contactId: '', company: '', date: '', type: 'call', agenda: '' });
+  }
+
+  async function generateBrief(meeting) {
+    setGenBrief(meeting._id);
+    try {
+      const res = await fetch(`${API_URL}/meetings/${meeting._id}/brief`, { method: 'POST' });
+      const data = await res.json();
+      if (data.brief) {
+        setMeetings(p => p.map(m => m._id === meeting._id ? { ...m, brief: data.brief } : m));
+      }
+    } catch (err) { console.error(err); }
+    setGenBrief(null);
+  }
+
+  async function savePostCallNotes(meeting, notes) {
+    setSavingNotes(meeting._id);
+    await fetch(`${API_URL}/meetings/${meeting._id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postCallNotes: notes, status: 'completed' }) });
+    setMeetings(p => p.map(m => m._id === meeting._id ? { ...m, postCallNotes: notes, status: 'completed' } : m));
+    setSavingNotes(null);
+  }
+
+  async function deleteMeeting(id, e) {
+    e.stopPropagation();
+    await fetch(`${API_URL}/meetings/${id}`, { method: 'DELETE' });
+    setMeetings(p => p.filter(m => m._id !== id));
+    if (expanded === id) setExpanded(null);
+  }
+
+  function formatDate(d) {
+    return new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function isUpcoming(d) { return new Date(d) > new Date(); }
+
+  const upcoming = meetings.filter(m => m.status === 'upcoming' && isUpcoming(m.date));
+  const past     = meetings.filter(m => m.status === 'completed' || !isUpcoming(m.date));
+
+  const TYPE_COLORS = { call: '#3B82F6', coffee: '#f59e0b', interview: '#A855F7', intro: '#22c55e', 'follow-up': '#ec4899', other: '#6b7280' };
+
+  const fieldStyle = { width: '100%', padding: '8px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' };
+
+  function MeetingCard({ meeting }) {
+    const [notes, setNotes]     = React.useState(meeting.postCallNotes || '');
+    const isOpen = expanded === meeting._id;
+    const color  = TYPE_COLORS[meeting.type] || '#6b7280';
+
+    return (
+      <div className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${color}` }}>
+        {/* Header row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', cursor: 'pointer' }}
+          onClick={() => setExpanded(isOpen ? null : meeting._id)}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg)' }}>{meeting.contactName}</span>
+              {meeting.company && <span style={{ fontSize: 11, color: 'var(--fg3)' }}>@ {meeting.company}</span>}
+              <span style={{ fontSize: 10, padding: '1px 6px', background: `${color}22`, color, borderRadius: 4, fontWeight: 700, textTransform: 'capitalize' }}>{meeting.type}</span>
+              {meeting.status === 'completed' && <span style={{ fontSize: 10, padding: '1px 6px', background: '#22c55e22', color: '#22c55e', borderRadius: 4, fontWeight: 700 }}>Done</span>}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 3 }}>{formatDate(meeting.date)}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {!meeting.brief && (
+              <button onClick={e => { e.stopPropagation(); generateBrief(meeting); }} disabled={genBrief === meeting._id}
+                style={{ padding: '4px 10px', background: genBrief === meeting._id ? 'var(--surf2)' : 'var(--red)', color: genBrief === meeting._id ? 'var(--fg3)' : 'white', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                {genBrief === meeting._id ? '…' : '✦ Brief'}
+              </button>
+            )}
+            {meeting.brief && (
+              <span style={{ fontSize: 10, padding: '2px 7px', background: '#22c55e22', color: '#22c55e', borderRadius: 4, fontWeight: 700 }}>Brief ready</span>
+            )}
+            <button onClick={e => deleteMeeting(meeting._id, e)} style={{ background: 'none', border: '1px solid var(--bdr)', borderRadius: 5, padding: '3px 7px', cursor: 'pointer', fontSize: 11, color: 'var(--fg3)' }}>✕</button>
+            <span style={{ color: 'var(--fg3)', fontSize: 12 }}>{isOpen ? '▲' : '▼'}</span>
+          </div>
+        </div>
+
+        {/* Expanded content */}
+        {isOpen && (
+          <div style={{ padding: '0 16px 16px', borderTop: '1px solid var(--bdr)', paddingTop: 14 }}>
+            {meeting.agenda && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={labelStyle}>Agenda</div>
+                <div style={{ fontSize: 13, color: 'var(--fg2)', lineHeight: 1.6 }}>{meeting.agenda}</div>
+              </div>
+            )}
+
+            {meeting.brief ? (
+              <div style={{ marginBottom: 12 }}>
+                <div style={labelStyle}>✦ AI Brief</div>
+                <div style={{ fontSize: 12.5, color: 'var(--fg2)', lineHeight: 1.7, background: 'var(--surf)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--bdr)', whiteSpace: 'pre-wrap' }}>
+                  {meeting.brief}
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => generateBrief(meeting)} disabled={genBrief === meeting._id}
+                style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}>
+                {genBrief === meeting._id ? 'Generating brief…' : '✦ Generate AI Brief'}
+              </button>
+            )}
+
+            <div>
+              <div style={labelStyle}>Post-Call Notes</div>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Key takeaways, follow-ups, next steps…" rows={3}
+                style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.6, marginBottom: 8 }} />
+              <button onClick={() => savePostCallNotes(meeting, notes)} disabled={savingNotes === meeting._id}
+                style={{ padding: '7px 16px', background: 'var(--surf2)', color: 'var(--fg)', border: '1px solid var(--bdr)', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                {savingNotes === meeting._id ? 'Saving…' : 'Save Notes'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-root">
+      {/* Add meeting modal */}
+      {showForm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowForm(false); }}>
+          <div style={{ background: 'var(--bg)', border: '1px solid var(--bdr)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 500 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Schedule Meeting</div>
+              <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--fg3)' }}>✕</button>
+            </div>
+            <form onSubmit={createMeeting} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <div style={labelStyle}>Contact *</div>
+                <select value={form.contactId} onChange={e => {
+                  const c = contacts.find(x => x._id === e.target.value);
+                  setForm(p => ({ ...p, contactId: e.target.value, contactName: c ? c.name : '', company: c ? (c.company || '') : '' }));
+                }} style={fieldStyle}>
+                  <option value="">— Select from network or type below —</option>
+                  {contacts.map(c => <option key={c._id} value={c._id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
+                </select>
+              </div>
+              {!form.contactId && (
+                <input value={form.contactName} onChange={e => setForm(p => ({ ...p, contactName: e.target.value }))} placeholder="Or type contact name *" required={!form.contactId} style={fieldStyle} />
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div><div style={labelStyle}>Company</div><input value={form.company} onChange={e => setForm(p => ({ ...p, company: e.target.value }))} style={fieldStyle} /></div>
+                <div><div style={labelStyle}>Type</div>
+                  <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))} style={fieldStyle}>
+                    {['call','coffee','interview','intro','follow-up','other'].map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div><div style={labelStyle}>Date & Time *</div>
+                <input type="datetime-local" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} required style={fieldStyle} />
+              </div>
+              <div><div style={labelStyle}>Agenda / Context</div>
+                <textarea value={form.agenda} onChange={e => setForm(p => ({ ...p, agenda: e.target.value }))} placeholder="What's the meeting about? What do you want to accomplish?" rows={2} style={{ ...fieldStyle, resize: 'vertical' }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button type="button" onClick={() => setShowForm(false)} style={{ padding: '9px 18px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Add Meeting</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <h1 className="page-title">Meetings</h1>
+          <p className="page-sub">{upcoming.length} upcoming · {past.length} past</p>
+        </div>
+        <button onClick={() => setShowForm(true)}
+          style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+          + Schedule
+        </button>
+      </div>
+
+      {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>Loading…</div>}
+
+      {!loading && meetings.length === 0 && (
+        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📅</div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No meetings yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 16 }}>Schedule meetings with your network contacts. Get AI-generated briefs before each call and log post-call notes.</div>
+          <button onClick={() => setShowForm(true)} style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            Schedule a meeting
+          </button>
+        </div>
+      )}
+
+      {upcoming.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>Upcoming</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {upcoming.map(m => <MeetingCard key={m._id} meeting={m} />)}
+          </div>
+        </div>
+      )}
+
+      {past.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>Past</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {past.map(m => <MeetingCard key={m._id} meeting={m} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
+  AssistantPage, NotesPage, DealsPage, MeetingsPage,
 });
