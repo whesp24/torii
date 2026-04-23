@@ -4,44 +4,74 @@ const API_URL = '/api';
 
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
+const PORTFOLIO_KEY = 'torii_portfolio';
+
+function loadSavedPositions() {
+  try {
+    const s = localStorage.getItem(PORTFOLIO_KEY);
+    return s ? JSON.parse(s) : [];
+  } catch { return []; }
+}
+
 function PortfolioPage({ onNav }) {
-  const [holdings, setHoldings] = React.useState(MOCK.portfolio);
+  const [positions, setPositions] = React.useState(loadSavedPositions);
+  const [holdings, setHoldings] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+  const [showAdd, setShowAdd] = React.useState(false);
+  const [newTicker, setNewTicker] = React.useState('');
+  const [newShares, setNewShares] = React.useState('');
+  const [newCost, setNewCost] = React.useState('');
+  const [addLoading, setAddLoading] = React.useState(false);
+  const [addError, setAddError] = React.useState('');
 
+  // Persist positions to localStorage
   React.useEffect(() => {
-    fetch(`${API_URL}/stocks`)
-      .then(r => r.json())
-      .then(stocks => {
-        if (stocks && stocks.length > 0) {
-          // Transform real API stock data to portfolio format
-          const portfolio = stocks.slice(0, 9).map((s, i) => {
-            const shares = 2 + Math.floor(Math.random() * 100);
-            const price = parseFloat(s.price) || 0;
-            const changePercent = parseFloat(s.changePercent) || 0;
-            return {
-              id: i + 1,
-              ticker: s.symbol,
-              name: s.symbol,
-              shares: shares,
-              price: price,
-              pct: changePercent,
-              change: price * (changePercent / 100),
-              value: price * shares,
-              prevClose: price / (1 + (changePercent / 100))
-            };
-          });
-          setHoldings(portfolio);
-        } else {
-          setHoldings(MOCK.portfolio);
-        }
-      })
-      .catch(e => {console.error('API Error:', e); setHoldings(MOCK.portfolio);})
-      .finally(() => setLoading(false));
-  }, []);
+    localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(positions));
+  }, [positions]);
 
-  const total    = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + (h.value || 0), 0) : 0;
-  const dayChg   = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + ((h.change || 0) * (h.shares || 0)), 0) : 0;
-  const dayPct   = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
+  // Fetch live prices for all positions
+  React.useEffect(() => {
+    if (positions.length === 0) { setHoldings([]); setLoading(false); return; }
+    setLoading(true);
+    Promise.all(positions.map((p, i) =>
+      fetch(`${API_URL}/stocks/live/${p.ticker}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => d ? {
+          id: i + 1,
+          ticker: p.ticker,
+          name: d.name || p.ticker,
+          shares: p.shares,
+          costBasis: p.costBasis || d.price,
+          price: d.price,
+          pct: d.changePercent || 0,
+          change: d.change || 0,
+          value: d.price * p.shares,
+          prevClose: d.price - (d.change || 0)
+        } : null)
+        .catch(() => null)
+    )).then(res => { setHoldings(res.filter(Boolean)); setLoading(false); });
+  }, [positions]);
+
+  const addPosition = async () => {
+    const ticker = newTicker.trim().toUpperCase();
+    const shares = parseFloat(newShares);
+    if (!ticker || isNaN(shares) || shares <= 0) { setAddError('Enter a valid ticker and share count'); return; }
+    if (positions.find(p => p.ticker === ticker)) { setAddError(`${ticker} is already in your portfolio`); return; }
+    setAddLoading(true); setAddError('');
+    try {
+      const r = await fetch(`${API_URL}/stocks/live/${ticker}`);
+      if (!r.ok) { setAddError(`Couldn't find "${ticker}" — check the symbol`); setAddLoading(false); return; }
+      setPositions(prev => [...prev, { ticker, shares, costBasis: parseFloat(newCost) || 0 }]);
+      setShowAdd(false); setNewTicker(''); setNewShares(''); setNewCost('');
+    } catch { setAddError('Network error — try again'); }
+    setAddLoading(false);
+  };
+
+  const removePosition = ticker => setPositions(prev => prev.filter(p => p.ticker !== ticker));
+
+  const total  = holdings.reduce((s,h) => s + (h.value || 0), 0);
+  const dayChg = holdings.reduce((s,h) => s + ((h.change || 0) * (h.shares || 0)), 0);
+  const dayPct = total > 0 ? (dayChg / (total - dayChg)) * 100 : 0;
   const [sort, setSort] = React.useState('value');
 
   const sorted = [...holdings].sort((a,b) => {
@@ -51,17 +81,63 @@ function PortfolioPage({ onNav }) {
     return 0;
   });
 
-  // Allocation data
-  const allocs = holdings && holdings.length > 0 && total > 0 ? holdings.map(h => ({ ticker: h.ticker, pct: (h.value / total) * 100, value: h.value, color: h.pct >= 0 ? 'var(--green)' : 'var(--red-loss)' }))
-    .sort((a,b) => b.pct - a.pct) : [];
+  const allocs = total > 0 ? holdings.map(h => ({
+    ticker: h.ticker, pct: (h.value/total)*100, value: h.value,
+    color: h.pct >= 0 ? 'var(--green)' : 'var(--red-loss)'
+  })).sort((a,b) => b.pct - a.pct) : [];
+
+  const modalStyle = { position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center' };
+  const inputStyle = { width:'100%',background:'var(--surf2)',border:'1px solid var(--bdr2)',borderRadius:8,padding:'10px 12px',color:'var(--fg)',fontFamily:'var(--font-mono)',fontSize:13,outline:'none' };
 
   return (
     <div className="page-root">
+      {/* Add Position Modal */}
+      {showAdd && (
+        <div style={modalStyle} onClick={e => e.target === e.currentTarget && setShowAdd(false)}>
+          <div className="card" style={{width:360,padding:24}}>
+            <div style={{fontSize:16,fontWeight:700,fontFamily:'var(--font-d)',marginBottom:20}}>Add Position</div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6}}>Ticker Symbol</div>
+              <input style={inputStyle} placeholder="e.g. AAPL, NVDA, 7203.T"
+                value={newTicker} onChange={e => setNewTicker(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && addPosition()} autoFocus />
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6}}>Shares</div>
+              <input style={inputStyle} type="number" placeholder="e.g. 10" min="0.001" step="any"
+                value={newShares} onChange={e => setNewShares(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addPosition()} />
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6}}>Avg Cost Basis <span style={{opacity:0.5}}>(optional)</span></div>
+              <input style={inputStyle} type="number" placeholder="e.g. 850.00" min="0" step="any"
+                value={newCost} onChange={e => setNewCost(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addPosition()} />
+            </div>
+            {addError && <div style={{color:'var(--red-loss)',fontSize:12,fontFamily:'var(--font-mono)',marginBottom:12}}>{addError}</div>}
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={addPosition} disabled={addLoading}
+                style={{flex:1,padding:'10px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontFamily:'var(--font-ui)',fontWeight:600,cursor:'pointer',fontSize:13}}>
+                {addLoading ? 'Checking…' : '+ Add Position'}
+              </button>
+              <button onClick={() => { setShowAdd(false); setAddError(''); }}
+                style={{padding:'10px 16px',background:'var(--surf2)',color:'var(--fg2)',border:'1px solid var(--bdr)',borderRadius:8,fontFamily:'var(--font-ui)',cursor:'pointer',fontSize:13}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="page-header">
         <div>
           <h1 className="page-title">Portfolio</h1>
           <p className="page-sub">Holdings · performance · analytics</p>
         </div>
+        <button onClick={() => { setShowAdd(true); setAddError(''); }}
+          style={{padding:'9px 18px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontFamily:'var(--font-ui)',fontWeight:600,cursor:'pointer',fontSize:13}}>
+          + Add Position
+        </button>
       </div>
 
       {/* Summary row */}
@@ -125,33 +201,44 @@ function PortfolioPage({ onNav }) {
                 <th style={{textAlign:'right'}}>Day</th>
                 <th style={{textAlign:'right'}}>Value</th>
                 <th style={{textAlign:'right'}}>Alloc</th>
-                <th style={{width:80}}>7D</th>
+                <th style={{width:36}}></th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map(h => {
+              {loading ? (
+                <tr><td colSpan={8} style={{textAlign:'center',padding:32,color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading prices…</td></tr>
+              ) : sorted.length === 0 ? (
+                <tr><td colSpan={8} style={{textAlign:'center',padding:32,color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>
+                  No positions yet — click <strong style={{color:'var(--fg)'}}>+ Add Position</strong> to get started
+                </td></tr>
+              ) : sorted.map(h => {
                 const up = h.pct >= 0;
                 const color = up ? 'var(--green)' : 'var(--red-loss)';
-                const spark = MOCK.sparklines[h.ticker] || [];
                 return (
-                  <tr key={h.id} onClick={() => onNav(`stock-${h.ticker}`)} style={{cursor:'pointer'}}>
-                    <td><span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12,color:'var(--fg)'}}>{h.ticker}</span></td>
-                    <td><span style={{fontSize:11,color:'var(--fg2)'}}>{h.name}</span></td>
+                  <tr key={h.ticker}>
+                    <td onClick={() => onNav(`stock-${h.ticker}`)} style={{cursor:'pointer'}}>
+                      <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12,color:'var(--fg)'}}>{h.ticker}</span>
+                    </td>
+                    <td onClick={() => onNav(`stock-${h.ticker}`)} style={{cursor:'pointer'}}>
+                      <span style={{fontSize:11,color:'var(--fg2)'}}>{h.name}</span>
+                    </td>
                     <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--fg3)'}}>{h.shares}</td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,color:'var(--fg)'}}>${h.price.toFixed(2)}</td>
+                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,color:'var(--fg)'}}>${(h.price||0).toFixed(2)}</td>
                     <td style={{textAlign:'right'}}>
                       <span style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:600,color}}>
-                        {up?'+':''}{h.pct.toFixed(2)}%
+                        {up?'+':''}{(h.pct||0).toFixed(2)}%
                       </span>
                     </td>
                     <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600,color:'var(--fg)'}}>
-                      ${h.value.toLocaleString('en-US',{maximumFractionDigits:0})}
+                      ${(h.value||0).toLocaleString('en-US',{maximumFractionDigits:0})}
                     </td>
                     <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--fg3)'}}>
-                      {((h.value/total)*100).toFixed(1)}%
+                      {total > 0 ? ((h.value/total)*100).toFixed(1) : '0.0'}%
                     </td>
-                    <td style={{padding:'8px 12px 8px 4px'}}>
-                      <Sparkline data={spark} width={72} height={24} color={color} />
+                    <td style={{textAlign:'center',padding:'4px 8px'}}>
+                      <button onClick={() => removePosition(h.ticker)}
+                        style={{background:'none',border:'none',color:'var(--fg3)',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px 6px',borderRadius:4}}
+                        title={`Remove ${h.ticker}`}>×</button>
                     </td>
                   </tr>
                 );
@@ -477,16 +564,55 @@ function VoicesPage() {
 // ─── STOCK DETAIL PAGE ────────────────────────────────────────────────────────
 
 function StockPage({ ticker, onBack }) {
-  const h = MOCK.portfolio.find(h => h.ticker === ticker);
-  const spark = MOCK.sparklines[ticker] || [];
+  const [quote, setQuote] = React.useState(null);
+  const [loadingQ, setLoadingQ] = React.useState(true);
   const [timeframe, setTimeframe] = React.useState('5D');
 
-  if (!h) return <div className="page-root"><div className="page-header"><h1 className="page-title">Not found</h1></div></div>;
+  // Get user's position data from localStorage for shares/cost info
+  const positions = loadSavedPositions();
+  const pos = positions.find(p => p.ticker === ticker);
+
+  React.useEffect(() => {
+    setLoadingQ(true);
+    fetch(`${API_URL}/stocks/live/${ticker}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setQuote(d); setLoadingQ(false); })
+      .catch(() => setLoadingQ(false));
+  }, [ticker]);
+
+  const spark = MOCK.sparklines[ticker] || [];
+
+  // Build a display object from either live data or fallback
+  const h = quote ? {
+    ticker,
+    name: quote.name || ticker,
+    price: quote.price || 0,
+    pct: quote.changePercent || 0,
+    change: quote.change || 0,
+    shares: pos?.shares || 0,
+    costBasis: pos?.costBasis || quote.price || 0,
+    value: (quote.price || 0) * (pos?.shares || 0),
+    prevClose: (quote.price || 0) - (quote.change || 0)
+  } : null;
+
+  if (loadingQ) return (
+    <div className="page-root">
+      <button onClick={onBack} style={{display:'flex',alignItems:'center',gap:6,marginBottom:16,background:'none',border:'none',color:'var(--fg3)',cursor:'pointer',fontSize:12,fontFamily:'var(--font-mono)',padding:0}}>← Back to Portfolio</button>
+      <div style={{color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:13,paddingTop:40}}>Loading {ticker}…</div>
+    </div>
+  );
+
+  if (!h) return (
+    <div className="page-root">
+      <button onClick={onBack} style={{display:'flex',alignItems:'center',gap:6,marginBottom:16,background:'none',border:'none',color:'var(--fg3)',cursor:'pointer',fontSize:12,fontFamily:'var(--font-mono)',padding:0}}>← Back to Portfolio</button>
+      <div style={{color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:13,paddingTop:40}}>Could not load data for {ticker}</div>
+    </div>
+  );
 
   const up = h.pct >= 0;
   const color = up ? 'var(--green)' : 'var(--red-loss)';
-  const posValue = h.value;
-  const dayPnL = h.change * h.shares;
+  const posValue = h.shares > 0 ? h.value : null;
+  const dayPnL = h.shares > 0 ? h.change * h.shares : null;
 
   const newsItems = MOCK.news.slice(0,3);
 
@@ -551,10 +677,10 @@ function StockPage({ ticker, onBack }) {
       {/* Position stats */}
       <div className="kpi-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:14}}>
         {[
-          {label:'Position Value', val:`$${posValue.toLocaleString('en-US',{maximumFractionDigits:0})}`, sub:`${h.shares} shares`},
-          {label:'Day P&L', val:`${dayPnL>=0?'+':''}$${Math.abs(dayPnL).toFixed(2)}`, sub:`${h.pct.toFixed(2)}%`, color},
-          {label:'Avg Cost', val:`$${h.prevClose.toFixed(2)}`, sub:'prior close'},
-          {label:'Portfolio %', val:`${((h.value/MOCK.portfolio.reduce((s,x)=>s+x.value,0))*100).toFixed(1)}%`, sub:'allocation'},
+          {label:'Position Value', val: posValue != null ? `$${posValue.toLocaleString('en-US',{maximumFractionDigits:0})}` : '—', sub: h.shares > 0 ? `${h.shares} shares` : 'Not in portfolio'},
+          {label:'Day P&L', val: dayPnL != null ? `${dayPnL>=0?'+':''}$${Math.abs(dayPnL).toFixed(2)}` : `${up?'+':''}${h.pct.toFixed(2)}%`, sub:`${h.pct.toFixed(2)}% today`, color},
+          {label:'Prev Close', val:`$${h.prevClose.toFixed(2)}`, sub:'prior close'},
+          {label:'Cost Basis', val: h.costBasis > 0 ? `$${h.costBasis.toFixed(2)}` : '—', sub:'avg cost per share'},
         ].map(({label,val,sub,color:c})=>(
           <div key={label} className="stat-card">
             <span className="stat-label">{label}</span>
