@@ -2276,9 +2276,9 @@ function NetworkGraph({ contacts, onSelectNode, selectedId }) {
   const selected = contacts.find(c => c.id === selectedId);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'relative', width: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Graph canvas */}
-      <div ref={containerRef} style={{ flex: 1, borderRadius: 12, overflow: 'hidden', background: '#0d0d12', position: 'relative', minHeight: 400 }}>
+      <div ref={containerRef} style={{ width: '100%', height: 520, borderRadius: 12, overflow: 'hidden', background: '#0d0d12', position: 'relative' }}>
         <svg ref={svgRef} width="100%" height="100%"
           style={{ display: 'block', cursor: 'grab', touchAction: 'none', userSelect: 'none' }}
           onMouseDown={onSvgPointerDown}
