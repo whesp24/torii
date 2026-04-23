@@ -378,6 +378,115 @@ function HeadlinesCard({ onNav }) {
   );
 }
 
+// ─── Command Center Row ───────────────────────────────────────────────────────
+// Surfaces: next meeting, conviction deals, pinned notes, latest AI chat
+
+function CommandCenterRow({ onNav }) {
+  const [nextMeeting,    setNextMeeting]    = React.useState(null);
+  const [convictionDeals, setConvictionDeals] = React.useState([]);
+  const [pinnedNotes,    setPinnedNotes]    = React.useState([]);
+  const [lastConvo,      setLastConvo]      = React.useState(null);
+  const [loaded,         setLoaded]         = React.useState(false);
+
+  React.useEffect(() => {
+    Promise.all([
+      fetch(`${API_URL}/meetings`).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`${API_URL}/deals?stage=conviction`).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`${API_URL}/notes`).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`${API_URL}/assistant/conversations`).then(r => r.ok ? r.json() : []).catch(() => []),
+    ]).then(([meetings, deals, notes, convos]) => {
+      const now = new Date();
+      const upcoming = (meetings || [])
+        .filter(m => m.status === 'upcoming' && new Date(m.date) > now)
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+      setNextMeeting(upcoming[0] || null);
+      setConvictionDeals((deals || []).slice(0, 3));
+      setPinnedNotes((notes || []).filter(n => n.pinned).slice(0, 3));
+      setLastConvo((convos || [])[0] || null);
+      setLoaded(true);
+    });
+  }, []);
+
+  if (!loaded) return null;
+  const hasData = nextMeeting || convictionDeals.length > 0 || pinnedNotes.length > 0 || lastConvo;
+  if (!hasData) return null;
+
+  const cardStyle = { cursor:'pointer', padding:'14px 16px', transition:'border-color 0.15s' };
+  const labelStyle = { fontSize:10, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:7 };
+
+  function daysUntil(d) {
+    const diff = new Date(d) - new Date();
+    const days = Math.ceil(diff / 86400000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return 'Tomorrow';
+    return `in ${days}d`;
+  }
+
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:11,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:10}}>
+        Command Center
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',gap:10}}>
+
+        {/* Next Meeting */}
+        {nextMeeting && (
+          <div className="card" style={{...cardStyle, borderLeft:'3px solid #3B82F6'}} onClick={() => onNav('meetings')}>
+            <div style={labelStyle}>Next Meeting</div>
+            <div style={{fontWeight:700,fontSize:14,color:'var(--fg)',marginBottom:2}}>{nextMeeting.contactName}</div>
+            <div style={{fontSize:11,color:'var(--fg3)',marginBottom:4}}>
+              {new Date(nextMeeting.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}
+            </div>
+            <span style={{fontSize:11,padding:'2px 8px',background:'#3B82F622',color:'#3B82F6',borderRadius:4,fontWeight:700}}>
+              {daysUntil(nextMeeting.date)}
+            </span>
+          </div>
+        )}
+
+        {/* Conviction deals */}
+        {convictionDeals.length > 0 && (
+          <div className="card" style={{...cardStyle, borderLeft:'3px solid #A855F7'}} onClick={() => onNav('deals')}>
+            <div style={labelStyle}>Conviction ({convictionDeals.length})</div>
+            {convictionDeals.map(d => (
+              <div key={d._id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                <span style={{fontSize:13,fontWeight:700,color:'var(--fg)'}}>{d.company}</span>
+                {d.ticker && <span style={{fontSize:11,fontFamily:'var(--font-mono)',color:'#A855F7'}}>{d.ticker}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pinned notes */}
+        {pinnedNotes.length > 0 && (
+          <div className="card" style={{...cardStyle, borderLeft:'3px solid #f59e0b'}} onClick={() => onNav('notes')}>
+            <div style={labelStyle}>Pinned Notes</div>
+            {pinnedNotes.map(n => (
+              <div key={n._id} style={{display:'flex',alignItems:'center',gap:6,marginBottom:5,overflow:'hidden'}}>
+                {n.ticker && <span style={{fontSize:10,fontFamily:'var(--font-mono)',color:'var(--red)',flexShrink:0}}>{n.ticker}</span>}
+                <span style={{fontSize:12,color:'var(--fg2)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{n.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Latest AI chat */}
+        {lastConvo && (
+          <div className="card" style={{...cardStyle, borderLeft:'3px solid #22c55e'}} onClick={() => onNav('assistant')}>
+            <div style={labelStyle}>Latest AI Chat</div>
+            <div style={{fontSize:13,color:'var(--fg2)',lineHeight:1.5,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>
+              {lastConvo.title || 'Untitled conversation'}
+            </div>
+            <div style={{fontSize:10,color:'var(--fg3)',marginTop:6}}>
+              {new Date(lastConvo.updatedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
 // ─── Desktop Overview ─────────────────────────────────────────────────────────
 
 function OverviewPage({ onNav }) {
@@ -425,6 +534,9 @@ function OverviewPage({ onNav }) {
           );
         })}
       </div>
+
+      {/* Command Center — next meeting, conviction deals, pinned notes, AI */}
+      <CommandCenterRow onNav={onNav} />
 
       {/* Main 2-col grid */}
       <div className="overview-grid">

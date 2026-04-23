@@ -2,6 +2,17 @@
 
 const API_URL = 'https://torii-backend.onrender.com/api';
 
+// ─── RESPONSIVE HOOK ──────────────────────────────────────────────────────────
+function useIsMobile() {
+  const [mobile, setMobile] = React.useState(window.innerWidth < 720);
+  React.useEffect(() => {
+    const fn = () => setMobile(window.innerWidth < 720);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return mobile;
+}
+
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
 function PortfolioPage({ onNav }) {
@@ -2041,205 +2052,167 @@ function initials(name) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 }
 
-// Build edges between contacts that share company / school / location
-function buildEdges(contacts, filters = { company: true, school: true, location: false }) {
-  // Group contacts by field, then connect pairs — but cap group size to prevent hairballs
-  function groupEdges(field, type, color, maxGroupSize) {
-    if (!filters[type]) return [];
-    const groups = {};
+// ─── HUB-NODE GRAPH: company/school/location as actual hub nodes ──────────────
+// Contacts spring toward their hub nodes instead of connecting peer-to-peer.
+function buildHubGraph(contacts, filters = { company: true, school: true, location: false }) {
+  const contactNodes = contacts.map(c => ({
+    id: c.id, label: c.name, initials: initials(c.name), nodeType: 'contact',
+    company: c.company, school: c.school, location: c.location,
+    x: 0, y: 0, vx: 0, vy: 0,
+  }));
+  const hubMap = {};
+  const edges = [];
+
+  function processField(field, type, color, maxSize) {
+    if (!filters[type]) return;
+    const counts = {};
+    for (const c of contacts) { const v = c[field]?.trim(); if (v) counts[v] = (counts[v]||0) + 1; }
     for (const c of contacts) {
-      const key = c[field]?.trim()?.toLowerCase();
-      if (!key) continue;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(c.id);
-    }
-    const edges = [], seen = new Set();
-    for (const members of Object.values(groups)) {
-      if (members.length < 2 || members.length > maxGroupSize) continue;
-      for (let i = 0; i < members.length; i++) {
-        for (let j = i + 1; j < members.length; j++) {
-          const k = [members[i], members[j]].sort().join('|');
-          if (!seen.has(k)) { seen.add(k); edges.push({ source: members[i], target: members[j], type, color }); }
-        }
+      const v = c[field]?.trim();
+      if (!v || counts[v] < 2 || counts[v] > maxSize) continue;
+      const key = `hub|${type}|${v.toLowerCase()}`;
+      if (!hubMap[key]) {
+        hubMap[key] = { id: key, label: v.length > 20 ? v.slice(0,18)+'…' : v, nodeType: type, color, count: counts[v], x: 0, y: 0, vx: 0, vy: 0 };
       }
+      edges.push({ source: c.id, target: key, type, color });
     }
-    return edges;
   }
-  return [
-    ...groupEdges('company',  'company',  '#4a9eff', 12),  // up to 12 per company
-    ...groupEdges('school',   'school',   '#4ade80', 12),  // up to 12 per school
-    ...groupEdges('location', 'location', '#fbbf24',  6),  // cap at 6 for location (off by default)
-  ];
+  processField('company', 'company', '#4a9eff', 20);
+  processField('school',  'school',  '#4ade80', 20);
+  processField('location','location','#fbbf24', 12);
+
+  const hubNodes = Object.values(hubMap);
+  return { contactNodes, hubNodes, allNodes: [...contactNodes, ...hubNodes], edges };
 }
 
 function NetworkGraph({ contacts, onSelectNode, selectedId, edgeFilters }) {
   const containerRef = React.useRef(null);
   const svgRef       = React.useRef(null);
   const animRef      = React.useRef(null);
-  const dragRef      = React.useRef(null);   // { id, offsetX, offsetY }
-  const panRef       = React.useRef(null);   // { startX, startY, tx, ty }
+  const dragRef      = React.useRef(null);
+  const panRef       = React.useRef(null);
   const nodesRef     = React.useRef([]);
+  const edgesRef     = React.useRef([]);
 
-  const [nodes,     setNodes]     = React.useState([]);
+  const [allNodes,  setAllNodes]  = React.useState([]);
   const [edges,     setEdges]     = React.useState([]);
   const [transform, setTransform] = React.useState({ x: 0, y: 0, k: 1 });
-  const [size,      setSize]      = React.useState({ w: 800, h: 560 });
+  const [size,      setSize]      = React.useState({ w: 800, h: 520 });
 
-  // Measure container
   React.useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => {
-      setSize({ w: e.contentRect.width, h: e.contentRect.height });
-    });
+    const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }));
     ro.observe(el);
     setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
 
-  // Build graph when contacts change
   React.useEffect(() => {
-    if (contacts.length === 0) { setNodes([]); setEdges([]); return; }
+    if (contacts.length === 0) { setAllNodes([]); setEdges([]); nodesRef.current = []; edgesRef.current = []; return; }
     const { w, h } = size;
     const cx = w / 2, cy = h / 2;
-    const r  = Math.min(w, h) * 0.28;
-    const n  = contacts.map((c, i) => {
-      const angle = (i / contacts.length) * 2 * Math.PI;
-      return {
-        id: c.id, label: c.name, company: c.company,
-        school: c.school, location: c.location,
-        x: cx + r * Math.cos(angle) + (Math.random() - 0.5) * 60,
-        y: cy + r * Math.sin(angle) + (Math.random() - 0.5) * 60,
-        vx: 0, vy: 0,
-      };
+    const graph = buildHubGraph(contacts, edgeFilters);
+    // Hubs fan out in a ring, contacts scatter near center
+    const hubR = Math.min(w, h) * 0.33;
+    graph.hubNodes.forEach((hub, i) => {
+      const angle = (i / Math.max(graph.hubNodes.length, 1)) * 2 * Math.PI;
+      hub.x = cx + hubR * Math.cos(angle) + (Math.random() - 0.5) * 40;
+      hub.y = cy + hubR * Math.sin(angle) + (Math.random() - 0.5) * 40;
     });
-    const e = buildEdges(contacts, edgeFilters);
-    nodesRef.current = n;
-    setNodes([...n]);
-    setEdges(e);
+    graph.contactNodes.forEach(cn => {
+      cn.x = cx + (Math.random() - 0.5) * Math.min(w, h) * 0.55;
+      cn.y = cy + (Math.random() - 0.5) * Math.min(w, h) * 0.55;
+    });
+    nodesRef.current = graph.allNodes;
+    edgesRef.current = graph.edges;
+    setAllNodes([...graph.allNodes]);
+    setEdges(graph.edges);
   }, [contacts.length, size.w, JSON.stringify(edgeFilters)]);
 
-  // Force simulation
   React.useEffect(() => {
-    if (nodes.length === 0) return;
-    let frame = 0;
-    let running = true;
-    const simEdges = buildEdges(contacts, edgeFilters);
-    const simNodes = nodesRef.current.map(n => ({ ...n }));
-
+    if (allNodes.length === 0) return;
+    let frame = 0, running = true;
     function tick() {
-      if (!running || frame > 500) return;
+      if (!running || frame > 700) return;
       frame++;
+      const sn = nodesRef.current;
+      const se = edgesRef.current;
       const { w, h } = size;
-      // Stronger repulsion + longer springs = much more spread out
-      const repulsion = 9000, springLen = 220, springK = 0.018, damping = 0.74, gravity = 0.006;
       const cx = w / 2, cy = h / 2;
-      const deg = {};
-      for (const e of simEdges) { deg[e.source] = (deg[e.source]||0)+1; deg[e.target] = (deg[e.target]||0)+1; }
-
-      for (let i = 0; i < simNodes.length; i++) {
-        const ni = simNodes[i];
+      for (const ni of sn) {
         if (dragRef.current?.id === ni.id) continue;
+        const isHub = ni.nodeType !== 'contact';
         let fx = 0, fy = 0;
-
-        for (let j = 0; j < simNodes.length; j++) {
-          if (i === j) continue;
-          const nj = simNodes[j];
+        for (const nj of sn) {
+          if (ni.id === nj.id) continue;
           const dx = ni.x - nj.x || 0.01, dy = ni.y - nj.y || 0.01;
-          const d2 = dx*dx + dy*dy, d = Math.sqrt(d2) || 1;
-          const f = repulsion / d2;
+          const d2 = dx*dx + dy*dy || 1, d = Math.sqrt(d2);
+          const jIsHub = nj.nodeType !== 'contact';
+          const rep = (isHub && jIsHub) ? 30000 : (isHub || jIsHub) ? 6000 : 2800;
+          const f = rep / d2;
           fx += (dx/d)*f; fy += (dy/d)*f;
         }
-        for (const e of simEdges) {
+        for (const e of se) {
           if (e.source !== ni.id && e.target !== ni.id) continue;
           const otherId = e.source === ni.id ? e.target : e.source;
-          const nj = simNodes.find(n => n.id === otherId);
+          const nj = sn.find(n => n.id === otherId);
           if (!nj) continue;
-          const dx = nj.x-ni.x, dy = nj.y-ni.y;
-          const d = Math.sqrt(dx*dx+dy*dy)||1;
-          const stretch = (d - springLen) * springK;
+          const dx = nj.x - ni.x, dy = nj.y - ni.y;
+          const d = Math.sqrt(dx*dx + dy*dy) || 1;
+          const stretch = (d - 90) * 0.045;
           fx += (dx/d)*stretch; fy += (dy/d)*stretch;
         }
-        fx += (cx - ni.x) * gravity;
-        fy += (cy - ni.y) * gravity;
-        ni.vx = (ni.vx + fx) * damping;
-        ni.vy = (ni.vy + fy) * damping;
-        ni.x = Math.max(60, Math.min(w-60, ni.x + ni.vx));
-        ni.y = Math.max(40, Math.min(h-40, ni.y + ni.vy));
+        const grav = isHub ? 0.005 : 0.002;
+        fx += (cx - ni.x) * grav;
+        fy += (cy - ni.y) * grav;
+        ni.vx = (ni.vx + fx) * 0.76;
+        ni.vy = (ni.vy + fy) * 0.76;
+        ni.x = Math.max(55, Math.min(w - 55, ni.x + ni.vx));
+        ni.y = Math.max(40, Math.min(h - 40, ni.y + ni.vy));
       }
-      nodesRef.current = simNodes;
-      setNodes([...simNodes]);
+      nodesRef.current = [...sn];
+      setAllNodes([...sn]);
       animRef.current = requestAnimationFrame(tick);
     }
     animRef.current = requestAnimationFrame(tick);
     return () => { running = false; cancelAnimationFrame(animRef.current); };
-  }, [contacts.length]);
+  }, [allNodes.length]);
 
-  // Degree map for node sizing
-  const degree = {};
-  for (const e of edges) { degree[e.source]=(degree[e.source]||0)+1; degree[e.target]=(degree[e.target]||0)+1; }
-
-  // Node color: dominant edge type → color, isolated → dim gray
-  function nodeColor(nodeId, isSelected) {
-    if (isSelected) return '#E0001E';
-    const ne = edges.filter(e => e.source===nodeId||e.target===nodeId);
-    if (ne.length === 0) return '#4a4a5a';
-    const types = ne.map(e=>e.type);
-    const dominant = ['company','school','location'].find(t=>types.includes(t)) || types[0];
-    return dominant==='company'?'#4a9eff':dominant==='school'?'#4ade80':'#fbbf24';
+  function svgOffset(e) {
+    const rect = svgRef.current.getBoundingClientRect();
+    const pt = e.touches ? e.touches[0] : e;
+    return { cx: pt.clientX - rect.left, cy: pt.clientY - rect.top };
   }
-
-  // Node radius: 4px base, +2px per connection, max 10
-  function nodeRadius(nodeId) {
-    const d = degree[nodeId] || 0;
-    return Math.min(4 + d * 2, 12);
-  }
-
-  // ── Pointer interactions ──────────────────────────────────────────────────────
-
-  // Convert screen coords → SVG world coords
   function screenToWorld(cx, cy) {
     const { x, y, k } = transform;
     return { wx: (cx - x) / k, wy: (cy - y) / k };
   }
 
-  function getClientXY(e) {
-    if (e.touches) return { cx: e.touches[0].clientX, cy: e.touches[0].clientY };
-    return { cx: e.clientX, cy: e.clientY };
-  }
-
-  function svgClientOffset(e) {
-    const rect = svgRef.current.getBoundingClientRect();
-    const { cx, cy } = getClientXY(e);
-    return { cx: cx - rect.left, cy: cy - rect.top };
-  }
-
-  function onNodePointerDown(e, nodeId) {
-    e.stopPropagation();
-    e.preventDefault();
-    const { cx, cy } = svgClientOffset(e);
+  function onNodeDown(e, nodeId) {
+    e.stopPropagation(); e.preventDefault();
+    const { cx, cy } = svgOffset(e);
     const { wx, wy } = screenToWorld(cx, cy);
     const node = nodesRef.current.find(n => n.id === nodeId);
     if (!node) return;
-    dragRef.current = { id: nodeId, dx: wx - node.x, dy: wy - node.y };
-
+    dragRef.current = { id: nodeId, dx: wx - node.x, dy: wy - node.y, moved: false };
+    const startCx = cx, startCy = cy;
     function onMove(ev) {
-      const { cx: mx, cy: my } = svgClientOffset(ev);
+      const { cx: mx, cy: my } = svgOffset(ev);
+      if (Math.hypot(mx - startCx, my - startCy) > 5) dragRef.current.moved = true;
       const { wx: wx2, wy: wy2 } = screenToWorld(mx, my);
       nodesRef.current = nodesRef.current.map(n =>
         n.id === nodeId ? { ...n, x: wx2 - dragRef.current.dx, y: wy2 - dragRef.current.dy, vx: 0, vy: 0 } : n
       );
-      setNodes([...nodesRef.current]);
+      setAllNodes([...nodesRef.current]);
     }
-    function onUp(ev) {
-      // If barely moved → treat as click (select)
-      const { cx: ux, cy: uy } = svgClientOffset(ev);
-      const { wx: wx2, wy: wy2 } = screenToWorld(ux, uy);
-      const node2 = nodesRef.current.find(n => n.id === nodeId);
-      if (node2 && Math.hypot(wx2-node2.x, wy2-node2.y) < 6) {
-        onSelectNode(nodeId === selectedId ? null : nodeId);
-      }
+    function onUp() {
+      const moved = dragRef.current?.moved;
       dragRef.current = null;
+      if (!moved) {
+        const node = nodesRef.current.find(n => n.id === nodeId);
+        if (node?.nodeType === 'contact') onSelectNode(nodeId === selectedId ? null : nodeId);
+      }
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchmove', onMove);
@@ -2251,159 +2224,131 @@ function NetworkGraph({ contacts, onSelectNode, selectedId, edgeFilters }) {
     window.addEventListener('touchend', onUp);
   }
 
-  function onSvgPointerDown(e) {
-    if (e.target !== svgRef.current && e.target.closest('g[data-node]')) return;
-    const { cx, cy } = svgClientOffset(e);
+  function onSvgDown(e) {
+    if (e.target !== svgRef.current) return;
+    const { cx, cy } = svgOffset(e);
     panRef.current = { startX: cx, startY: cy, tx: transform.x, ty: transform.y };
-
     function onMove(ev) {
       if (!panRef.current) return;
-      const { cx: mx, cy: my } = svgClientOffset(ev);
-      setTransform(t => ({ ...t, x: panRef.current.tx + (mx - panRef.current.startX), y: panRef.current.ty + (my - panRef.current.startY) }));
+      const { cx: mx, cy: my } = svgOffset(ev);
+      setTransform(t => ({ ...t, x: panRef.current.tx + mx - panRef.current.startX, y: panRef.current.ty + my - panRef.current.startY }));
     }
-    function onUp() {
-      panRef.current = null;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('touchmove', onMove);
-      window.removeEventListener('touchend', onUp);
-    }
+    function onUp() { panRef.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-    window.addEventListener('touchmove', onMove, { passive: false });
-    window.addEventListener('touchend', onUp);
   }
 
   function onWheel(e) {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.12 : 0.88;
-    const { cx, cy } = svgClientOffset(e);
+    const { cx, cy } = svgOffset(e);
     setTransform(t => {
       const k2 = Math.max(0.15, Math.min(5, t.k * factor));
-      // Zoom toward cursor
-      const x2 = cx - (cx - t.x) * (k2 / t.k);
-      const y2 = cy - (cy - t.y) * (k2 / t.k);
-      return { x: x2, y: y2, k: k2 };
+      return { x: cx - (cx - t.x) * (k2 / t.k), y: cy - (cy - t.y) * (k2 / t.k), k: k2 };
     });
   }
 
-  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const selected = contacts.find(c => c.id === selectedId);
+  const contactNodes = allNodes.filter(n => n.nodeType === 'contact');
+  const hubNodes     = allNodes.filter(n => n.nodeType !== 'contact');
 
   return (
     <div style={{ position: 'relative', width: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Graph canvas */}
-      <div ref={containerRef} style={{ width: '100%', height: 520, borderRadius: 12, overflow: 'hidden', background: '#0d0d12', position: 'relative' }}>
+      <div ref={containerRef} style={{ width: '100%', height: 520, borderRadius: 12, overflow: 'hidden', background: '#080810', position: 'relative' }}>
         <svg ref={svgRef} width="100%" height="100%"
           style={{ display: 'block', cursor: 'grab', touchAction: 'none', userSelect: 'none' }}
-          onMouseDown={onSvgPointerDown}
-          onTouchStart={onSvgPointerDown}
-          onWheel={onWheel}>
-
+          onMouseDown={onSvgDown} onTouchStart={onSvgDown} onWheel={onWheel}>
           <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
-            {/* Edges — straight, thin, colored */}
+
+            {/* Hub glow halos */}
+            {hubNodes.map(hub => (
+              <circle key={`glow-${hub.id}`} cx={hub.x} cy={hub.y} r={54} fill={hub.color} fillOpacity={0.04} />
+            ))}
+
+            {/* Edges */}
             {edges.map((e, i) => {
-              const s = nodeMap[e.source], t = nodeMap[e.target];
-              if (!s || !t) return null;
-              const isConnectedToSelected = selectedId && (e.source===selectedId||e.target===selectedId);
-              return (
-                <line key={i}
-                  x1={s.x} y1={s.y} x2={t.x} y2={t.y}
-                  stroke={e.color}
-                  strokeWidth={isConnectedToSelected ? 1.2 : 0.6}
-                  strokeOpacity={isConnectedToSelected ? 0.8 : 0.3}
-                />
-              );
+              const src = allNodes.find(n => n.id === e.source);
+              const tgt = allNodes.find(n => n.id === e.target);
+              if (!src || !tgt) return null;
+              const isActive = selectedId && (e.source === selectedId || e.target === selectedId);
+              return <line key={i} x1={src.x} y1={src.y} x2={tgt.x} y2={tgt.y}
+                stroke={e.color} strokeWidth={isActive ? 1.6 : 0.7} strokeOpacity={isActive ? 0.85 : 0.28} />;
             })}
 
-            {/* Nodes */}
-            {nodes.map(n => {
-              const isSelected  = n.id === selectedId;
-              const r           = nodeRadius(n.id);
-              const color       = nodeColor(n.id, isSelected);
-              const isConnected = selectedId && edges.some(e => (e.source===n.id||e.target===n.id) && (e.source===selectedId||e.target===selectedId));
-              const dimmed      = selectedId && !isSelected && !isConnected;
+            {/* Hub nodes — labeled circles */}
+            {hubNodes.map(hub => (
+              <g key={hub.id} onMouseDown={ev => onNodeDown(ev, hub.id)} onTouchStart={ev => onNodeDown(ev, hub.id)} style={{ cursor: 'grab' }}>
+                <circle cx={hub.x} cy={hub.y} r={28} fill={hub.color + '1a'} stroke={hub.color} strokeWidth={1.8} />
+                <text x={hub.x} y={hub.y - 4} textAnchor="middle" dominantBaseline="middle"
+                  fill={hub.color} fontSize={8} fontWeight={700}
+                  style={{ fontFamily: 'var(--font-ui)', pointerEvents: 'none', letterSpacing: '0.03em' }}>
+                  {hub.label}
+                </text>
+                <text x={hub.x} y={hub.y + 12} textAnchor="middle"
+                  fill={hub.color} fontSize={7} fillOpacity={0.65}
+                  style={{ fontFamily: 'var(--font-mono)', pointerEvents: 'none' }}>
+                  {hub.count}
+                </text>
+              </g>
+            ))}
+
+            {/* Contact nodes — small initials dots */}
+            {contactNodes.map(cn => {
+              const isSel   = cn.id === selectedId;
+              const isConn  = selectedId && edges.some(e => (e.source === cn.id || e.target === cn.id) && (e.source === selectedId || e.target === selectedId));
+              const dimmed  = selectedId && !isSel && !isConn;
+              const r = isSel ? 13 : 9;
               return (
-                <g key={n.id} data-node="1"
-                  onMouseDown={ev => onNodePointerDown(ev, n.id)}
-                  onTouchStart={ev => onNodePointerDown(ev, n.id)}
-                  style={{ cursor: 'pointer', opacity: dimmed ? 0.3 : 1 }}>
-
-                  {/* Glow behind selected/connected nodes */}
-                  {(isSelected || isConnected) && (
-                    <circle cx={n.x} cy={n.y} r={r + 6}
-                      fill={color} fillOpacity={isSelected ? 0.25 : 0.12} />
-                  )}
-
-                  {/* Node dot */}
-                  <circle cx={n.x} cy={n.y} r={r}
-                    fill={color}
-                    fillOpacity={isSelected ? 1 : 0.85}
-                  />
-
-                  {/* Label — floats to the right of the dot */}
-                  <text x={n.x + r + 5} y={n.y}
-                    dominantBaseline="central"
-                    fontSize={Math.min(10 + r * 0.3, 12)}
-                    fontFamily="'Space Grotesk',system-ui,sans-serif"
-                    fontWeight={isSelected ? 700 : 400}
-                    fill={isSelected ? '#fff' : dimmed ? '#555' : '#aaa'}
-                    style={{ pointerEvents: 'none' }}>
-                    {n.label}
+                <g key={cn.id} onMouseDown={ev => onNodeDown(ev, cn.id)} onTouchStart={ev => onNodeDown(ev, cn.id)}
+                  style={{ cursor: 'pointer', opacity: dimmed ? 0.22 : 1 }}>
+                  {isSel && <circle cx={cn.x} cy={cn.y} r={r + 7} fill="var(--red)" fillOpacity={0.2} />}
+                  <circle cx={cn.x} cy={cn.y} r={r}
+                    fill={isSel ? 'var(--red)' : '#141422'}
+                    stroke={isSel ? 'var(--red)' : isConn ? '#5566bb' : '#2a2a42'}
+                    strokeWidth={isSel ? 2.5 : 1.2} />
+                  <text x={cn.x} y={cn.y} textAnchor="middle" dominantBaseline="middle"
+                    fill={isSel ? 'white' : '#7788aa'} fontSize={6} fontWeight={700}
+                    style={{ fontFamily: 'var(--font-mono)', pointerEvents: 'none' }}>
+                    {cn.initials}
                   </text>
+                  {isSel && (
+                    <text x={cn.x} y={cn.y + r + 9} textAnchor="middle"
+                      fill="rgba(255,255,255,0.9)" fontSize={8} fontWeight={600}
+                      style={{ fontFamily: 'var(--font-ui)', pointerEvents: 'none' }}>
+                      {cn.label.split(' ')[0]}
+                    </text>
+                  )}
                 </g>
               );
             })}
           </g>
         </svg>
 
-        {/* Legend overlay */}
-        <div style={{ position:'absolute', bottom:10, left:12, display:'flex', gap:12, pointerEvents:'none' }}>
-          {[['#4a9eff','Company'],['#4ade80','School'],['#fbbf24','Location']].map(([c,l]) => (
-            <div key={l} style={{ display:'flex', alignItems:'center', gap:5, fontSize:10, color:'#666', fontFamily:'var(--font-mono)' }}>
-              <div style={{ width:6, height:6, borderRadius:'50%', background:c }} />
+        {/* Legend */}
+        <div style={{ position: 'absolute', bottom: 10, left: 12, display: 'flex', gap: 14, pointerEvents: 'none' }}>
+          {[['#4a9eff', 'Company'], ['#4ade80', 'School'], ['#fbbf24', 'City']].map(([c, l]) => (
+            <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#555', fontFamily: 'var(--font-mono)' }}>
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
               {l}
             </div>
           ))}
         </div>
 
-        {/* Zoom hint */}
-        <div style={{ position:'absolute', bottom:10, right:12, fontSize:10, color:'#444', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>
-          scroll to zoom · drag to pan
-        </div>
-
         {/* Zoom controls */}
-        <div style={{ position:'absolute', top:10, right:12, display:'flex', flexDirection:'column', gap:4 }}>
+        <div style={{ position: 'absolute', top: 10, right: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[['＋', 1.25], ['−', 0.8], ['⊙', null]].map(([label, factor]) => (
             <button key={label} onClick={() => {
               if (!factor) { setTransform({ x: 0, y: 0, k: 1 }); return; }
-              setTransform(t => ({ x: t.x, y: t.y, k: Math.max(0.15, Math.min(5, t.k * factor)) }));
-            }} style={{ width:28, height:28, background:'#1a1a24', border:'1px solid #2a2a38', borderRadius:6, color:'#aaa', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              setTransform(t => ({ ...t, k: Math.max(0.15, Math.min(5, t.k * factor)) }));
+            }} style={{ width: 28, height: 28, background: '#14142088', border: '1px solid #2a2a44', borderRadius: 6, color: '#888', fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {label}
             </button>
           ))}
         </div>
-      </div>
 
-      {/* Selected contact detail */}
-      {selected && (
-        <div style={{ marginTop:10, padding:'12px 16px', background:'var(--surf)', borderRadius:10, border:'1px solid var(--bdr)', display:'flex', gap:12, alignItems:'flex-start' }}>
-          <div style={{ width:38, height:38, borderRadius:'50%', background:'var(--red-dim)', color:'var(--red)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'var(--font-mono)', fontWeight:800, fontSize:12, flexShrink:0 }}>
-            {initials(selected.name)}
-          </div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>{selected.name}</div>
-            {selected.role && <div style={{ fontSize:12, color:'var(--fg3)', marginBottom:6 }}>{selected.role}</div>}
-            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-              {selected.company  && <span style={{ fontSize:11, padding:'2px 7px', background:'#4a9eff22', color:'#4a9eff', border:'1px solid #4a9eff44', borderRadius:4 }}>🏢 {selected.company}</span>}
-              {selected.school   && <span style={{ fontSize:11, padding:'2px 7px', background:'#4ade8022', color:'#4ade80', border:'1px solid #4ade8044', borderRadius:4 }}>🎓 {selected.school}</span>}
-              {selected.location && <span style={{ fontSize:11, padding:'2px 7px', background:'#fbbf2422', color:'#fbbf24', border:'1px solid #fbbf2444', borderRadius:4 }}>📍 {selected.location}</span>}
-            </div>
-            {selected.notes && <div style={{ fontSize:11, color:'var(--fg3)', marginTop:6, fontStyle:'italic' }}>{selected.notes}</div>}
-          </div>
-          <button onClick={() => onSelectNode(null)} style={{ color:'var(--fg3)', background:'none', border:'none', fontSize:16, cursor:'pointer', padding:4 }}>✕</button>
+        <div style={{ position: 'absolute', bottom: 10, right: 12, fontSize: 10, color: '#444', fontFamily: 'var(--font-mono)', pointerEvents: 'none' }}>
+          scroll to zoom · drag to pan
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -2478,7 +2423,8 @@ function NetworkingPage() {
   }
 
   const selected = contacts.find(c => c.id === selectedId);
-  const edges     = buildEdges(contacts, edgeFilters);
+  // Compute hub counts for subtitle
+  const hubGraph = React.useMemo(() => buildHubGraph(contacts, edgeFilters), [contacts.length, JSON.stringify(edgeFilters)]);
 
   // Group contacts by company / school / location
   function groupBy(field) {
@@ -2546,7 +2492,7 @@ function NetworkingPage() {
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <h1 className="page-title">Network</h1>
-          <p className="page-sub">{contacts.length} contacts · {edges.length} connections</p>
+          <p className="page-sub">{contacts.length} contacts · {hubGraph.hubNodes.length} clusters</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {/* Edge filters — only shown in graph view */}
@@ -2635,14 +2581,16 @@ function NetworkingPage() {
                   {selected.location && <span style={{ fontSize: 11, padding: '2px 8px', background: '#F59E0B22', color: '#F59E0B', border: '1px solid #F59E0B44', borderRadius: 4 }}>📍 {selected.location}</span>}
                 </div>
                 {selected.notes && <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 8, fontStyle: 'italic' }}>{selected.notes}</div>}
-                {/* Mutual connections */}
+                {/* Cluster memberships */}
                 {(() => {
-                  const mutuals = edges.filter(e => e.source === selectedId || e.target === selectedId);
-                  if (mutuals.length === 0) return null;
+                  const tags = [];
+                  if (selected?.company && edgeFilters.company) tags.push(`🏢 ${selected.company}`);
+                  if (selected?.school  && edgeFilters.school)  tags.push(`🎓 ${selected.school}`);
+                  if (selected?.location && edgeFilters.location) tags.push(`📍 ${selected.location}`);
+                  if (tags.length === 0) return null;
                   return (
                     <div style={{ marginTop: 8, fontSize: 11, color: 'var(--fg3)' }}>
-                      {mutuals.length} connection{mutuals.length !== 1 ? 's' : ''} —
-                      {[...new Set(mutuals.map(e => e.type))].join(', ')}
+                      Connected via: {tags.join(' · ')}
                     </div>
                   );
                 })()}
@@ -2729,11 +2677,13 @@ function NetworkingPage() {
 // ─── AI ASSISTANT PAGE ────────────────────────────────────────────────────────
 
 const QUICK_PROMPTS = [
-  "What's moved the most in my watchlist today?",
-  "Summarize my portfolio P&L",
-  "Who in my network works in private credit?",
-  "What are the key macro risks this week?",
-  "Draft talking points for my next investor meeting",
+  { text: "What's moved the most in my watchlist today?", icon: "📈" },
+  { text: "Summarize my portfolio P&L",                  icon: "💼" },
+  { text: "Who in my network works in private credit?",  icon: "🕸" },
+  { text: "What are the key macro risks this week?",     icon: "⚠" },
+  { text: "Draft talking points for my next investor meeting", icon: "📋" },
+  { text: "Add Jane Smith at Goldman to my network",     icon: "➕" },
+  { text: "Log a note on SONY titled 'Q2 thesis'",       icon: "📝" },
 ];
 
 function AssistantPage() {
@@ -2792,7 +2742,7 @@ function AssistantPage() {
         setMessages(p => [...p, { role: 'assistant', content: hint, timestamp: new Date() }]);
       } else if (data.conversationId) {
         setActiveId(data.conversationId);
-        setMessages(p => [...p, { role: 'assistant', content: data.message, timestamp: new Date() }]);
+        setMessages(p => [...p, { role: 'assistant', content: data.message, action: data.action || null, timestamp: new Date() }]);
         // Update conversation list
         setConversations(prev => {
           const exists = prev.find(c => c._id === data.conversationId);
@@ -2911,36 +2861,57 @@ function AssistantPage() {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {QUICK_PROMPTS.map(p => (
-                  <button key={p} onClick={() => sendMessage(p)}
+                  <button key={p.text} onClick={() => sendMessage(p.text)}
                     style={{ padding: '12px 16px', background: 'var(--surf)', border: '1px solid var(--bdr)', borderRadius: 10, fontSize: 13, color: 'var(--fg2)', cursor: 'pointer', textAlign: 'left',
+                      display: 'flex', alignItems: 'center', gap: 10,
                       transition: 'background 0.15s' }}
                     onMouseEnter={e => e.currentTarget.style.background = 'var(--surf2)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'var(--surf)'}>
-                    {p}
+                    <span style={{ fontSize: 16 }}>{p.icon}</span>
+                    {p.text}
                   </button>
                 ))}
               </div>
             </div>
           )}
 
-          {messages.map((m, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '100%' }}>
-              <div style={{
-                maxWidth: '72%', padding: '12px 16px', borderRadius: m.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                background: m.role === 'user' ? 'var(--red)' : 'var(--surf)',
-                color: m.role === 'user' ? 'white' : 'var(--fg)',
-                fontSize: 13, lineHeight: 1.6,
-                border: m.role === 'assistant' ? '1px solid var(--bdr)' : 'none',
-              }}>
-                {m.role === 'assistant' ? renderContent(m.content) : m.content}
-              </div>
-              {m.timestamp && (
-                <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 3, padding: '0 4px' }}>
-                  {formatTime(m.timestamp)}
+          {messages.map((m, i) => {
+            // Strip action confirmation prefix from assistant content to avoid duplication
+            const actionIcons = { add_contact: '👤', add_note: '📝', move_deal: '📌' };
+            const bodyContent = m.action
+              ? m.content.replace(m.action.confirmation + '\n\n', '').replace(m.action.confirmation, '').trimStart()
+              : m.content;
+            return (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '100%', gap: 6 }}>
+                {/* Action confirmation card */}
+                {m.action && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)',
+                    borderRadius: 8, padding: '6px 12px', fontSize: 12, color: '#4ade80',
+                    maxWidth: '72%',
+                  }}>
+                    <span>{actionIcons[m.action.type] || '✓'}</span>
+                    <span>{m.action.confirmation.replace(/^\✓\s*/, '')}</span>
+                  </div>
+                )}
+                <div style={{
+                  maxWidth: '72%', padding: '12px 16px', borderRadius: m.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                  background: m.role === 'user' ? 'var(--red)' : 'var(--surf)',
+                  color: m.role === 'user' ? 'white' : 'var(--fg)',
+                  fontSize: 13, lineHeight: 1.6,
+                  border: m.role === 'assistant' ? '1px solid var(--bdr)' : 'none',
+                }}>
+                  {m.role === 'assistant' ? renderContent(bodyContent) : m.content}
                 </div>
-              )}
-            </div>
-          ))}
+                {m.timestamp && (
+                  <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 0, padding: '0 4px' }}>
+                    {formatTime(m.timestamp)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {loading && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg3)', fontSize: 13 }}>
@@ -2978,9 +2949,11 @@ function AssistantPage() {
 // ─── NOTES PAGE ───────────────────────────────────────────────────────────────
 
 function NotesPage() {
+  const isMobile   = useIsMobile();
   const [notes,      setNotes]      = React.useState([]);
   const [loading,    setLoading]    = React.useState(true);
   const [search,     setSearch]     = React.useState('');
+  const [activeTag,  setActiveTag]  = React.useState(null);
   const [showForm,   setShowForm]   = React.useState(false);
   const [editing,    setEditing]    = React.useState(null);  // note being edited
   const [form,       setForm]       = React.useState({ title: '', body: '', ticker: '', tags: '' });
@@ -3099,7 +3072,7 @@ function NotesPage() {
       <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div>
           <h1 className="page-title">Research Notes</h1>
-          <p className="page-sub">{notes.length} note{notes.length !== 1 ? 's' : ''}</p>
+          <p className="page-sub">{notes.length} note{notes.length !== 1 ? 's' : ''} · {notes.filter(n => n.pinned).length} pinned</p>
         </div>
         <button onClick={openNew}
           style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
@@ -3107,28 +3080,47 @@ function NotesPage() {
         </button>
       </div>
 
-      {/* Search */}
-      <div style={{ marginBottom: 16, position: 'relative' }}>
+      {/* Search + tag filter */}
+      <div style={{ marginBottom: 12, position: 'relative' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search notes…"
           style={{ width: '100%', padding: '10px 16px 10px 36px', border: '1px solid var(--bdr)', borderRadius: 10, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
         <div style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg3)', fontSize: 14 }}>⌕</div>
       </div>
+      {/* Tag filter chips */}
+      {(() => {
+        const allTags = [...new Set(notes.flatMap(n => n.tags || []))];
+        if (allTags.length === 0) return null;
+        return (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+            {allTags.map(tag => (
+              <button key={tag} onClick={() => setActiveTag(activeTag === tag ? null : tag)}
+                style={{ padding: '3px 10px', borderRadius: 20, border: `1px solid ${activeTag === tag ? 'var(--red)' : 'var(--bdr)'}`,
+                  background: activeTag === tag ? 'var(--red-dim)' : 'var(--surf)', color: activeTag === tag ? 'var(--red)' : 'var(--fg3)',
+                  fontSize: 11, cursor: 'pointer', fontWeight: activeTag === tag ? 700 : 400 }}>
+                #{tag}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)', fontSize: 13 }}>Loading…</div>}
 
       {!loading && notes.length === 0 && (
-        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>📝</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No notes yet</div>
-          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 16 }}>Capture investment theses, meeting prep, research — linked to tickers and contacts.</div>
-          <button onClick={openNew} style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+        <div className="card" style={{ textAlign: 'center', padding: '56px 24px' }}>
+          <div style={{ fontSize: 48, marginBottom: 14 }}>📝</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No notes yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 20, maxWidth: 360, margin: '0 auto 20px' }}>
+            Capture investment theses, meeting prep, research — linked to tickers and contacts.
+          </div>
+          <button onClick={openNew} style={{ padding: '10px 22px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
             Create your first note
           </button>
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {notes.map(note => (
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
+        {notes.filter(note => !activeTag || (note.tags || []).includes(activeTag)).map(note => (
           <div key={note._id} className="card" style={{ cursor: 'pointer', transition: 'border-color 0.15s', borderColor: expanded === note._id ? 'var(--red)' : undefined }}
             onClick={() => setExpanded(expanded === note._id ? null : note._id)}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
@@ -3187,10 +3179,12 @@ const DEAL_STAGES = [
 const PRIORITY_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
 
 function DealsPage() {
+  const isMobile   = useIsMobile();
   const [deals,    setDeals]    = React.useState([]);
   const [loading,  setLoading]  = React.useState(true);
   const [showForm, setShowForm] = React.useState(false);
   const [selected, setSelected] = React.useState(null);  // deal _id expanded
+  const [mobileStage, setMobileStage] = React.useState('watching'); // mobile filter
   const [form,     setForm]     = React.useState({ company: '', ticker: '', stage: 'watching', thesis: '', targetPrice: '', catalysts: '', risks: '', notes: '', priority: 'medium' });
 
   React.useEffect(() => {
@@ -3326,50 +3320,123 @@ function DealsPage() {
       {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)', fontSize: 13 }}>Loading…</div>}
 
       {!loading && deals.length === 0 && (
-        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>🔭</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No deals tracked yet</div>
-          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 16 }}>Track investment ideas from first look through exit. Build your thesis, log catalysts and risks, move deals through stages.</div>
-          <button onClick={() => { setForm(EMPTY_FORM); setShowForm(true); }} style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+        <div className="card" style={{ textAlign: 'center', padding: '56px 24px' }}>
+          <div style={{ fontSize: 48, marginBottom: 14 }}>🔭</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No deals tracked yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 20, maxWidth: 380, margin: '0 auto 20px' }}>
+            Track investment ideas from first look through exit. Build your thesis, log catalysts and risks, move deals through stages.
+          </div>
+          <button onClick={() => { setForm(EMPTY_FORM); setShowForm(true); }} style={{ padding: '10px 22px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
             Add your first deal
           </button>
         </div>
       )}
 
-      {/* Pipeline columns */}
-      {deals.length > 0 && (
+      {/* Stats row */}
+      {!loading && deals.length > 0 && (
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 16 }}>
+          {[
+            { label: 'Watching', value: byStage['watching']?.length || 0, color: '#6b7280' },
+            { label: 'Thesis / Conviction', value: ((byStage['thesis']?.length || 0) + (byStage['conviction']?.length || 0)), color: '#A855F7' },
+            { label: 'In Position', value: byStage['position']?.length || 0, color: '#22c55e' },
+            { label: 'Total Tracked', value: deals.length, color: 'var(--fg)' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="stat-card">
+              <span className="stat-label">{label}</span>
+              <span className="stat-value" style={{ color }}>{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── MOBILE: stage filter chips + flat list ── */}
+      {!loading && deals.length > 0 && isMobile && (
+        <div>
+          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 12 }}>
+            {DEAL_STAGES.map(stage => {
+              const count = byStage[stage.id]?.length || 0;
+              const active = mobileStage === stage.id;
+              return (
+                <button key={stage.id} onClick={() => setMobileStage(stage.id)}
+                  style={{ padding: '5px 12px', borderRadius: 20, border: `1px solid ${active ? stage.color : 'var(--bdr)'}`,
+                    background: active ? `${stage.color}22` : 'var(--surf)', color: active ? stage.color : 'var(--fg3)',
+                    fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                  {stage.label} {count > 0 && `(${count})`}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(byStage[mobileStage] || []).length === 0 && (
+              <div className="card" style={{ textAlign: 'center', padding: 32, color: 'var(--fg3)', fontSize: 13 }}>
+                No deals in this stage
+              </div>
+            )}
+            {(byStage[mobileStage] || []).map(deal => {
+              const stageIdx = DEAL_STAGES.findIndex(s => s.id === deal.stage);
+              const stage = DEAL_STAGES[stageIdx];
+              return (
+                <div key={deal._id} className="card" style={{ padding: '14px 16px', borderLeft: `3px solid ${stage.color}` }} onClick={() => openEdit(deal)}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--fg)' }}>{deal.company}</div>
+                      {deal.ticker && <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--red)' }}>{deal.ticker}</div>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: `${PRIORITY_COLOR[deal.priority]}22`, color: PRIORITY_COLOR[deal.priority], fontWeight: 700, textTransform: 'uppercase' }}>{deal.priority}</span>
+                      <button onClick={e => deleteDeal(deal._id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--fg3)', padding: 2 }}>✕</button>
+                    </div>
+                  </div>
+                  {deal.thesis && <div style={{ fontSize: 12, color: 'var(--fg3)', lineHeight: 1.5, marginBottom: 8, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{deal.thesis}</div>}
+                  {deal.targetPrice && <div style={{ fontSize: 12, color: '#22c55e', fontFamily: 'var(--font-mono)' }}>Target: ${deal.targetPrice}</div>}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                    {stageIdx > 0 && <button onClick={e => { e.stopPropagation(); moveStage(deal, -1); setMobileStage(DEAL_STAGES[stageIdx-1].id); }} style={{ flex: 1, padding: '5px 0', background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 11, cursor: 'pointer', color: 'var(--fg3)', fontWeight: 600 }}>← Back</button>}
+                    {stageIdx < DEAL_STAGES.length - 1 && <button onClick={e => { e.stopPropagation(); moveStage(deal, 1); setMobileStage(DEAL_STAGES[stageIdx+1].id); }} style={{ flex: 1, padding: '5px 0', background: 'var(--surf2)', border: `1px solid ${DEAL_STAGES[stageIdx+1].color}55`, borderRadius: 6, fontSize: 11, cursor: 'pointer', color: DEAL_STAGES[stageIdx+1].color, fontWeight: 700 }}>Next →</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── DESKTOP: pipeline kanban ── */}
+      {!loading && deals.length > 0 && !isMobile && (
         <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 12 }}>
           {DEAL_STAGES.map(stage => {
             const stageDeals = byStage[stage.id] || [];
             return (
               <div key={stage.id} style={{ minWidth: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {/* Column header */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, background: 'var(--surf)', border: '1px solid var(--bdr)', borderTop: `2px solid ${stage.color}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', borderRadius: 8, background: 'var(--surf)', border: '1px solid var(--bdr)', borderTop: `2px solid ${stage.color}` }}>
                   <span style={{ fontWeight: 700, fontSize: 12, color: stage.color }}>{stage.label}</span>
                   <span style={{ fontSize: 11, color: 'var(--fg3)', marginLeft: 'auto' }}>{stageDeals.length}</span>
                 </div>
-                {/* Deal cards */}
                 {stageDeals.map(deal => {
                   const stageIdx = DEAL_STAGES.findIndex(s => s.id === deal.stage);
                   return (
-                    <div key={deal._id} className="card" style={{ padding: '12px 14px', cursor: 'pointer' }} onClick={() => openEdit(deal)}>
+                    <div key={deal._id} className="card" style={{ padding: '12px 14px', cursor: 'pointer', transition: 'border-color 0.15s' }} onClick={() => openEdit(deal)}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--fg)' }}>{deal.company}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deal.company}</div>
                           {deal.ticker && <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--red)', marginTop: 1 }}>{deal.ticker}</div>}
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                          <span style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, background: `${PRIORITY_COLOR[deal.priority]}22`, color: PRIORITY_COLOR[deal.priority], fontWeight: 700, textTransform: 'uppercase' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                          <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: `${PRIORITY_COLOR[deal.priority]}22`, color: PRIORITY_COLOR[deal.priority], fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                             {deal.priority}
                           </span>
-                          <button onClick={e => deleteDeal(deal._id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--fg3)' }}>✕</button>
+                          <button onClick={e => deleteDeal(deal._id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--fg3)', padding: '1px 2px', lineHeight: 1 }}>✕</button>
                         </div>
                       </div>
                       {deal.thesis && <div style={{ fontSize: 11, color: 'var(--fg3)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: 8 }}>{deal.thesis}</div>}
-                      {deal.targetPrice && <div style={{ fontSize: 11, color: 'var(--green)', fontFamily: 'var(--font-mono)' }}>Target: ${deal.targetPrice}</div>}
-                      {/* Stage move buttons */}
+                      {deal.targetPrice && <div style={{ fontSize: 11, color: '#22c55e', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>Target: ${deal.targetPrice}</div>}
+                      {(deal.catalysts?.length > 0 || deal.risks?.length > 0) && (
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                          {deal.catalysts?.length > 0 && <span style={{ fontSize: 9, color: '#22c55e', fontFamily: 'var(--font-mono)' }}>↑ {deal.catalysts.length} catalyst{deal.catalysts.length > 1 ? 's' : ''}</span>}
+                          {deal.risks?.length > 0 && <span style={{ fontSize: 9, color: 'var(--red)', fontFamily: 'var(--font-mono)' }}>⚠ {deal.risks.length} risk{deal.risks.length > 1 ? 's' : ''}</span>}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-                        {stageIdx > 0 && <button onClick={e => { e.stopPropagation(); moveStage(deal, -1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 10, cursor: 'pointer', color: 'var(--fg3)' }}>← Back</button>}
+                        {stageIdx > 0 && <button onClick={e => { e.stopPropagation(); moveStage(deal, -1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 10, cursor: 'pointer', color: 'var(--fg3)', fontWeight: 600 }}>← Back</button>}
                         {stageIdx < DEAL_STAGES.length - 1 && <button onClick={e => { e.stopPropagation(); moveStage(deal, 1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: `1px solid ${DEAL_STAGES[stageIdx + 1].color}44`, borderRadius: 5, fontSize: 10, cursor: 'pointer', color: DEAL_STAGES[stageIdx + 1].color, fontWeight: 700 }}>Next →</button>}
                       </div>
                     </div>
@@ -3450,8 +3517,17 @@ function MeetingsPage() {
 
   function isUpcoming(d) { return new Date(d) > new Date(); }
 
+  function daysUntil(d) {
+    const diff = new Date(d) - new Date();
+    const days = Math.ceil(diff / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Tomorrow';
+    return `in ${days}d`;
+  }
+
   const upcoming = meetings.filter(m => m.status === 'upcoming' && isUpcoming(m.date));
   const past     = meetings.filter(m => m.status === 'completed' || !isUpcoming(m.date));
+  const nextMeeting = upcoming.sort((a, b) => new Date(a.date) - new Date(b.date))[0];
 
   const TYPE_COLORS = { call: '#3B82F6', coffee: '#f59e0b', interview: '#A855F7', intro: '#22c55e', 'follow-up': '#ec4899', other: '#6b7280' };
 
@@ -3474,6 +3550,7 @@ function MeetingsPage() {
               {meeting.company && <span style={{ fontSize: 11, color: 'var(--fg3)' }}>@ {meeting.company}</span>}
               <span style={{ fontSize: 10, padding: '1px 6px', background: `${color}22`, color, borderRadius: 4, fontWeight: 700, textTransform: 'capitalize' }}>{meeting.type}</span>
               {meeting.status === 'completed' && <span style={{ fontSize: 10, padding: '1px 6px', background: '#22c55e22', color: '#22c55e', borderRadius: 4, fontWeight: 700 }}>Done</span>}
+              {isUpcoming(meeting.date) && <span style={{ fontSize: 10, padding: '1px 6px', background: 'var(--red-dim)', color: 'var(--red)', borderRadius: 4, fontWeight: 700 }}>{daysUntil(meeting.date)}</span>}
             </div>
             <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 3 }}>{formatDate(meeting.date)}</div>
           </div>
@@ -3590,14 +3667,42 @@ function MeetingsPage() {
         </button>
       </div>
 
+      {/* Stats row */}
+      {!loading && meetings.length > 0 && (
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3,1fr)', marginBottom: 16 }}>
+          <div className="stat-card accent">
+            <span className="stat-label">Next Meeting</span>
+            {nextMeeting ? <>
+              <span className="stat-value" style={{ fontSize: 16 }}>{nextMeeting.contactName.split(' ')[0]}</span>
+              <span className="stat-change" style={{ color: 'var(--green)' }}>{daysUntil(nextMeeting.date)}</span>
+            </> : <>
+              <span className="stat-value">—</span>
+              <span className="stat-change" style={{ color: 'var(--fg3)' }}>none scheduled</span>
+            </>}
+          </div>
+          <div className="stat-card">
+            <span className="stat-label">Upcoming</span>
+            <span className="stat-value">{upcoming.length}</span>
+            <span className="stat-change" style={{ color: 'var(--fg3)' }}>calls scheduled</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-label">Completed</span>
+            <span className="stat-value">{past.length}</span>
+            <span className="stat-change" style={{ color: 'var(--fg3)' }}>{past.filter(m => m.brief).length} with AI briefs</span>
+          </div>
+        </div>
+      )}
+
       {loading && <div style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>Loading…</div>}
 
       {!loading && meetings.length === 0 && (
-        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>📅</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No meetings yet</div>
-          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 16 }}>Schedule meetings with your network contacts. Get AI-generated briefs before each call and log post-call notes.</div>
-          <button onClick={() => setShowForm(true)} style={{ padding: '9px 20px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+        <div className="card" style={{ textAlign: 'center', padding: '56px 24px' }}>
+          <div style={{ fontSize: 48, marginBottom: 14 }}>📅</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No meetings yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 20, maxWidth: 380, margin: '0 auto 20px' }}>
+            Schedule meetings with your network contacts. Get AI-generated briefs before each call and log post-call notes after.
+          </div>
+          <button onClick={() => setShowForm(true)} style={{ padding: '10px 22px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
             Schedule a meeting
           </button>
         </div>

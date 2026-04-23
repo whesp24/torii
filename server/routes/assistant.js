@@ -4,6 +4,8 @@ import Stock from '../models/Stock.js';
 import Position from '../models/Position.js';
 import Contact from '../models/Contact.js';
 import News from '../models/News.js';
+import Note from '../models/Note.js';
+import Deal from '../models/Deal.js';
 
 const router = express.Router();
 async function llmChat(systemPrompt, messages, maxTokens = 1024) {
@@ -98,6 +100,56 @@ async function buildContext() {
   }
 }
 
+// ── Intent detection: parse user message for actionable commands ──────────────
+// Returns { type, payload, confirmation } or null if no action detected.
+async function detectAction(message) {
+  const msg = message.trim();
+
+  // ADD CONTACT: "add [Name] to my network" / "add [Name] at [Company]"
+  const addContact = msg.match(/\badd\s+([A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+)+)(?:\s+(?:at|from|@|of)\s+([^,\n]+?))?(?:\s+to\s+(?:my\s+)?network)?/i);
+  if (addContact) {
+    const name = addContact[1].trim();
+    const company = addContact[2]?.trim();
+    // Avoid false positives — name must look like a person (2+ words, starts uppercase)
+    if (/^[A-Z]/.test(name) && name.includes(' ')) {
+      try {
+        const contact = await Contact.create({ name, company });
+        return { type: 'add_contact', payload: { name, company }, id: contact._id, confirmation: `✓ Added **${name}** to your network${company ? ` (${company})` : ''}.` };
+      } catch (e) { console.error('Action add_contact error:', e.message); }
+    }
+  }
+
+  // LOG NOTE: "log/add/create a note [about/for/on] [TICKER] [titled/called] [title]"
+  const addNote = msg.match(/(?:log|add|create)\s+(?:a\s+)?note(?:\s+(?:about|for|on)\s+([A-Z]{1,6}))?(?:\s+(?:titled?|called?)\s+"?([^"]+)"?)?/i);
+  if (addNote) {
+    const ticker = addNote[1]?.toUpperCase();
+    const title = addNote[2]?.trim() || (ticker ? `Note on ${ticker}` : `Note — ${new Date().toLocaleDateString()}`);
+    try {
+      const note = await Note.create({ title, ticker, body: msg });
+      return { type: 'add_note', payload: { title, ticker }, id: note._id, confirmation: `✓ Created note "${title}"${ticker ? ` linked to ${ticker}` : ''}.` };
+    } catch (e) { console.error('Action add_note error:', e.message); }
+  }
+
+  // MOVE DEAL: "move [Company] to [stage]" / "put [Company] in [stage]"
+  const STAGES = ['watching','thesis','conviction','position','passed','exited'];
+  const moveDeal = msg.match(/(?:move|put|push|advance)\s+(.+?)\s+(?:to|into|in)\s+(watching|thesis|conviction|in position|position|passed|exited)/i);
+  if (moveDeal) {
+    const company = moveDeal[1].trim();
+    let stage = moveDeal[2].toLowerCase().replace('in ', '');
+    if (!STAGES.includes(stage)) stage = 'conviction';
+    try {
+      const deal = await Deal.findOneAndUpdate(
+        { company: { $regex: company, $options: 'i' } },
+        { stage },
+        { new: true }
+      );
+      if (deal) return { type: 'move_deal', payload: { company: deal.company, stage }, id: deal._id, confirmation: `✓ Moved **${deal.company}** to **${stage}**.` };
+    } catch (e) { console.error('Action move_deal error:', e.message); }
+  }
+
+  return null;
+}
+
 // GET conversation list
 router.get('/conversations', async (req, res) => {
   try {
@@ -151,14 +203,26 @@ router.post('/chat', async (req, res) => {
       content: m.content,
     }));
 
+    // Try to detect an action intent before calling LLM
+    const action = await detectAction(message).catch(() => null);
+
+    // If action detected, prepend its confirmation to the LLM context
+    let contextPrefix = '';
+    if (action) {
+      contextPrefix = `[System: Action executed — ${action.confirmation}]\n\n`;
+    }
+
     const assistantText = await llmChat(systemPrompt, apiMessages, 1024);
-    convo.messages.push({ role: 'assistant', content: assistantText });
+    const finalText = action ? `${action.confirmation}\n\n${assistantText}` : assistantText;
+
+    convo.messages.push({ role: 'assistant', content: finalText });
 
     await convo.save();
 
     res.json({
       conversationId: convo._id,
-      message:        assistantText,
+      message:        finalText,
+      action:         action || null,
       title:          convo.title,
     });
   } catch (err) {
