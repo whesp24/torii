@@ -18,7 +18,7 @@ const newsSchema = new mongoose.Schema({
   content: String,
   category: {
     type: String,
-    enum: ['stocks', 'economics', 'tech', 'international', 'general'],
+    enum: ['stocks', 'economics', 'tech', 'international', 'general', 'japan'],
     default: 'general'
   },
   sentiment: {
