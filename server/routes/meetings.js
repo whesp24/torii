@@ -1,11 +1,26 @@
 import express from 'express';
-import Anthropic from '@anthropic-ai/sdk';
 import Meeting from '../models/Meeting.js';
 import Contact from '../models/Contact.js';
 import Stock from '../models/Stock.js';
 
 const router = express.Router();
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const GEMINI_MODEL = 'gemini-1.5-flash';
+
+async function geminiChat(prompt, maxTokens = 700) {
+  const key = process.env.GEMINI_API_KEY;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: maxTokens },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+  const data = await res.json();
+  return data.candidates[0].content.parts[0].text;
+}
 
 // GET all meetings
 router.get('/', async (req, res) => {
@@ -97,13 +112,7 @@ Structure your response with these sections:
 
 Be punchy. No fluff. This should take 60 seconds to read.`;
 
-    const response = await client.messages.create({
-      model:      'claude-sonnet-4-6',
-      max_tokens: 700,
-      messages:   [{ role: 'user', content: prompt }],
-    });
-
-    const brief = response.content[0].text;
+    const brief = await geminiChat(prompt, 700);
     await Meeting.findByIdAndUpdate(meeting._id, { brief });
 
     res.json({ brief });

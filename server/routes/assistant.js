@@ -1,5 +1,4 @@
 import express from 'express';
-import Anthropic from '@anthropic-ai/sdk';
 import Conversation from '../models/Conversation.js';
 import Stock from '../models/Stock.js';
 import Position from '../models/Position.js';
@@ -7,7 +6,37 @@ import Contact from '../models/Contact.js';
 import News from '../models/News.js';
 
 const router = express.Router();
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const GEMINI_MODEL = 'gemini-1.5-flash';
+
+async function geminiChat(systemPrompt, messages, maxTokens = 1024) {
+  const key = process.env.GEMINI_API_KEY;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
+
+  // Convert OpenAI-style messages to Gemini format
+  const contents = messages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents,
+    generationConfig: { maxOutputTokens: maxTokens },
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Gemini error ${res.status}: ${err}`);
+  }
+  const data = await res.json();
+  return data.candidates[0].content.parts[0].text;
+}
 
 // Build system prompt injected with live user data
 async function buildContext() {
@@ -133,14 +162,7 @@ router.post('/chat', async (req, res) => {
       content: m.content,
     }));
 
-    const response = await client.messages.create({
-      model:      'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system:     systemPrompt,
-      messages:   apiMessages,
-    });
-
-    const assistantText = response.content[0].text;
+    const assistantText = await geminiChat(systemPrompt, apiMessages, 1024);
     convo.messages.push({ role: 'assistant', content: assistantText });
 
     await convo.save();
