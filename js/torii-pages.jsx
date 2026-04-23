@@ -2071,13 +2071,13 @@ function buildHubGraph(contacts, filters = { company: true, school: true, locati
   const hubMap = {};
   const edges = [];
 
-  function processField(field, type, color, maxSize) {
+  function processField(field, type, color, maxSize, minCount = 2) {
     if (!filters[type]) return;
     const counts = {};
     for (const c of contacts) { const v = c[field]?.trim(); if (v) counts[v] = (counts[v]||0) + 1; }
     for (const c of contacts) {
       const v = c[field]?.trim();
-      if (!v || counts[v] < 2 || counts[v] > maxSize) continue;
+      if (!v || counts[v] < minCount || counts[v] > maxSize) continue;
       const key = `hub|${type}|${v.toLowerCase()}`;
       if (!hubMap[key]) {
         hubMap[key] = { id: key, label: v.length > 20 ? v.slice(0,18)+'…' : v, nodeType: type, color, count: counts[v], x: 0, y: 0, vx: 0, vy: 0 };
@@ -2087,7 +2087,7 @@ function buildHubGraph(contacts, filters = { company: true, school: true, locati
   }
   processField('company', 'company', '#4a9eff', 20);
   processField('school',  'school',  '#4ade80', 20);
-  processField('location','location','#fbbf24', 12);
+  processField('location','location','#fbbf24', 12, 1); // show any city with 1+ contact
 
   const hubNodes = Object.values(hubMap);
   return { contactNodes, hubNodes, allNodes: [...contactNodes, ...hubNodes], edges };
@@ -2372,6 +2372,7 @@ function NetworkingPage() {
   const [editing, setEditing]       = React.useState(null); // contact being edited
   const [editForm, setEditForm]     = React.useState({});
   const [edgeFilters, setEdgeFilters] = React.useState({ company: true, school: true, location: false });
+  const [touchingId, setTouchingId] = React.useState(null);
 
   // Load from backend
   React.useEffect(() => {
@@ -2406,6 +2407,21 @@ function NetworkingPage() {
     fetch(`${API_URL}/contacts/${id}`, { method: 'DELETE' }).catch(() => {});
     setContacts(p => p.filter(c => c.id !== id));
     if (selectedId === id) setSelectedId(null);
+  }
+
+  async function touchContact(id) {
+    setTouchingId(id);
+    try {
+      await fetch(`${API_URL}/contacts/${id}/touch`, { method: 'POST' });
+      const now = new Date().toISOString();
+      setContacts(p => p.map(c => c.id === id ? { ...c, lastContactedAt: now } : c));
+    } catch {}
+    setTouchingId(null);
+  }
+
+  function daysSince(ts) {
+    if (!ts) return null;
+    return Math.floor((Date.now() - new Date(ts)) / 86400000);
   }
 
   function startEdit(contact) {
@@ -2605,6 +2621,10 @@ function NetworkingPage() {
                 })()}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <button onClick={() => touchContact(selected.id)} disabled={touchingId === selected.id}
+                  style={{ padding: '4px 10px', background: 'rgba(74,222,128,0.1)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {touchingId === selected.id ? '…' : '✓ Touch'}
+                </button>
                 <button onClick={() => startEdit(selected)}
                   style={{ padding: '4px 10px', background: 'var(--surf2)', color: 'var(--fg)', border: '1px solid var(--bdr)', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
                   Edit
@@ -2646,35 +2666,52 @@ function NetworkingPage() {
               <div style={{ fontSize: 10, fontWeight: 700, color: '#3B82F6', letterSpacing: '0.1em', textTransform: 'uppercase', padding: '4px 0 6px', fontFamily: 'var(--font-mono)' }}>
                 🏢 {company} · {members.length}
               </div>
-              {members.map(c => (
-                <div key={c.id} className="card" style={{ padding: '12px 16px', marginBottom: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--red-dim)', color: 'var(--red)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: 11, flexShrink: 0 }}>
-                    {initials(c.name)}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>{c.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 1 }}>
-                      {[c.role, c.school, c.location].filter(Boolean).join(' · ')}
+              {members.map(c => {
+                const days = daysSince(c.lastContactedAt);
+                const stale = days !== null && days > 30;
+                const warn = days !== null && days > 14 && days <= 30;
+                return (
+                  <div key={c.id} className="card" style={{ padding: '12px 16px', marginBottom: 6, display: 'flex', gap: 12, alignItems: 'center', borderLeft: stale ? '3px solid #ef4444' : warn ? '3px solid #f59e0b' : undefined }}>
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--red-dim)', color: 'var(--red)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: 11, flexShrink: 0 }}>
+                      {initials(c.name)}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{c.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 1 }}>
+                        {[c.role, c.school, c.location].filter(Boolean).join(' · ')}
+                      </div>
+                      {days !== null && (
+                        <div style={{ fontSize: 10, marginTop: 3, color: stale ? '#ef4444' : warn ? '#f59e0b' : 'var(--fg3)', fontFamily: 'var(--font-mono)' }}>
+                          {stale ? '⚠ ' : ''}Last contact: {days === 0 ? 'today' : `${days}d ago`}
+                        </div>
+                      )}
+                      {days === null && (
+                        <div style={{ fontSize: 10, marginTop: 3, color: 'var(--fg3)', fontFamily: 'var(--font-mono)' }}>Never contacted</div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                      <button onClick={() => touchContact(c.id)} disabled={touchingId === c.id}
+                        style={{ padding: '4px 8px', background: 'rgba(74,222,128,0.1)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 5, fontSize: 11, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {touchingId === c.id ? '…' : '✓ Touch'}
+                      </button>
+                      {c.linkedIn && (
+                        <a href={c.linkedIn.startsWith('http') ? c.linkedIn : `https://linkedin.com/in/${c.linkedIn}`} target="_blank" rel="noreferrer"
+                          style={{ padding: '4px 8px', fontSize: 11, background: '#0A66C222', color: '#0A66C2', border: '1px solid #0A66C244', borderRadius: 5, textDecoration: 'none' }}>
+                          in
+                        </a>
+                      )}
+                      <button onClick={() => startEdit(c)}
+                        style={{ padding: '4px 8px', background: 'var(--surf2)', color: 'var(--fg)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
+                        Edit
+                      </button>
+                      <button onClick={() => removeContact(c.id)}
+                        style={{ padding: '4px 8px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer' }}>
+                        ✕
+                      </button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    {c.linkedIn && (
-                      <a href={c.linkedIn.startsWith('http') ? c.linkedIn : `https://linkedin.com/in/${c.linkedIn}`} target="_blank" rel="noreferrer"
-                        style={{ padding: '4px 8px', fontSize: 11, background: '#0A66C222', color: '#0A66C2', border: '1px solid #0A66C244', borderRadius: 5, textDecoration: 'none' }}>
-                        in
-                      </a>
-                    )}
-                    <button onClick={() => startEdit(c)}
-                      style={{ padding: '4px 8px', background: 'var(--surf2)', color: 'var(--fg)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
-                      Edit
-                    </button>
-                    <button onClick={() => removeContact(c.id)}
-                      style={{ padding: '4px 8px', background: 'transparent', color: 'var(--fg3)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 11, cursor: 'pointer' }}>
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </div>
@@ -2696,13 +2733,14 @@ const QUICK_PROMPTS = [
 ];
 
 function AssistantPage() {
+  const isMobile = useIsMobile();
   const [conversations, setConversations] = React.useState([]);
   const [activeId,      setActiveId]      = React.useState(null);
   const [messages,      setMessages]      = React.useState([]);
   const [input,         setInput]         = React.useState('');
   const [loading,       setLoading]       = React.useState(false);
   const [loadingConvos, setLoadingConvos] = React.useState(true);
-  const [sidebarOpen,   setSidebarOpen]   = React.useState(true);
+  const [sidebarOpen,   setSidebarOpen]   = React.useState(() => window.innerWidth >= 720);
   const bottomRef = React.useRef(null);
   const inputRef  = React.useRef(null);
 
@@ -2809,10 +2847,14 @@ function AssistantPage() {
   const isNew = !activeId && messages.length === 0;
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden' }}>
-      {/* Conversation sidebar */}
+    <div style={{ display: 'flex', height: isMobile ? 'calc(100vh - 120px)' : 'calc(100vh - 60px)', overflow: 'hidden' }}>
+      {/* Conversation sidebar — on mobile shows as overlay */}
       {sidebarOpen && (
-        <div style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--bdr)', background: 'var(--bg)' }}>
+        <div style={{
+          width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column',
+          borderRight: '1px solid var(--bdr)', background: 'var(--bg)',
+          ...(isMobile ? { position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 100, boxShadow: '4px 0 20px rgba(0,0,0,0.4)' } : {})
+        }}>
           <div style={{ padding: '14px 12px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--bdr)' }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Conversations</span>
             <button onClick={newConversation}
@@ -2967,6 +3009,10 @@ function NotesPage() {
   const [editing,    setEditing]    = React.useState(null);  // note being edited
   const [form,       setForm]       = React.useState({ title: '', body: '', ticker: '', tags: '' });
   const [expanded,   setExpanded]   = React.useState(null);  // note id expanded
+  // Voice capture
+  const [recording,  setRecording]  = React.useState(false);
+  const [voiceStatus, setVoiceStatus] = React.useState('');
+  const recognitionRef = React.useRef(null);
 
   React.useEffect(() => {
     const params = search ? `?search=${encodeURIComponent(search)}` : '';
@@ -3037,6 +3083,79 @@ function NotesPage() {
     return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
+  function startVoiceCapture() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceStatus('Voice capture not supported in this browser. Try Chrome or Safari.');
+      setTimeout(() => setVoiceStatus(''), 4000);
+      return;
+    }
+    const recog = new SpeechRecognition();
+    recog.continuous = true;
+    recog.interimResults = false;
+    recog.lang = 'en-US';
+    recognitionRef.current = recog;
+    let transcript = '';
+
+    recog.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) transcript += e.results[i][0].transcript + ' ';
+      }
+    };
+    recog.onerror = (e) => {
+      setRecording(false);
+      setVoiceStatus('Voice error: ' + e.error);
+      setTimeout(() => setVoiceStatus(''), 4000);
+    };
+    recog.onend = async () => {
+      setRecording(false);
+      if (!transcript.trim()) { setVoiceStatus(''); return; }
+      setVoiceStatus('Summarizing with AI…');
+      try {
+        // Send transcript to assistant to summarize as bullet points
+        const res = await fetch(`${API_URL}/assistant/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `Please summarize the following voice note into concise bullet points and create a title for it. Return ONLY title on first line, then bullets starting with "• ". Voice note: "${transcript.trim()}"`,
+            conversationId: null,
+          }),
+        });
+        const data = await res.json();
+        if (data.message) {
+          const lines = data.message.trim().split('\n').filter(Boolean);
+          const title = lines[0].replace(/^(title:|#+ ?)/i, '').trim() || 'Voice Note';
+          const body = lines.slice(1).join('\n');
+          const payload = {
+            title: title + ' 🎙',
+            body,
+            tags: ['voice'],
+          };
+          const noteRes = await fetch(`${API_URL}/notes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const created = await noteRes.json();
+          setNotes(p => [created, ...p]);
+          setVoiceStatus('✓ Note saved!');
+        }
+      } catch {
+        setVoiceStatus('Could not summarize. Try again.');
+      }
+      setTimeout(() => setVoiceStatus(''), 3000);
+    };
+
+    recog.start();
+    setRecording(true);
+    setVoiceStatus('Listening… tap mic to stop');
+  }
+
+  function stopVoiceCapture() {
+    recognitionRef.current?.stop();
+    setRecording(false);
+  }
+
   return (
     <div className="page-root">
       {/* Note form modal */}
@@ -3083,10 +3202,27 @@ function NotesPage() {
           <h1 className="page-title">Research Notes</h1>
           <p className="page-sub">{notes.length} note{notes.length !== 1 ? 's' : ''} · {notes.filter(n => n.pinned).length} pinned</p>
         </div>
-        <button onClick={openNew}
-          style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
-          + Note
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Voice status */}
+          {voiceStatus && (
+            <span style={{ fontSize: 11, color: voiceStatus.startsWith('✓') ? '#4ade80' : 'var(--fg3)', fontFamily: 'var(--font-mono)', animation: recording ? 'pulse 1s infinite' : 'none' }}>
+              {voiceStatus}
+            </span>
+          )}
+          {/* Mic button */}
+          <button onClick={recording ? stopVoiceCapture : startVoiceCapture}
+            title={recording ? 'Stop recording' : 'Voice capture → AI note'}
+            style={{ padding: '8px 10px', background: recording ? '#ef4444' : 'var(--surf)', color: recording ? 'white' : 'var(--fg3)', border: `1px solid ${recording ? '#ef4444' : 'var(--bdr)'}`, borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+            {recording ? 'Stop' : 'Voice'}
+          </button>
+          <button onClick={openNew}
+            style={{ padding: '8px 16px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
+            + Note
+          </button>
+        </div>
       </div>
 
       {/* Search + tag filter */}
@@ -3195,6 +3331,8 @@ function DealsPage() {
   const [selected, setSelected] = React.useState(null);  // deal _id expanded
   const [mobileStage, setMobileStage] = React.useState('watching'); // mobile filter
   const [form,     setForm]     = React.useState({ company: '', ticker: '', stage: 'watching', thesis: '', targetPrice: '', catalysts: '', risks: '', notes: '', priority: 'medium' });
+  const [memoLoading, setMemoLoading] = React.useState(null); // deal _id loading memo
+  const [expandedMemo, setExpandedMemo] = React.useState(null); // deal _id showing memo
 
   React.useEffect(() => {
     fetch(`${API_URL}/deals`)
@@ -3254,6 +3392,30 @@ function DealsPage() {
     await fetch(`${API_URL}/deals/${id}`, { method: 'DELETE' });
     setDeals(p => p.filter(d => d._id !== id));
     if (selected === id) setSelected(null);
+  }
+
+  async function generateMemo(deal, e) {
+    e.stopPropagation();
+    setMemoLoading(deal._id);
+    try {
+      const res = await fetch(`${API_URL}/memos/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dealId: deal._id }),
+      });
+      const data = await res.json();
+      if (data.memo) {
+        setDeals(p => p.map(d => d._id === deal._id ? { ...d, memo: data.memo } : d));
+        setExpandedMemo(deal._id);
+      }
+    } catch {}
+    setMemoLoading(null);
+  }
+
+  function dealAgeDays(deal) {
+    const ts = deal.updatedAt || deal.createdAt;
+    if (!ts) return null;
+    return Math.floor((Date.now() - new Date(ts)) / 86400000);
   }
 
   const byStage = Object.fromEntries(DEAL_STAGES.map(s => [s.id, deals.filter(d => d.stage === s.id)]));
@@ -3422,8 +3584,10 @@ function DealsPage() {
                 </div>
                 {stageDeals.map(deal => {
                   const stageIdx = DEAL_STAGES.findIndex(s => s.id === deal.stage);
+                  const age = dealAgeDays(deal);
+                  const isStale = age !== null && age > 21;
                   return (
-                    <div key={deal._id} className="card" style={{ padding: '12px 14px', cursor: 'pointer', transition: 'border-color 0.15s' }} onClick={() => openEdit(deal)}>
+                    <div key={deal._id} className="card" style={{ padding: '12px 14px', cursor: 'pointer', transition: 'border-color 0.15s', borderLeft: isStale ? '2px solid #f59e0b' : undefined }} onClick={() => openEdit(deal)}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deal.company}</div>
@@ -3433,6 +3597,7 @@ function DealsPage() {
                           <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: `${PRIORITY_COLOR[deal.priority]}22`, color: PRIORITY_COLOR[deal.priority], fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                             {deal.priority}
                           </span>
+                          {isStale && <span style={{ fontSize: 9, color: '#f59e0b', fontFamily: 'var(--font-mono)' }}>{age}d old</span>}
                           <button onClick={e => deleteDeal(deal._id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--fg3)', padding: '1px 2px', lineHeight: 1 }}>✕</button>
                         </div>
                       </div>
@@ -3444,9 +3609,20 @@ function DealsPage() {
                           {deal.risks?.length > 0 && <span style={{ fontSize: 9, color: 'var(--red)', fontFamily: 'var(--font-mono)' }}>⚠ {deal.risks.length} risk{deal.risks.length > 1 ? 's' : ''}</span>}
                         </div>
                       )}
+                      {/* Memo section */}
+                      {deal.memo && expandedMemo === deal._id && (
+                        <div onClick={e => e.stopPropagation()} style={{ marginBottom: 8, padding: '8px 10px', background: 'var(--surf2)', borderRadius: 6, border: '1px solid var(--bdr)', fontSize: 10, color: 'var(--fg2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 120, overflowY: 'auto' }}>
+                          {deal.memo}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
                         {stageIdx > 0 && <button onClick={e => { e.stopPropagation(); moveStage(deal, -1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 5, fontSize: 10, cursor: 'pointer', color: 'var(--fg3)', fontWeight: 600 }}>← Back</button>}
                         {stageIdx < DEAL_STAGES.length - 1 && <button onClick={e => { e.stopPropagation(); moveStage(deal, 1); }} style={{ flex: 1, padding: '3px 0', background: 'var(--surf2)', border: `1px solid ${DEAL_STAGES[stageIdx + 1].color}44`, borderRadius: 5, fontSize: 10, cursor: 'pointer', color: DEAL_STAGES[stageIdx + 1].color, fontWeight: 700 }}>Next →</button>}
+                        <button onClick={e => deal.memo ? (e.stopPropagation(), setExpandedMemo(expandedMemo === deal._id ? null : deal._id)) : generateMemo(deal, e)}
+                          disabled={memoLoading === deal._id}
+                          style={{ padding: '3px 7px', background: deal.memo ? 'rgba(168,85,247,0.1)' : 'var(--surf2)', border: `1px solid ${deal.memo ? '#A855F744' : 'var(--bdr)'}`, borderRadius: 5, fontSize: 10, cursor: 'pointer', color: deal.memo ? '#A855F7' : 'var(--fg3)', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                          {memoLoading === deal._id ? '…' : deal.memo ? (expandedMemo === deal._id ? 'Hide' : 'Memo') : 'AI Memo'}
+                        </button>
                       </div>
                     </div>
                   );
@@ -3739,8 +3915,148 @@ function MeetingsPage() {
   );
 }
 
+// ─── BRIEFING PAGE ────────────────────────────────────────────────────────────
+
+function BriefingPage() {
+  const isMobile = useIsMobile();
+  const [briefing,    setBriefing]    = React.useState(null);
+  const [loading,     setLoading]     = React.useState(true);
+  const [generating,  setGenerating]  = React.useState(false);
+  const [error,       setError]       = React.useState(null);
+
+  async function fetchBriefing() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/briefing/latest`);
+      if (!res.ok) { setBriefing(null); }
+      else { const data = await res.json(); setBriefing(data); }
+    } catch { setError('Could not load briefing'); }
+    setLoading(false);
+  }
+
+  async function generateBriefing() {
+    setGenerating(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/briefing/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+      const data = await res.json();
+      if (data.content) setBriefing(data);
+      else setError(data.error || 'Generation failed');
+    } catch { setError('Could not generate briefing'); }
+    setGenerating(false);
+  }
+
+  React.useEffect(() => { fetchBriefing(); }, []);
+
+  function renderBriefingContent(content) {
+    if (!content) return null;
+    return content.split('\n').map((line, i) => {
+      if (line.startsWith('## ')) return (
+        <h2 key={i} style={{ fontSize: 14, fontWeight: 800, color: 'var(--fg)', margin: '22px 0 8px', borderBottom: '1px solid var(--bdr)', paddingBottom: 5, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-mono)' }}>
+          {line.slice(3)}
+        </h2>
+      );
+      if (line.startsWith('# ')) return (
+        <h1 key={i} style={{ fontSize: 20, fontWeight: 800, color: 'var(--fg)', margin: '0 0 12px' }}>{line.slice(2)}</h1>
+      );
+      if (line.startsWith('**') && line.endsWith('**') && !line.slice(2,-2).includes('**')) return (
+        <div key={i} style={{ fontWeight: 700, color: 'var(--fg)', marginTop: 8, marginBottom: 2 }}>{line.slice(2,-2)}</div>
+      );
+      if (line.startsWith('• ') || line.startsWith('- ') || line.startsWith('* ')) return (
+        <div key={i} style={{ paddingLeft: 16, marginBottom: 4, color: 'var(--fg2)', fontSize: 13, lineHeight: 1.65 }}>
+          · {line.slice(2)}
+        </div>
+      );
+      if (line === '') return <div key={i} style={{ height: 5 }} />;
+      const parts = line.split(/\*\*(.+?)\*\*/g);
+      return (
+        <div key={i} style={{ marginBottom: 3, color: 'var(--fg2)', fontSize: 13, lineHeight: 1.65 }}>
+          {parts.map((p, j) => j % 2 === 1 ? <strong key={j} style={{ color: 'var(--fg)' }}>{p}</strong> : p)}
+        </div>
+      );
+    });
+  }
+
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const isToday = briefing?.date && new Date(briefing.date).toDateString() === new Date().toDateString();
+  const briefingDate = briefing?.date ? new Date(briefing.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : null;
+
+  return (
+    <div className="page-root">
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <h1 className="page-title">Morning Briefing</h1>
+          <p className="page-sub">{today}</p>
+        </div>
+        <button onClick={generateBriefing} disabled={generating}
+          style={{ padding: '8px 16px', background: generating ? 'var(--surf2)' : 'var(--red)', color: generating ? 'var(--fg3)' : 'white',
+            border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: generating ? 'default' : 'pointer', flexShrink: 0, transition: 'all 0.2s' }}>
+          {generating ? '⟳ Generating…' : '⟳ Regenerate'}
+        </button>
+      </div>
+
+      {loading && (
+        <div style={{ textAlign: 'center', padding: 72, color: 'var(--fg3)' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>✦</div>
+          <div style={{ fontSize: 13 }}>Loading briefing…</div>
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ fontSize: 13, color: 'var(--fg3)', marginBottom: 16 }}>{error}</div>
+          <button onClick={generateBriefing} disabled={generating}
+            style={{ padding: '10px 22px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            {generating ? 'Generating…' : 'Generate Now'}
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && !briefing && (
+        <div className="card" style={{ textAlign: 'center', padding: '60px 24px' }}>
+          <div style={{ fontSize: 52, marginBottom: 16 }}>🌅</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 10 }}>No briefing yet</div>
+          <div style={{ color: 'var(--fg3)', fontSize: 13, marginBottom: 24, maxWidth: 420, margin: '0 auto 24px', lineHeight: 1.7 }}>
+            Generate your AI morning briefing — it synthesizes your portfolio, upcoming meetings, active deals, and market context into a personalized daily digest.
+          </div>
+          <button onClick={generateBriefing} disabled={generating}
+            style={{ padding: '11px 26px', background: 'var(--red)', color: 'white', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+            {generating ? '⟳ Generating…' : '✦ Generate Briefing'}
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && briefing && (
+        <>
+          {/* Stale warning */}
+          {!isToday && briefingDate && (
+            <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, fontSize: 12, color: '#f59e0b', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>⚠</span>
+              <span>This briefing is from {briefingDate}. Hit Regenerate for a fresh one.</span>
+            </div>
+          )}
+
+          {/* Briefing card */}
+          <div className="card" style={{ padding: isMobile ? '16px 18px' : '28px 32px', lineHeight: 1.7 }}>
+            {renderBriefingContent(briefing.content)}
+          </div>
+
+          <div style={{ textAlign: 'center', fontSize: 10, color: 'var(--fg3)', marginTop: 14, fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
+            Generated {briefing.generatedAt ? new Date(briefing.generatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : ''} · Llama 3.3 (Groq) · Live data
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
-  AssistantPage, NotesPage, DealsPage, MeetingsPage,
+  AssistantPage, NotesPage, DealsPage, MeetingsPage, BriefingPage,
 });

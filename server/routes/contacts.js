@@ -3,7 +3,6 @@ import Contact from '../models/Contact.js';
 
 const router = express.Router();
 
-// GET all contacts
 router.get('/', async (req, res) => {
   try {
     const contacts = await Contact.find().sort({ createdAt: 1 });
@@ -13,7 +12,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST — add a contact
 router.post('/', async (req, res) => {
   try {
     const { name, role, company, school, location, linkedIn, notes } = req.body;
@@ -25,7 +23,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT — update a contact
 router.put('/:id', async (req, res) => {
   try {
     const contact = await Contact.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -36,7 +33,21 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE — remove a contact
+// POST /:id/touch — mark contact as contacted today (CRM)
+router.post('/:id/touch', async (req, res) => {
+  try {
+    const contact = await Contact.findByIdAndUpdate(
+      req.params.id,
+      { lastContactedAt: new Date() },
+      { new: true }
+    );
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    res.json(contact);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/:id', async (req, res) => {
   try {
     const contact = await Contact.findByIdAndDelete(req.params.id);

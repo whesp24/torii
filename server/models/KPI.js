@@ -11,6 +11,10 @@ const kpiSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  category: {
+    type: String,
+    default: 'us'
+  },
   price: {
     type: Number,
     required: true
@@ -23,8 +27,8 @@ const kpiSchema = new mongoose.Schema({
   },
   source: {
     type: String,
-    enum: ['alpha-vantage', 'mock'],
-    default: 'alpha-vantage'
+    enum: ['alpha-vantage', 'mock', 'stooq'],
+    default: 'stooq'
   }
 }, { timestamps: true });
 

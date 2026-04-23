@@ -13,6 +13,8 @@ const DealSchema = new mongoose.Schema({
   linkedContacts: [{ type: String }],         // contact _ids
   notes:          { type: String, default: '' },
   priority:       { type: String, enum: ['high','medium','low'], default: 'medium' },
+  memo:           { type: String, default: '' },
+  memoGeneratedAt: { type: Date },
 }, { timestamps: true });
 
 export default mongoose.model('Deal', DealSchema);

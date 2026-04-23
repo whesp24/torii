@@ -1,5 +1,6 @@
 import Alert from '../models/Alert.js';
 import Stock from '../models/Stock.js';
+import { sendPushToAll } from '../routes/push.js';
 
 // Get all alerts
 export async function getAllAlerts() {
@@ -130,6 +131,11 @@ export async function checkAllAlerts() {
               lastCheckedAt: new Date()
             });
             triggered.push(updated);
+            sendPushToAll(
+              `🚨 ${alert.symbol} Alert Triggered`,
+              `${alert.symbol} hit your ${alert.alertType} target at $${stock.price.toFixed(2)}`,
+              '/?page=alerts'
+            ).catch(() => {});
           } else if (!shouldTrigger && alert.triggered) {
             // Reset if condition no longer met
             await updateAlert(alert._id, { triggered: false });

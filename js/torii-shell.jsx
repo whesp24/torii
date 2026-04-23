@@ -4,6 +4,7 @@ const SHELL_API = 'https://torii-backend.onrender.com/api';
 
 const NAV = [
   { id:'overview',   label:'Markets',   icon:'markets'   },
+  { id:'briefing',   label:'Briefing',  icon:'briefing'  },
   { id:'portfolio',  label:'Portfolio', icon:'portfolio' },
   { id:'japan',      label:'Japan',     icon:'japan'     },
   { id:'news',       label:'News',      icon:'news'      },
@@ -24,7 +25,7 @@ const NAV = [
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push','assistant','notes','deals','meetings'];
+const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push','assistant','notes','deals','meetings'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ function NavIcon({ id, active }) {
   const c = active ? 'var(--red)' : 'var(--fg3)';
   const s = { width:18, height:18 };
   if (id==='markets')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>;
+  if (id==='briefing')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>;
   if (id==='portfolio') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>;
   if (id==='japan')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M5 6V4h14v2"/><path d="M8 6v12"/><path d="M16 6v12"/><path d="M3 18h18"/></svg>;
   if (id==='news')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg>;
@@ -698,6 +700,7 @@ function App() {
 
       <main className="main-scroll">
         {page==='overview'   && <OverviewPage  onNav={setPage} />}
+        {page==='briefing'   && <BriefingPage />}
         {page==='portfolio'  && <PortfolioPage onNav={setPage} />}
         {page==='japan'      && <JapanPage />}
         {page==='news'       && <NewsPage />}

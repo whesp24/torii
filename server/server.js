@@ -31,6 +31,7 @@ import assistantRoutes from './routes/assistant.js';
 import notesRoutes from './routes/notes.js';
 import dealsRoutes from './routes/deals.js';
 import meetingsRoutes from './routes/meetings.js';
+import memosRoutes from './routes/memos.js';
 
 dotenv.config();
 
@@ -66,6 +67,7 @@ app.use('/api/assistant', assistantRoutes);
 app.use('/api/notes', notesRoutes);
 app.use('/api/deals', dealsRoutes);
 app.use('/api/meetings', meetingsRoutes);
+app.use('/api/memos', memosRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
