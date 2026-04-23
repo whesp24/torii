@@ -6,7 +6,10 @@ export async function fetchLiveQuote(symbol) {
   const sym = symbol.toUpperCase();
   const KEY = process.env.FINNHUB_API_KEY;
 
-  if (KEY) {
+  // Finnhub only supports US stocks — skip it for indices/forex/Japan stocks
+  const isUsEquity = !sym.startsWith('^') && !sym.includes('=') && !sym.includes('.');
+
+  if (KEY && isUsEquity) {
     try {
       const [qRes, pRes] = await Promise.all([
         fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${KEY}`),
@@ -24,7 +27,7 @@ export async function fetchLiveQuote(symbol) {
           symbol: sym,
           name: p.name || sym,
           price, change, changePercent,
-          volume: 0,
+          volume: q.v || 0,
           marketCap: p.marketCapitalization ? p.marketCapitalization * 1e6 : null,
           high52Week: null,
           low52Week: null,
@@ -34,6 +37,22 @@ export async function fetchLiveQuote(symbol) {
     } catch (err) {
       console.warn(`Finnhub failed for ${sym}: ${err.message}`);
     }
+  }
+
+  // DB cache check for .T stocks — served from cron-updated cache
+  if (sym.endsWith('.T')) {
+    try {
+      const cached = await Stock.findOne({ symbol: sym });
+      const age = cached ? Date.now() - new Date(cached.lastUpdated).getTime() : Infinity;
+      if (cached && age < 20 * 60 * 1000) { // < 20 min old
+        console.log(`Serving ${sym} from DB cache (${Math.round(age/60000)}m old)`);
+        return {
+          symbol: sym, name: cached.name, price: cached.price,
+          change: cached.change, changePercent: cached.changePercent,
+          volume: cached.volume, lastUpdated: cached.lastUpdated
+        };
+      }
+    } catch (_) {}
   }
 
   // Fallback: Yahoo Finance chart API with session cookie
@@ -62,7 +81,7 @@ export async function fetchFinnhubChart(symbol, range) {
   return data.t.map((t, i) => ({ time: new Date(t * 1000).toISOString(), price: data.c[i] })).filter(d => d.price != null);
 }
 
-// ── Yahoo Finance with cookie (works for indices, forex, ETFs) ────────────────
+// ── Yahoo Finance with cookie (works for indices, forex, ETFs, Japan stocks) ──
 let _yfCookie = '';
 let _yfCookieTime = 0;
 
@@ -114,7 +133,7 @@ export async function fetchYahooQuote(symbol) {
   const sym = symbol.toUpperCase();
   const cookie = await getYahooCookie();
 
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5d`;
   const res = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -129,16 +148,23 @@ export async function fetchYahooQuote(symbol) {
 
   const data = await res.json();
   const meta = data?.chart?.result?.[0]?.meta;
-  if (!meta?.regularMarketPrice) throw new Error(`No price data for ${sym}`);
+  if (!meta) throw new Error(`No meta data for ${sym}`);
 
-  const prev = meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice;
-  const price = meta.regularMarketPrice;
-  const change = price - prev;
+  // Use regularMarketPrice when live; fall back to previousClose when market is closed
+  const price = (meta.regularMarketPrice && meta.regularMarketPrice > 0)
+    ? meta.regularMarketPrice
+    : (meta.previousClose || meta.chartPreviousClose || 0);
+
+  if (!price || price <= 0) throw new Error(`No price data for ${sym}`);
+
+  const prev = meta.previousClose || meta.chartPreviousClose || price;
+  const isLive = meta.regularMarketPrice && meta.regularMarketPrice > 0;
+  const change = isLive ? (meta.regularMarketPrice - prev) : 0;
   const changePercent = prev > 0 ? (change / prev) * 100 : 0;
 
   return {
     symbol: sym,
-    name: meta.shortName || meta.symbol || sym,
+    name: meta.shortName || meta.longName || meta.symbol || sym,
     price, change, changePercent,
     volume: meta.regularMarketVolume ?? 0,
     marketCap: null,
@@ -150,8 +176,12 @@ export async function fetchYahooQuote(symbol) {
 
 // ── Batch stock update (cron job) ─────────────────────────────────────────────
 export async function fetchAndUpdateStocks() {
-  const KEY = process.env.FINNHUB_API_KEY;
-  const symbols = ['NFLX', 'MSFT', 'GOOGL', 'AAPL', 'NVDA', '7203.T', '9984.T', '6758.T'];
+  const symbols = [
+    // US equities (Finnhub)
+    'NFLX', 'MSFT', 'GOOGL', 'AAPL', 'NVDA', 'AMD', 'QQQ', 'SPY',
+    // Japan equities (Yahoo Finance)
+    '7203.T', '9984.T', '6758.T', '6861.T', '8306.T', '6501.T', '8035.T', '9432.T',
+  ];
 
   for (const symbol of symbols) {
     try {
@@ -163,9 +193,9 @@ export async function fetchAndUpdateStocks() {
             changePercent: data.changePercent, volume: data.volume, lastUpdated: new Date() },
           { upsert: true, new: true }
         );
-        console.log(`✓ Updated ${symbol} @ $${data.price}`);
+        console.log(`✓ Updated ${symbol} @ ${data.price}`);
       }
-      await new Promise(r => setTimeout(r, 200)); // rate limit buffer
+      await new Promise(r => setTimeout(r, 350)); // rate limit buffer
     } catch (err) {
       console.error(`Error fetching ${symbol}:`, err.message);
     }

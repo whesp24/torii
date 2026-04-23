@@ -332,7 +332,7 @@ function JapanPage() {
   React.useEffect(() => {
     fetch(`${API_URL}/stocks/chart/%5EN225?range=${range}`)
       .then(r => r.json())
-      .then(data => { if (Array.isArray(data) && data.length) setChart(data); })
+      .then(data => { if (Array.isArray(data) && data.length) setChart(data.filter(d => d.price != null)); })
       .catch(() => {});
   }, [range]);
 
@@ -374,8 +374,8 @@ function JapanPage() {
           </div>
         </div>
         {chartPrices.length > 0
-          ? <AreaChart data={chartPrices} labels={chartLabels} height={140} />
-          : <AreaChart data={MOCK.nikkeiChart.prices} labels={MOCK.nikkeiChart.dates} height={140} />
+          ? <AreaChart data={chartPrices} labels={chartLabels} height={180} showAxes={true} />
+          : <AreaChart data={MOCK.nikkeiChart.prices} labels={MOCK.nikkeiChart.dates} height={180} showAxes={true} />
         }
       </div>
 
@@ -702,6 +702,7 @@ function StockPage({ ticker, onBack }) {
   const [loadingQ, setLoadingQ]   = React.useState(true);
   const [timeframe, setTimeframe] = React.useState('5D');
   const [chartPrices, setChartPrices] = React.useState([]);
+  const [chartLabels, setChartLabels] = React.useState([]);
   const [chartLoading, setChartLoading] = React.useState(false);
   const [relatedNews, setRelatedNews]   = React.useState([]);
 
@@ -748,7 +749,12 @@ function StockPage({ ticker, onBack }) {
     setChartLoading(true);
     fetch(`${API_URL}/stocks/chart/${ticker}?range=${TIMEFRAME_RANGE[timeframe]}`)
       .then(r => r.ok ? r.json() : [])
-      .then(pts => { setChartPrices(pts.map(p => p.price).filter(Boolean)); setChartLoading(false); })
+      .then(pts => {
+        const valid = Array.isArray(pts) ? pts.filter(p => p.price != null) : [];
+        setChartPrices(valid.map(p => p.price));
+        setChartLabels(valid.map(p => p.time));
+        setChartLoading(false);
+      })
       .catch(() => setChartLoading(false));
   }, [ticker, timeframe]);
 
@@ -787,6 +793,7 @@ function StockPage({ ticker, onBack }) {
 
   const timeframes = ['1D', '5D', '1M', '3M', '1Y', 'All'];
   const displayChart = chartPrices.length > 0 ? chartPrices : (MOCK.sparklines[ticker] || []);
+  const displayLabels = chartPrices.length > 0 ? chartLabels : [];
   const periodUp = periodPct >= 0;
   const periodColor = periodUp ? 'var(--green)' : 'var(--red-loss)';
 
@@ -837,7 +844,7 @@ function StockPage({ ticker, onBack }) {
         </div>
         {chartLoading
           ? <div style={{height:140,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--fg3)',fontSize:12,fontFamily:'var(--font-mono)'}}>Loading chart…</div>
-          : <AreaChart data={displayChart} height={140} showDates={false} />
+          : <AreaChart data={displayChart} labels={displayLabels} height={180} showDates={true} showAxes={true} />
         }
       </div>
 
