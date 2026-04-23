@@ -14,6 +14,36 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Historical chart data for a symbol (powers the 1D/5D/1M/3M/1Y/All buttons)
+router.get('/chart/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const range = req.query.range || '5d';
+  const intervalMap = { '1d':'5m', '5d':'30m', '1mo':'1d', '3mo':'1d', '1y':'1wk', 'max':'1mo' };
+  const interval = intervalMap[range] || '1d';
+
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=${interval}&range=${range}`;
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) throw new Error('No chart data');
+
+    const timestamps = result.timestamp || [];
+    const closes = result.indicators?.quote?.[0]?.close || [];
+
+    const points = timestamps
+      .map((t, i) => ({ time: new Date(t * 1000).toISOString(), price: closes[i] }))
+      .filter(d => d.price != null);
+
+    res.json(points);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Live on-demand quote for ANY symbol (uses proven stockService import pattern)
 router.get('/live/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();

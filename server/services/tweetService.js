@@ -1,95 +1,104 @@
 import Tweet from '../models/Tweet.js';
 
-// StockTwits public API — free, no auth required for reading public streams
-// Replaces nitter.net which shut down in Feb 2024
+// StockTwits user streams for the curated finance accounts.
+// These accounts exist on StockTwits with the same handles as Twitter.
+const CURATED_USERS = [
+  { stHandle: 'KevinLMak',       displayName: 'Kevin Mak' },
+  { stHandle: 'ContrarianCurse', displayName: 'SuspendedCap' },
+  { stHandle: 'dsundheim',       displayName: 'D. Sundheim' },
+  { stHandle: 'jeff_weinstein',  displayName: 'Jeff Weinstein' },
+  { stHandle: 'HannoLustig',     displayName: 'Hanno Lustig' },
+  { stHandle: 'patrick_oshag',   displayName: 'Patrick O\'Shaughnessy' },
+];
+
+// Fallback: symbol-based streams if user streams are empty/unavailable
+const FALLBACK_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'SPY', 'QQQ', 'NFLX', 'GOOGL'];
+
 const STOCKTWITS_BASE = 'https://api.stocktwits.com/api/2';
 
-// Symbols to pull social chatter for
-const WATCH_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'NFLX', 'GOOGL', 'SPY', 'QQQ'];
-
 export async function fetchAndUpdateTweets() {
-  try {
-    for (const symbol of WATCH_SYMBOLS) {
-      try {
-        const url = `${STOCKTWITS_BASE}/streams/symbol/${symbol}.json?limit=20`;
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'ToriiApp/1.0'
-          }
+  let saved = 0;
+
+  // 1. Try to fetch from each curated user's stream
+  for (const { stHandle, displayName } of CURATED_USERS) {
+    try {
+      const url = `${STOCKTWITS_BASE}/streams/user/${stHandle}.json?limit=10`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'ToriiApp/1.0' } });
+      if (!res.ok) continue; // user not on StockTwits — skip silently
+
+      const data = await res.json();
+      if (!data.messages || !Array.isArray(data.messages)) continue;
+
+      for (const msg of data.messages) {
+        const exists = await Tweet.findOne({ url: `https://stocktwits.com/message/${msg.id}` });
+        if (exists) continue;
+
+        await Tweet.create({
+          author: displayName,
+          authorHandle: stHandle,
+          content: msg.body || '',
+          url: `https://stocktwits.com/message/${msg.id}`,
+          createdAt: new Date(msg.created_at),
+          tags: extractHashtags(msg.body || ''),
+          mentions: extractMentions(msg.body || ''),
+          relatedSymbols: msg.symbols?.map(s => s.symbol) || [],
+          sentiment: normalizeSentiment(msg.entities?.sentiment?.basic)
         });
-
-        if (!response.ok) {
-          console.error(`StockTwits error for ${symbol}: ${response.status}`);
-          continue;
-        }
-
-        const data = await response.json();
-
-        if (!data.messages || !Array.isArray(data.messages)) continue;
-
-        for (const msg of data.messages) {
-          // Deduplicate by StockTwits message ID
-          const existingTweet = await Tweet.findOne({ url: `https://stocktwits.com/message/${msg.id}` });
-          if (existingTweet) continue;
-
-          const symbols = msg.symbols?.map(s => s.symbol) || [symbol];
-          const sentiment = msg.entities?.sentiment?.basic?.toLowerCase() ||
-                            classifySentiment(msg.body);
-
-          await Tweet.create({
-            author: msg.user?.name || msg.user?.username || 'Unknown',
-            authorHandle: msg.user?.username || 'unknown',
-            content: msg.body,
-            url: `https://stocktwits.com/message/${msg.id}`,
-            createdAt: new Date(msg.created_at),
-            tags: extractHashtags(msg.body),
-            mentions: extractMentions(msg.body),
-            relatedSymbols: symbols,
-            sentiment: normalizeSentiment(sentiment)
-          });
-
-          console.log(`✓ Saved StockTwits post for $${symbol}`);
-        }
-
-        // Respect rate limits — StockTwits allows ~200 req/hour unauthenticated
-        await sleep(300);
-      } catch (symErr) {
-        console.error(`Error fetching StockTwits for ${symbol}:`, symErr.message);
+        saved++;
       }
+      await sleep(300);
+    } catch (err) {
+      console.error(`StockTwits user error (${stHandle}):`, err.message);
     }
-  } catch (error) {
-    console.error('Tweet (StockTwits) update error:', error);
   }
+
+  // 2. Supplement with symbol-based streams to fill gaps
+  for (const symbol of FALLBACK_SYMBOLS) {
+    try {
+      const url = `${STOCKTWITS_BASE}/streams/symbol/${symbol}.json?limit=5`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'ToriiApp/1.0' } });
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      if (!data.messages) continue;
+
+      for (const msg of data.messages) {
+        const exists = await Tweet.findOne({ url: `https://stocktwits.com/message/${msg.id}` });
+        if (exists) continue;
+
+        // Only save posts with actual financial content (filter out low-quality)
+        if (!msg.body || msg.body.length < 20) continue;
+
+        await Tweet.create({
+          author: msg.user?.name || msg.user?.username || 'StockTwits',
+          authorHandle: msg.user?.username || 'stocktwits',
+          content: msg.body,
+          url: `https://stocktwits.com/message/${msg.id}`,
+          createdAt: new Date(msg.created_at),
+          tags: extractHashtags(msg.body),
+          mentions: extractMentions(msg.body),
+          relatedSymbols: msg.symbols?.map(s => s.symbol) || [symbol],
+          sentiment: normalizeSentiment(msg.entities?.sentiment?.basic)
+        });
+        saved++;
+      }
+      await sleep(200);
+    } catch (err) {
+      console.error(`StockTwits symbol error (${symbol}):`, err.message);
+    }
+  }
+
+  console.log(`✓ Tweets update: ${saved} new posts saved`);
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ─────────────────────────────────────────────────────────────────
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function extractHashtags(text = '') {
-  return (text.match(/#\w+/g) || []).map(t => t.slice(1));
-}
-
-function extractMentions(text = '') {
-  return (text.match(/@\w+/g) || []).map(m => m.slice(1));
-}
-
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function extractHashtags(t = '') { return (t.match(/#\w+/g) || []).map(h => h.slice(1)); }
+function extractMentions(t = '') { return (t.match(/@\w+/g) || []).map(m => m.slice(1)); }
 function normalizeSentiment(raw = '') {
-  const lower = raw.toLowerCase();
-  if (lower === 'bullish' || lower === 'positive') return 'positive';
-  if (lower === 'bearish' || lower === 'negative') return 'negative';
-  return 'neutral';
-}
-
-function classifySentiment(text = '') {
-  const positive = ['bull', 'up', 'gain', 'surge', 'bullish', 'strong', 'excellent', 'buy', 'long'];
-  const negative = ['bear', 'down', 'fall', 'crash', 'bearish', 'weak', 'poor', 'sell', 'short'];
-  const lower = text.toLowerCase();
-  const pos = positive.filter(w => lower.includes(w)).length;
-  const neg = negative.filter(w => lower.includes(w)).length;
-  if (pos > neg) return 'positive';
-  if (neg > pos) return 'negative';
+  const l = (raw || '').toLowerCase();
+  if (l === 'bullish') return 'positive';
+  if (l === 'bearish') return 'negative';
   return 'neutral';
 }

@@ -140,37 +140,33 @@ function VoicesFeedPanel() {
 // ─── Portfolio snapshot ───────────────────────────────────────────────────────
 
 function PortfolioSnap({ onNav }) {
-  const [holdings, setHoldings] = React.useState(MOCK.portfolio);
+  const [holdings, setHoldings] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    fetch(`${API_URL}/stocks`)
-      .then(r => r.json())
-      .then(stocks => {
-        if (stocks && stocks.length > 0) {
-          const portfolio = stocks.slice(0, 5).map((s, i) => {
-            const shares = 2 + Math.floor(Math.random() * 50);
-            const price = parseFloat(s.price) || 0;
-            const changePercent = parseFloat(s.changePercent) || 0;
-            return {
-              id: i + 1,
-              ticker: s.symbol,
-              name: s.symbol,
-              shares: shares,
-              price: price,
-              pct: changePercent,
-              change: price * (changePercent / 100),
-              value: price * shares,
-              prevClose: price / (1 + (changePercent / 100))
-            };
-          });
-          setHoldings(portfolio);
-        } else {
-          setHoldings(MOCK.portfolio);
-        }
-      })
-      .catch(e => {console.error('Stocks API Error:', e); setHoldings(MOCK.portfolio);})
-      .finally(() => setLoading(false));
+    // Load user's actual portfolio from localStorage (same key as PortfolioPage)
+    let positions = [];
+    try {
+      const saved = localStorage.getItem('torii_portfolio');
+      positions = saved ? JSON.parse(saved) : [];
+    } catch { positions = []; }
+
+    if (positions.length === 0) { setHoldings([]); setLoading(false); return; }
+
+    Promise.all(positions.slice(0, 6).map((p, i) =>
+      fetch(`${API_URL}/stocks/live/${p.ticker}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(d => ({
+          id: i + 1,
+          ticker: p.ticker,
+          name: d?.name || p.ticker,
+          shares: p.shares,
+          price: d?.price || 0,
+          pct: d?.changePercent || 0,
+          change: d?.change || 0,
+          value: (d?.price || 0) * p.shares,
+        }))
+    )).then(res => { setHoldings(res); setLoading(false); });
   }, []);
   const total  = holdings && holdings.length > 0 ? holdings.reduce((s,h) => s + (h.value || 0), 0) : 0;
   const dayChg = holdings.reduce((s,h) => s + (h.change * h.shares), 0);

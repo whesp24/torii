@@ -560,10 +560,32 @@ function VoicesPage() {
 
 // ─── STOCK DETAIL PAGE ────────────────────────────────────────────────────────
 
+const TIMEFRAME_RANGE = { '1D':'1d', '5D':'5d', '1M':'1mo', '3M':'3mo', '1Y':'1y', 'All':'max' };
+
 function StockPage({ ticker, onBack }) {
   const [quote, setQuote] = React.useState(null);
   const [loadingQ, setLoadingQ] = React.useState(true);
   const [timeframe, setTimeframe] = React.useState('5D');
+  const [chartPrices, setChartPrices] = React.useState([]);
+  const [chartLoading, setChartLoading] = React.useState(false);
+  const [relatedNews, setRelatedNews] = React.useState([]);
+
+  // Fetch chart data whenever timeframe changes
+  React.useEffect(() => {
+    setChartLoading(true);
+    fetch(`${API_URL}/stocks/chart/${ticker}?range=${TIMEFRAME_RANGE[timeframe]}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(pts => { setChartPrices(pts.map(p => p.price).filter(Boolean)); setChartLoading(false); })
+      .catch(() => setChartLoading(false));
+  }, [ticker, timeframe]);
+
+  // Fetch related news on mount
+  React.useEffect(() => {
+    fetch(`${API_URL}/news/search?q=${encodeURIComponent(ticker)}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setRelatedNews(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [ticker]);
 
   // Get user's position data from localStorage for shares/cost info
   const positions = loadSavedPositions();
@@ -576,8 +598,6 @@ function StockPage({ ticker, onBack }) {
       .then(d => { setQuote(d); setLoadingQ(false); })
       .catch(() => setLoadingQ(false));
   }, [ticker]);
-
-  const spark = MOCK.sparklines[ticker] || [];
 
   // Build a display object from either live data or fallback
   const h = quote ? {
@@ -611,17 +631,9 @@ function StockPage({ ticker, onBack }) {
   const posValue = h.shares > 0 ? h.value : null;
   const dayPnL = h.shares > 0 ? h.change * h.shares : null;
 
-  const newsItems = MOCK.news.slice(0,3);
-
   const timeframes = ['1D', '5D', '1M', '3M', '1Y', 'All'];
-  const chartData = spark.slice(-{
-    '1D': 1,
-    '5D': 5,
-    '1M': 22,
-    '3M': 66,
-    '1Y': 252,
-    'All': spark.length
-  }[timeframe]);
+  // Use live chart data; fall back to mock sparkline while loading
+  const displayChart = chartPrices.length > 0 ? chartPrices : (MOCK.sparklines[ticker] || []);
 
   return (
     <div className="page-root">
@@ -668,7 +680,10 @@ function StockPage({ ticker, onBack }) {
             ))}
           </div>
         </div>
-        <AreaChart data={chartData} height={140} showDates={false} />
+        {chartLoading
+          ? <div style={{height:140,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--fg3)',fontSize:12,fontFamily:'var(--font-mono)'}}>Loading chart…</div>
+          : <AreaChart data={displayChart} height={140} showDates={false} />
+        }
       </div>
 
       {/* Position stats */}
@@ -689,11 +704,20 @@ function StockPage({ ticker, onBack }) {
 
       {/* Related news */}
       <div className="card">
-        <div className="section-label">Related News</div>
-        {newsItems.map((a,i) => (
+        <div className="section-label">Related News — {ticker}</div>
+        {relatedNews.length > 0 ? relatedNews.map((a,i) => (
+          <a key={a._id || i} href={a.url} target="_blank" rel="noopener"
+            style={{display:'block',padding:'10px 0',borderBottom:i<relatedNews.length-1?'1px solid var(--bdr)':'none',textDecoration:'none'}}>
+            <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.45,marginBottom:4}}>{a.title}</div>
+            <div style={{display:'flex',gap:7,alignItems:'center'}}>
+              <SourceBadge source={a.source} category={a.category} />
+              <span style={{fontSize:9,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(a.publishedAt)}</span>
+            </div>
+          </a>
+        )) : MOCK.news.slice(0,3).map((a,i) => (
           <a key={a.id} href={a.url} target="_blank" rel="noopener"
-            style={{display:'block',padding:'10px 0',borderBottom:i<newsItems.length-1?'1px solid var(--bdr)':'none',textDecoration:'none'}}>
-            <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.45,marginBottom:4,fontWeight:a.importance==='high'?600:400}}>{a.title}</div>
+            style={{display:'block',padding:'10px 0',borderBottom:i<2?'1px solid var(--bdr)':'none',textDecoration:'none'}}>
+            <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.45,marginBottom:4}}>{a.title}</div>
             <div style={{display:'flex',gap:7,alignItems:'center'}}>
               <SourceBadge source={a.source} category={a.category} />
               <span style={{fontSize:9,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(a.publishedAt)}</span>

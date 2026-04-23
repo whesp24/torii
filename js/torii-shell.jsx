@@ -114,13 +114,34 @@ function NotifPanel({ notifs, onMarkRead, onClose }) {
 // ─── Topbar ───────────────────────────────────────────────────────────────────
 
 function Topbar({ theme, onTheme, notifCount, notifOpen, onNotif }) {
+  const [liveChips, setLiveChips] = React.useState([]);
+
+  React.useEffect(() => {
+    // Fetch live KPIs then refresh every 5 minutes
+    const load = () => fetch('/api/kpis')
+      .then(r => r.ok ? r.json() : [])
+      .then(kpis => {
+        if (kpis && kpis.length > 0) {
+          setLiveChips(kpis.map(k => ({
+            label: k.label || k.symbol,
+            price: fmtPrice(k.price, k.price > 100 ? 0 : 2),
+            pct: `${(k.changePercent||0) >= 0 ? '+' : ''}${(k.changePercent||0).toFixed(2)}%`,
+            up: (k.changePercent||0) >= 0
+          })));
+        }
+      }).catch(() => {});
+    load();
+    const t = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Fall back to mock while loading
   const allQ = [...MOCK.japan, ...MOCK.macro];
-  const chips = allQ.map(q => {
+  const mockChips = allQ.map(q => {
     const up = q.invert ? q.pct < 0 : q.pct >= 0;
-    const priceStr = fmtPrice(q.price, q.dec);
-    const pctStr = `${q.pct >= 0 ? '+' : ''}${q.pct.toFixed(2)}%`;
-    return { label: q.label, price: priceStr, pct: pctStr, up };
+    return { label: q.label, price: fmtPrice(q.price, q.dec), pct: `${q.pct >= 0 ? '+' : ''}${q.pct.toFixed(2)}%`, up };
   });
+  const chips = liveChips.length > 0 ? liveChips : mockChips;
 
   return (
     <header className="topbar">
@@ -202,31 +223,8 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
 
       <div className="sidebar-div" />
 
-      {/* Holdings */}
-      <div className="sidebar-section sidebar-scroll-section">
-        {!collapsed && <div className="sidebar-section-label">HOLDINGS</div>}
-        <div className="holdings-scroller">
-          {MOCK.portfolio.map(h => {
-            const up = h.pct >= 0;
-            const color = up ? 'var(--green)' : 'var(--red-loss)';
-            return (
-              <button key={h.id} className={`nav-item holding-row${page===`stock-${h.ticker}`?' active':''}`}
-                onClick={() => onNav(`stock-${h.ticker}`)}>
-                <div className="holding-left">
-                  <span className="holding-ticker">{h.ticker}</span>
-                  {!collapsed && <span className="holding-shares">{h.shares}sh</span>}
-                </div>
-                {!collapsed && (
-                  <div className="holding-right" style={{ color }}>
-                    <span className="holding-price">${h.price.toFixed(2)}</span>
-                    <span className="holding-pct">{up?'+':''}{h.pct.toFixed(2)}%</span>
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {/* Holdings — reads from same localStorage key as PortfolioPage */}
+      <SidebarHoldings page={page} onNav={onNav} collapsed={collapsed} />
 
       {/* Tasks */}
       {!collapsed && (
@@ -252,12 +250,8 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
                   </div>
                 ))}
                 <form onSubmit={handleAdd} className="task-add-form">
-                  <input
-                    className="task-input"
-                    value={taskInput}
-                    onChange={e => setTaskInput(e.target.value)}
-                    placeholder="+ Add task…"
-                  />
+                  <input className="task-input" value={taskInput}
+                    onChange={e => setTaskInput(e.target.value)} placeholder="+ Add task…" />
                 </form>
               </div>
             )}
@@ -267,11 +261,55 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
 
       {/* Footer */}
       {!collapsed && (
-        <div className="sidebar-footer">
-          Yahoo Finance · NHK · Reuters
-        </div>
+        <div className="sidebar-footer">Yahoo Finance · NHK · Reuters</div>
       )}
     </aside>
+  );
+}
+
+function SidebarHoldings({ page, onNav, collapsed }) {
+  const [holdings, setHoldings] = React.useState([]);
+
+  React.useEffect(() => {
+    let positions = [];
+    try { positions = JSON.parse(localStorage.getItem('torii_portfolio') || '[]'); } catch {}
+    if (positions.length === 0) { setHoldings([]); return; }
+    Promise.all(positions.slice(0, 8).map(p =>
+      fetch(`/api/stocks/live/${p.ticker}`).then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(d => ({ ticker: p.ticker, shares: p.shares, price: d?.price || 0, pct: d?.changePercent || 0 }))
+    )).then(setHoldings);
+  }, []);
+
+  return (
+    <div className="sidebar-section sidebar-scroll-section">
+      {!collapsed && <div className="sidebar-section-label">HOLDINGS</div>}
+      <div className="holdings-scroller">
+        {holdings.length === 0 && !collapsed && (
+          <div style={{padding:'8px 12px',fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>
+            Add positions in Portfolio tab
+          </div>
+        )}
+        {holdings.map(h => {
+          const up = h.pct >= 0;
+          const color = up ? 'var(--green)' : 'var(--red-loss)';
+          return (
+            <button key={h.ticker} className={`nav-item holding-row${page===`stock-${h.ticker}`?' active':''}`}
+              onClick={() => onNav(`stock-${h.ticker}`)}>
+              <div className="holding-left">
+                <span className="holding-ticker">{h.ticker}</span>
+                {!collapsed && <span className="holding-shares">{h.shares}sh</span>}
+              </div>
+              {!collapsed && (
+                <div className="holding-right" style={{ color }}>
+                  <span className="holding-price">${(h.price||0).toFixed(2)}</span>
+                  <span className="holding-pct">{up?'+':''}{(h.pct||0).toFixed(2)}%</span>
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
