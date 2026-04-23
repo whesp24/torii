@@ -1,21 +1,40 @@
 import Stock from '../models/Stock.js';
 
-// Shared helper — used by both the cron job and the /live/:symbol route
+// Shared helper — direct Yahoo Finance HTTP call, no package import issues
 export async function fetchLiveQuote(symbol) {
-  const { default: yf } = await import('yahoo-finance2');
-  const quote = await yf.quote(symbol.toUpperCase(), {}, { validateResult: false });
-  const price = quote?.regularMarketPrice ?? quote?.preMarketPrice ?? null;
-  if (!price) throw new Error(`No price data for ${symbol}`);
+  const sym = symbol.toUpperCase();
+
+  // Yahoo Finance v8 chart API — public, no auth needed
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'application/json',
+    }
+  });
+
+  if (!res.ok) throw new Error(`Yahoo Finance returned ${res.status} for ${sym}`);
+
+  const data = await res.json();
+  const meta = data?.chart?.result?.[0]?.meta;
+
+  if (!meta?.regularMarketPrice) throw new Error(`No price data for ${sym}`);
+
+  const prev = meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice;
+  const price = meta.regularMarketPrice;
+  const change = price - prev;
+  const changePercent = prev > 0 ? (change / prev) * 100 : 0;
+
   return {
-    symbol: symbol.toUpperCase(),
-    name: quote.longName || quote.shortName || symbol,
+    symbol: sym,
+    name: meta.shortName || meta.symbol || sym,
     price,
-    change: quote.regularMarketChange ?? 0,
-    changePercent: quote.regularMarketChangePercent ?? 0,
-    volume: quote.regularMarketVolume ?? 0,
-    marketCap: quote.marketCap ?? null,
-    high52Week: quote.fiftyTwoWeekHigh ?? null,
-    low52Week: quote.fiftyTwoWeekLow ?? null,
+    change,
+    changePercent,
+    volume: meta.regularMarketVolume ?? 0,
+    marketCap: null,
+    high52Week: meta.fiftyTwoWeekHigh ?? null,
+    low52Week: meta.fiftyTwoWeekLow ?? null,
     lastUpdated: new Date()
   };
 }

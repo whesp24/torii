@@ -36,20 +36,21 @@ function PortfolioPage({ onNav }) {
     Promise.all(positions.map((p, i) =>
       fetch(`${API_URL}/stocks/live/${p.ticker}`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => d ? {
+        .catch(() => null)
+        .then(d => ({
           id: i + 1,
           ticker: p.ticker,
-          name: d.name || p.ticker,
+          name: d?.name || p.ticker,
           shares: p.shares,
-          costBasis: p.costBasis || d.price,
-          price: d.price,
-          pct: d.changePercent || 0,
-          change: d.change || 0,
-          value: d.price * p.shares,
-          prevClose: d.price - (d.change || 0)
-        } : null)
-        .catch(() => null)
-    )).then(res => { setHoldings(res.filter(Boolean)); setLoading(false); });
+          costBasis: p.costBasis || d?.price || 0,
+          price: d?.price || 0,
+          pct: d?.changePercent || 0,
+          change: d?.change || 0,
+          value: (d?.price || 0) * p.shares,
+          prevClose: (d?.price || 0) - (d?.change || 0),
+          priceUnavailable: !d?.price
+        }))
+    )).then(res => { setHoldings(res); setLoading(false); });
   }, [positions]);
 
   const addPosition = () => {
