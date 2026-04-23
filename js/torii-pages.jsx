@@ -2090,7 +2090,7 @@ function buildHubGraph(contacts, filters = { company: true, school: true, locati
   }
   processField('company', 'company', '#4a9eff', 20);
   processField('school',  'school',  '#4ade80', 20);
-  processField('location','location','#fbbf24', 12, 1); // show any city with 1+ contact
+  processField('location','location','#fbbf24', 500, 1); // cities can have many contacts — no practical cap
 
   const hubNodes = Object.values(hubMap);
   return { contactNodes, hubNodes, allNodes: [...contactNodes, ...hubNodes], edges };
