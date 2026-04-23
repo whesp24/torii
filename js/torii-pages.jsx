@@ -3929,8 +3929,12 @@ function BriefingPage() {
     setError(null);
     try {
       const res = await fetch(`${API_URL}/briefing/latest`);
-      if (!res.ok) { setBriefing(null); }
-      else { const data = await res.json(); setBriefing(data); }
+      if (res.status === 404) { setBriefing(null); }
+      else if (!res.ok) { setError('Could not load briefing'); }
+      else {
+        const data = await res.json();
+        setBriefing(data.summary ? data : null);
+      }
     } catch { setError('Could not load briefing'); }
     setLoading(false);
   }
@@ -3945,7 +3949,7 @@ function BriefingPage() {
         body: JSON.stringify({ force: true }),
       });
       const data = await res.json();
-      if (data.content) setBriefing(data);
+      if (data.summary) setBriefing(data);
       else setError(data.error || 'Generation failed');
     } catch { setError('Could not generate briefing'); }
     setGenerating(false);
@@ -4043,7 +4047,7 @@ function BriefingPage() {
 
           {/* Briefing card */}
           <div className="card" style={{ padding: isMobile ? '16px 18px' : '28px 32px', lineHeight: 1.7 }}>
-            {renderBriefingContent(briefing.content)}
+            {renderBriefingContent(briefing.summary)}
           </div>
 
           <div style={{ textAlign: 'center', fontSize: 10, color: 'var(--fg3)', marginTop: 14, fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
