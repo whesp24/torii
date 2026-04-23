@@ -1,9 +1,9 @@
 import Tweet from '../models/Tweet.js';
-import Parser from 'rss-parser';
 
-const parser = new Parser({ timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ToriiApp/1.0)' } });
+// X API v2 — Bearer Token stored in TWITTER_BEARER_TOKEN env var
+const BEARER = process.env.TWITTER_BEARER_TOKEN;
+const BASE   = 'https://api.twitter.com/2';
 
-// Curated finance accounts with display info
 const CURATED_USERS = [
   { handle: 'KevinLMak',       displayName: 'Kevin Mak' },
   { handle: 'ContrarianCurse', displayName: 'SuspendedCap' },
@@ -13,72 +13,77 @@ const CURATED_USERS = [
   { handle: 'patrick_oshag',   displayName: 'Patrick O\'Shaughnessy' },
 ];
 
-// Working nitter instances — tried in order until one works
-const NITTER_INSTANCES = [
-  'nitter.privacydev.net',
-  'nitter.poast.org',
-  'nitter.bird.froth.zone',
-  'nitter.cz',
-  'nitter.1d4.us',
-];
+const xGet = (path) => fetch(`${BASE}${path}`, {
+  headers: { Authorization: `Bearer ${BEARER}` }
+});
 
 export async function fetchAndUpdateTweets() {
-  let saved = 0;
-
-  for (const { handle, displayName } of CURATED_USERS) {
-    let fetched = false;
-
-    // Try each nitter instance until one works
-    for (const instance of NITTER_INSTANCES) {
-      if (fetched) break;
-      try {
-        const feedUrl = `https://${instance}/${handle}/rss`;
-        const feed = await parser.parseURL(feedUrl);
-
-        for (const item of (feed.items || []).slice(0, 10)) {
-          if (!item.link) continue;
-          const exists = await Tweet.findOne({ url: item.link });
-          if (exists) continue;
-
-          const content = item.contentSnippet || item.title || '';
-          await Tweet.create({
-            author: displayName,
-            authorHandle: handle,
-            content: content.trim(),
-            url: item.link,
-            createdAt: item.pubDate ? new Date(item.pubDate) : new Date(),
-            tags: extractHashtags(content),
-            mentions: extractMentions(content),
-            relatedSymbols: extractSymbols(content),
-            sentiment: classifySentiment(content)
-          });
-          saved++;
-        }
-
-        console.log(`✓ Fetched tweets for @${handle} via ${instance}`);
-        fetched = true;
-      } catch (err) {
-        // Try next instance silently
-      }
-    }
-
-    if (!fetched) {
-      console.log(`ℹ No nitter instance worked for @${handle} — skipping`);
-    }
-    await sleep(500);
+  if (!BEARER) {
+    console.log('ℹ TWITTER_BEARER_TOKEN not set — skipping tweet fetch');
+    return;
   }
 
-  console.log(`✓ Tweets update: ${saved} new posts saved`);
+  // 1. Batch-resolve all handles → user IDs
+  const usernames = CURATED_USERS.map(u => u.handle).join(',');
+  const usersRes = await xGet(`/users/by?usernames=${usernames}&user.fields=name,username`);
+
+  if (!usersRes.ok) {
+    console.error('X API /users/by failed:', usersRes.status, await usersRes.text());
+    return;
+  }
+
+  const { data: users = [] } = await usersRes.json();
+  let saved = 0;
+
+  // 2. Fetch recent tweets for each user
+  for (const user of users) {
+    try {
+      const tweetsRes = await xGet(
+        `/users/${user.id}/tweets?max_results=10&exclude=retweets,replies` +
+        `&tweet.fields=created_at,text,entities`
+      );
+
+      if (!tweetsRes.ok) {
+        console.error(`X API tweets failed for @${user.username}: ${tweetsRes.status}`);
+        continue;
+      }
+
+      const { data: tweets = [] } = await tweetsRes.json();
+      const meta = CURATED_USERS.find(u => u.handle.toLowerCase() === user.username.toLowerCase());
+
+      for (const tweet of tweets) {
+        const url = `https://x.com/${user.username}/status/${tweet.id}`;
+        const exists = await Tweet.findOne({ url });
+        if (exists) continue;
+
+        await Tweet.create({
+          author:        meta?.displayName || user.name,
+          authorHandle:  user.username,
+          content:       tweet.text,
+          url,
+          createdAt:     new Date(tweet.created_at),
+          tags:          (tweet.entities?.hashtags  || []).map(h => h.tag),
+          mentions:      (tweet.entities?.mentions  || []).map(m => m.username),
+          relatedSymbols:(tweet.entities?.cashtags  || []).map(c => c.tag.toUpperCase()),
+          sentiment:     classifySentiment(tweet.text)
+        });
+        saved++;
+      }
+
+      await sleep(150); // stay well within rate limits
+    } catch (err) {
+      console.error(`Error fetching @${user.username}:`, err.message);
+    }
+  }
+
+  console.log(`✓ X API: ${saved} new tweets saved`);
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
-
+// ── helpers ──────────────────────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function extractHashtags(t = '') { return (t.match(/#\w+/g) || []).map(h => h.slice(1)); }
-function extractMentions(t = '') { return (t.match(/@\w+/g) || []).map(m => m.slice(1)); }
-function extractSymbols(t = '') { return (t.match(/\$[A-Z]{1,5}/g) || []).map(s => s.slice(1)); }
+
 function classifySentiment(text = '') {
-  const pos = ['bull', 'up', 'gain', 'buy', 'long', 'rally', 'surge', 'strong'].filter(w => text.toLowerCase().includes(w)).length;
-  const neg = ['bear', 'down', 'fall', 'sell', 'short', 'crash', 'weak', 'drop'].filter(w => text.toLowerCase().includes(w)).length;
+  const pos = ['bull','up','gain','buy','long','rally','surge'].filter(w => text.toLowerCase().includes(w)).length;
+  const neg = ['bear','down','fall','sell','short','crash','weak'].filter(w => text.toLowerCase().includes(w)).length;
   return pos > neg ? 'positive' : neg > pos ? 'negative' : 'neutral';
 }
