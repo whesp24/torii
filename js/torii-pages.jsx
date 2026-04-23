@@ -473,42 +473,40 @@ const VOICE_ACCOUNTS = [
   { handle:'patrick_oshag',   name:'Patrick O\'Shag', topics:['Value','Capital'],        initials:'PO', color:'#EC4899' },
 ];
 
+// Topic keyword map for each curated account
+const VOICE_TOPICS = {
+  'KevinLMak':       ['japan', 'nikkei', 'fx', 'yen', 'macro', 'boj', 'jpy'],
+  'ContrarianCurse': ['equities', 'sentiment', 'market', 'stock', 'short', 'bearish', 'bullish'],
+  'dsundheim':       ['equity', 'long', 'short', 'fund', 'hedge', 'position'],
+  'jeff_weinstein':  ['tech', 'venture', 'ai', 'startup', 'software', 'nvda', 'nvidia'],
+  'HannoLustig':     ['macro', 'fed', 'rates', 'inflation', 'bond', 'treasury', 'monetary'],
+  'patrick_oshag':   ['value', 'capital', 'invest', 'earnings', 'growth', 'compounding'],
+};
+
 function VoicesPage() {
   const [selected, setSelected] = React.useState('all');
-  const [tweets, setTweets] = React.useState(MOCK.tweets);
+  const [news, setNews] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    fetch(`${API_URL}/tweets`)
+    fetch(`${API_URL}/news`)
       .then(r => r.json())
-      .then(tweetData => {
-        if (tweetData && tweetData.length > 0) {
-          // Transform API tweet data
-          const transformed = tweetData.map(tweet => ({
-            id: tweet._id || Math.random(),
-            author: tweet.author || 'Unknown',
-            handle: tweet.authorHandle || 'unknown',
-            name: tweet.author || 'Unknown',
-            content: tweet.content || '',
-            url: tweet.url || '#',
-            createdAt: tweet.createdAt || new Date().toISOString(),
-            likes: tweet.likes || 0,
-            retweets: tweet.retweets || 0,
-            replies: tweet.replies || 0,
-            sentiment: tweet.sentiment || 'neutral'
-          }));
-          setTweets(transformed);
-        } else {
-          setTweets(MOCK.tweets);
-        }
-      })
-      .catch(e => {console.error('Tweets API Error:', e); setTweets(MOCK.tweets);})
-      .finally(() => setLoading(false));
+      .then(d => { setNews(Array.isArray(d) ? d.slice(0, 60) : []); setLoading(false); })
+      .catch(() => setLoading(false));
   }, []);
 
-  const displayedTweets = selected === 'all'
-    ? (tweets || MOCK.tweets)
-    : (tweets || MOCK.tweets).filter(t => t.handle === selected);
+  // Filter news by selected account's topics
+  const filteredNews = React.useMemo(() => {
+    if (selected === 'all') return news.slice(0, 30);
+    const topics = VOICE_TOPICS[selected] || [];
+    const filtered = news.filter(n => {
+      const text = ((n.title || '') + ' ' + (n.description || '') + ' ' + (n.category || '')).toLowerCase();
+      return topics.some(kw => text.includes(kw));
+    });
+    return filtered.length > 0 ? filtered : news.slice(0, 10); // fallback to latest news
+  }, [news, selected]);
+
+  const acct = VOICE_ACCOUNTS.find(a => a.handle === selected);
 
   return (
     <div className="page-root">
@@ -522,9 +520,7 @@ function VoicesPage() {
 
       {/* Account grid */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:16}}>
-        <div
-          onClick={() => setSelected('all')}
-          className={`voice-card${selected==='all'?' active':''}`}>
+        <div onClick={() => setSelected('all')} className={`voice-card${selected==='all'?' active':''}`}>
           <div className="voice-avatar" style={{background:'var(--surf2)',color:'var(--fg2)',fontSize:11,fontFamily:'var(--font-mono)'}}>ALL</div>
           <div className="voice-info">
             <span className="voice-name">All Voices</span>
@@ -532,8 +528,7 @@ function VoicesPage() {
           </div>
         </div>
         {VOICE_ACCOUNTS.map(a => (
-          <div key={a.handle}
-            onClick={() => setSelected(a.handle)}
+          <div key={a.handle} onClick={() => setSelected(a.handle)}
             className={`voice-card${selected===a.handle?' active':''}`}>
             <div className="voice-avatar" style={{background:a.color}}>{a.initials}</div>
             <div className="voice-info">
@@ -547,11 +542,41 @@ function VoicesPage() {
         ))}
       </div>
 
-      {/* Tweet feed */}
+      {/* Feed label */}
+      {acct && (
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,padding:'8px 12px',background:'var(--surf)',borderRadius:8,border:'1px solid var(--bdr)'}}>
+          <div className="voice-avatar" style={{background:acct.color,width:28,height:28,fontSize:10}}>{acct.initials}</div>
+          <div>
+            <span style={{fontSize:12,fontWeight:600,color:'var(--fg)'}}>{acct.name}</span>
+            <span style={{fontSize:11,color:'var(--fg3)',marginLeft:6}}>· {acct.topics.join(', ')} coverage</span>
+          </div>
+        </div>
+      )}
+
+      {/* News feed styled as voice posts */}
       <div style={{display:'flex',flexDirection:'column',gap:10}}>
-        {displayedTweets.map(t => <TweetCard key={t.id} tweet={t} />)}
-        {displayedTweets.length === 0 && (
-          <div style={{padding:'40px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>No tweets found</div>
+        {loading && <div style={{padding:40,textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading feed…</div>}
+        {!loading && filteredNews.map((n, i) => (
+          <a key={n._id || i} href={n.url} target="_blank" rel="noopener"
+            style={{display:'block',textDecoration:'none',background:'var(--surf)',border:'1px solid var(--bdr)',borderRadius:12,padding:'14px 16px'}}>
+            <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+              <div style={{width:36,height:36,borderRadius:'50%',background:'var(--surf2)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:10,fontFamily:'var(--font-mono)',color:'var(--fg3)',fontWeight:700,border:'1px solid var(--bdr)'}}>
+                {(n.source || 'N').charAt(0).toUpperCase()}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
+                  <span style={{fontSize:12,fontWeight:600,color:'var(--fg)'}}>{n.source || 'Financial News'}</span>
+                  <span style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(n.publishedAt)}</span>
+                  {n.category && <span style={{fontSize:9,padding:'2px 6px',background:'var(--surf2)',border:'1px solid var(--bdr)',borderRadius:4,color:'var(--fg3)',fontFamily:'var(--font-mono)',textTransform:'uppercase'}}>{n.category}</span>}
+                </div>
+                <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.5,fontWeight:500}}>{n.title}</div>
+                {n.description && <div style={{fontSize:11,color:'var(--fg2)',lineHeight:1.45,marginTop:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{n.description}</div>}
+              </div>
+            </div>
+          </a>
+        ))}
+        {!loading && filteredNews.length === 0 && (
+          <div style={{padding:'40px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>No coverage found yet — check back after news updates</div>
         )}
       </div>
     </div>
@@ -579,13 +604,25 @@ function StockPage({ ticker, onBack }) {
       .catch(() => setChartLoading(false));
   }, [ticker, timeframe]);
 
-  // Fetch related news on mount
+  // Fetch related news — search by ticker + company name, fallback to latest real news
   React.useEffect(() => {
-    fetch(`${API_URL}/news/search?q=${encodeURIComponent(ticker)}`)
-      .then(r => r.ok ? r.json() : [])
-      .then(d => setRelatedNews(Array.isArray(d) ? d : []))
+    const company = h?.name && h.name !== ticker ? h.name.split(' ')[0] : ticker;
+    // Try ticker first, then company name, then latest news
+    const trySearch = (q) => fetch(`${API_URL}/news/search?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : []);
+    trySearch(ticker)
+      .then(async d => {
+        if (d && d.length > 0) return d;
+        if (company !== ticker) return trySearch(company);
+        return [];
+      })
+      .then(async d => {
+        if (d && d.length > 0) return setRelatedNews(d);
+        // fallback: show latest real news from DB (no mock)
+        const latest = await fetch(`${API_URL}/news`).then(r => r.ok ? r.json() : []).catch(() => []);
+        setRelatedNews(Array.isArray(latest) ? latest.slice(0, 4) : []);
+      })
       .catch(() => {});
-  }, [ticker]);
+  }, [ticker, h?.name]);
 
   // Get user's position data from localStorage for shares/cost info
   const positions = loadSavedPositions();
@@ -635,6 +672,16 @@ function StockPage({ ticker, onBack }) {
   // Use live chart data; fall back to mock sparkline while loading
   const displayChart = chartPrices.length > 0 ? chartPrices : (MOCK.sparklines[ticker] || []);
 
+  // Calculate ACTUAL period % from chart data (first → last price)
+  const periodPct = React.useMemo(() => {
+    if (chartPrices.length < 2) return h.pct; // fall back to day % while loading
+    const first = chartPrices[0];
+    const last = chartPrices[chartPrices.length - 1];
+    return first > 0 ? ((last - first) / first) * 100 : h.pct;
+  }, [chartPrices, h.pct]);
+  const periodUp = periodPct >= 0;
+  const periodColor = periodUp ? 'var(--green)' : 'var(--red-loss)';
+
   return (
     <div className="page-root">
       {/* Back */}
@@ -655,8 +702,8 @@ function StockPage({ ticker, onBack }) {
           </div>
           <div style={{display:'flex',alignItems:'baseline',gap:12}}>
             <span style={{fontSize:36,fontWeight:900,fontFamily:'var(--font-mono)',letterSpacing:'-0.04em'}}>${h.price.toFixed(2)}</span>
-            <span style={{fontSize:16,fontWeight:600,fontFamily:'var(--font-mono)',color}}>
-              {up?'+':''}{h.pct.toFixed(2)}% {timeframe === '1D' ? 'today' : 'period'}
+            <span style={{fontSize:16,fontWeight:600,fontFamily:'var(--font-mono)',color:periodColor}}>
+              {periodUp?'+':''}{periodPct.toFixed(2)}% {timeframe === '1D' ? 'today' : timeframe}
             </span>
           </div>
         </div>
@@ -706,24 +753,19 @@ function StockPage({ ticker, onBack }) {
       <div className="card">
         <div className="section-label">Related News — {ticker}</div>
         {relatedNews.length > 0 ? relatedNews.map((a,i) => (
-          <a key={a._id || i} href={a.url} target="_blank" rel="noopener"
-            style={{display:'block',padding:'10px 0',borderBottom:i<relatedNews.length-1?'1px solid var(--bdr)':'none',textDecoration:'none'}}>
+          <a key={a._id || i} href={a.url} target="_blank" rel="noopener noreferrer"
+            style={{display:'block',padding:'10px 0',borderBottom:i<relatedNews.length-1?'1px solid var(--bdr)':'none',textDecoration:'none',cursor:'pointer'}}>
             <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.45,marginBottom:4}}>{a.title}</div>
             <div style={{display:'flex',gap:7,alignItems:'center'}}>
               <SourceBadge source={a.source} category={a.category} />
               <span style={{fontSize:9,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(a.publishedAt)}</span>
             </div>
           </a>
-        )) : MOCK.news.slice(0,3).map((a,i) => (
-          <a key={a.id} href={a.url} target="_blank" rel="noopener"
-            style={{display:'block',padding:'10px 0',borderBottom:i<2?'1px solid var(--bdr)':'none',textDecoration:'none'}}>
-            <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.45,marginBottom:4}}>{a.title}</div>
-            <div style={{display:'flex',gap:7,alignItems:'center'}}>
-              <SourceBadge source={a.source} category={a.category} />
-              <span style={{fontSize:9,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(a.publishedAt)}</span>
-            </div>
-          </a>
-        ))}
+        )) : (
+          <div style={{padding:'16px 0',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>
+            No news found for {ticker} — check back after the next news update
+          </div>
+        )}
       </div>
     </div>
   );
