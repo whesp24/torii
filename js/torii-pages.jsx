@@ -16,6 +16,7 @@ function useIsMobile() {
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
 function PortfolioPage({ onNav }) {
+  const isMobile   = useIsMobile();
   const [positions, setPositions] = React.useState([]);
   const [holdings, setHoldings]   = React.useState([]);
   const [loading, setLoading]     = React.useState(true);
@@ -170,7 +171,7 @@ function PortfolioPage({ onNav }) {
       </div>
 
       {/* Summary row */}
-      <div className="kpi-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:16}}>
+      <div className="kpi-grid" style={{gridTemplateColumns:isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',marginBottom:16}}>
         <div className="stat-card accent">
           <span className="stat-label">Total Value</span>
           <span className="stat-value">${total.toLocaleString('en-US',{maximumFractionDigits:0})}</span>
@@ -209,7 +210,7 @@ function PortfolioPage({ onNav }) {
         </div>
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:14,alignItems:'start'}}>
+      <div className="portfolio-main-grid" style={{display:'grid',gridTemplateColumns:isMobile ? '1fr' : '1fr 280px',gap:14,alignItems:'start'}}>
         {/* Holdings table */}
         <div className="card" style={{padding:0,overflow:'hidden'}}>
           <div style={{padding:'16px 20px 12px',borderBottom:'1px solid var(--bdr)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -224,20 +225,20 @@ function PortfolioPage({ onNav }) {
             <thead>
               <tr>
                 <th>Ticker</th>
-                <th>Name</th>
-                <th style={{textAlign:'right'}}>Shares</th>
+                {!isMobile && <th>Name</th>}
+                {!isMobile && <th style={{textAlign:'right'}}>Shares</th>}
                 <th style={{textAlign:'right'}}>Price</th>
                 <th style={{textAlign:'right'}}>Day</th>
                 <th style={{textAlign:'right'}}>Value</th>
-                <th style={{textAlign:'right'}}>Alloc</th>
+                {!isMobile && <th style={{textAlign:'right'}}>Alloc</th>}
                 <th style={{width:36}}></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{textAlign:'center',padding:32,color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading prices…</td></tr>
+                <tr><td colSpan={isMobile ? 5 : 8} style={{textAlign:'center',padding:32,color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading prices…</td></tr>
               ) : sorted.length === 0 ? (
-                <tr><td colSpan={8} style={{textAlign:'center',padding:32,color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>
+                <tr><td colSpan={isMobile ? 5 : 8} style={{textAlign:'center',padding:32,color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>
                   No positions yet — click <strong style={{color:'var(--fg)'}}>+ Add Position</strong> to get started
                 </td></tr>
               ) : sorted.map(h => {
@@ -247,11 +248,12 @@ function PortfolioPage({ onNav }) {
                   <tr key={h.ticker}>
                     <td onClick={() => onNav(`stock-${h.ticker}`)} style={{cursor:'pointer'}}>
                       <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12,color:'var(--fg)'}}>{h.ticker}</span>
+                      {isMobile && <div style={{fontSize:10,color:'var(--fg3)'}}>{h.name}</div>}
                     </td>
-                    <td onClick={() => onNav(`stock-${h.ticker}`)} style={{cursor:'pointer'}}>
+                    {!isMobile && <td onClick={() => onNav(`stock-${h.ticker}`)} style={{cursor:'pointer'}}>
                       <span style={{fontSize:11,color:'var(--fg2)'}}>{h.name}</span>
-                    </td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--fg3)'}}>{h.shares}</td>
+                    </td>}
+                    {!isMobile && <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--fg3)'}}>{h.shares}</td>}
                     <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,color:'var(--fg)'}}>${(h.price||0).toFixed(2)}</td>
                     <td style={{textAlign:'right'}}>
                       <span style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:600,color}}>
@@ -261,9 +263,9 @@ function PortfolioPage({ onNav }) {
                     <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600,color:'var(--fg)'}}>
                       ${(h.value||0).toLocaleString('en-US',{maximumFractionDigits:0})}
                     </td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--fg3)'}}>
+                    {!isMobile && <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--fg3)'}}>
                       {total > 0 ? ((h.value/total)*100).toFixed(1) : '0.0'}%
-                    </td>
+                    </td>}
                     <td style={{textAlign:'center',padding:'4px 8px'}}>
                       <button onClick={() => removePosition(h.ticker)}
                         style={{background:'none',border:'none',color:'var(--fg3)',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px 6px',borderRadius:4}}
@@ -335,6 +337,7 @@ const JAPAN_KPIS = [
 ];
 
 function JapanPage() {
+  const isMobile   = useIsMobile();
   const [kpis,    setKpis]    = React.useState({});
   const [stocks,  setStocks]  = React.useState([]);
   const [chart,   setChart]   = React.useState([]);
@@ -383,7 +386,7 @@ function JapanPage() {
       </div>
 
       {/* Hero KPIs */}
-      <div className="kpi-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:16}}>
+      <div className="kpi-grid" style={{gridTemplateColumns:isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',marginBottom:16}}>
         {JAPAN_KPIS.map(({symbol,label,dec,accent,tag}) => {
           const k = kpis[symbol];
           const mock = [...(MOCK.japan||[]),...(MOCK.macro||[])].find(q => q.symbol === symbol);
@@ -565,6 +568,7 @@ const VOICE_TOPICS = {
 };
 
 function VoicesPage() {
+  const isMobile   = useIsMobile();
   const [selected, setSelected] = React.useState('all');
   const [tweets, setTweets]     = React.useState([]);
   const [loading, setLoading]   = React.useState(true);
@@ -631,7 +635,7 @@ function VoicesPage() {
       </div>
 
       {/* Account grid */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:16}}>
+      <div style={{display:'grid',gridTemplateColumns:isMobile ? '1fr 1fr' : 'repeat(3,1fr)',gap:8,marginBottom:16}}>
         <div onClick={() => setSelected('all')} className={`voice-card${selected==='all'?' active':''}`}>
           <div className="voice-avatar" style={{background:'var(--surf2)',color:'var(--fg2)',fontSize:11,fontFamily:'var(--font-mono)'}}>ALL</div>
           <div className="voice-info">
@@ -730,6 +734,7 @@ const TIMEFRAME_RANGE = { '1D':'1d', '5D':'5d', '1M':'1mo', '3M':'3mo', '1Y':'1y
 
 function StockPage({ ticker, onBack }) {
   // ── ALL hooks must come before any early returns ──────────────────────────
+  const isMobile   = useIsMobile();
   const [quote, setQuote]         = React.useState(null);
   const [loadingQ, setLoadingQ]   = React.useState(true);
   const [timeframe, setTimeframe] = React.useState('5D');
@@ -738,10 +743,13 @@ function StockPage({ ticker, onBack }) {
   const [chartLoading, setChartLoading] = React.useState(false);
   const [relatedNews, setRelatedNews]   = React.useState([]);
 
-  // Position from localStorage (memoized so it doesn't re-run on every render)
+  // Position from localStorage cache (portfolio page keeps this in sync)
   const pos = React.useMemo(() => {
-    const saved = loadSavedPositions();
-    return saved.find(p => p.ticker === ticker) || null;
+    try {
+      const raw = localStorage.getItem('torii_portfolio');
+      const saved = raw ? JSON.parse(raw) : [];
+      return saved.find(p => p.ticker === ticker) || null;
+    } catch { return null; }
   }, [ticker]);
 
   // Derived display object from quote state
@@ -881,7 +889,7 @@ function StockPage({ ticker, onBack }) {
       </div>
 
       {/* Position stats */}
-      <div className="kpi-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:14}}>
+      <div className="kpi-grid" style={{gridTemplateColumns:isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',marginBottom:14}}>
         {[
           {label:'Position Value', val: posValue != null ? `$${posValue.toLocaleString('en-US',{maximumFractionDigits:0})}` : '—', sub: h.shares > 0 ? `${h.shares} shares` : 'Not in portfolio'},
           {label:'Day P&L', val: dayPnL != null ? `${dayPnL>=0?'+':''}$${Math.abs(dayPnL).toFixed(2)}` : `${up?'+':''}${h.pct.toFixed(2)}%`, sub:`${h.pct.toFixed(2)}% today`, color},
@@ -2354,6 +2362,7 @@ function NetworkGraph({ contacts, onSelectNode, selectedId, edgeFilters }) {
 }
 
 function NetworkingPage() {
+  const isMobile   = useIsMobile();
   const [contacts, setContacts]     = React.useState([]);
   const [view, setView]             = React.useState('graph');
   const [showAdd, setShowAdd]       = React.useState(false);
@@ -2465,7 +2474,7 @@ function NetworkingPage() {
               <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--fg3)' }}>✕</button>
             </div>
             <form onSubmit={saveEdit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
                 {editFieldInput('Name *', 'name', 'Full name')}
                 {editFieldInput('Role', 'role', 'e.g. Partner at a16z')}
                 {editFieldInput('Company', 'company', 'Current employer')}
@@ -2530,7 +2539,7 @@ function NetworkingPage() {
         <div className="card" style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--fg)' }}>New Contact</div>
           <form onSubmit={addContact} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
               {fieldInput('Name *', 'name', 'Full name')}
               {fieldInput('Role', 'role', 'e.g. Partner at a16z')}
               {fieldInput('Company', 'company', 'Current employer')}
@@ -2609,7 +2618,7 @@ function NetworkingPage() {
           )}
 
           {/* Cluster summary */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: 10 }}>
             {[['Company', 'company', '#3B82F6'], ['School', 'school', '#22c55e'], ['Location', 'location', '#F59E0B']].map(([label, field, color]) => {
               const groups = groupBy(field).filter(([k]) => k !== 'Unknown');
               if (groups.length === 0) return null;
@@ -3044,7 +3053,7 @@ function NotesPage() {
                 style={{ width: '100%', padding: '9px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 14, fontWeight: 600, background: 'var(--surf)', color: 'var(--fg)', boxSizing: 'border-box' }} />
               <textarea value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} placeholder="Notes, thesis, research…" rows={6}
                 style={{ width: '100%', padding: '9px 12px', border: '1px solid var(--bdr)', borderRadius: 8, fontSize: 13, background: 'var(--surf)', color: 'var(--fg)', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.6 }} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
                 <div>
                   <div style={{ fontSize: 11, color: 'var(--fg3)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Linked Ticker</div>
                   <input value={form.ticker} onChange={e => setForm(p => ({ ...p, ticker: e.target.value }))} placeholder="e.g. AAPL"
@@ -3264,11 +3273,11 @@ function DealsPage() {
               <button onClick={() => { setShowForm(false); setSelected(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--fg3)' }}>✕</button>
             </div>
             <form onSubmit={saveDeal} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: 10 }}>
                 <div><div style={labelStyle}>Company *</div><input value={form.company} onChange={e => setForm(p => ({ ...p, company: e.target.value }))} placeholder="Company name" required style={fieldStyle} /></div>
                 <div><div style={labelStyle}>Ticker</div><input value={form.ticker} onChange={e => setForm(p => ({ ...p, ticker: e.target.value }))} placeholder="e.g. AAPL" style={fieldStyle} /></div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: 10 }}>
                 <div><div style={labelStyle}>Stage</div>
                   <select value={form.stage} onChange={e => setForm(p => ({ ...p, stage: e.target.value }))} style={{ ...fieldStyle }}>
                     {DEAL_STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -3286,7 +3295,7 @@ function DealsPage() {
               <div><div style={labelStyle}>Investment Thesis</div>
                 <textarea value={form.thesis} onChange={e => setForm(p => ({ ...p, thesis: e.target.value }))} placeholder="Why is this interesting? What's the edge?" rows={3} style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.6 }} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
                 <div><div style={labelStyle}>Catalysts (one per line)</div>
                   <textarea value={form.catalysts} onChange={e => setForm(p => ({ ...p, catalysts: e.target.value }))} placeholder="Earnings beat&#10;New product launch&#10;Rate cut" rows={3} style={{ ...fieldStyle, resize: 'vertical' }} />
                 </div>
@@ -3334,7 +3343,7 @@ function DealsPage() {
 
       {/* Stats row */}
       {!loading && deals.length > 0 && (
-        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 16 }}>
+        <div className="kpi-grid" style={{ gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)', marginBottom: 16 }}>
           {[
             { label: 'Watching', value: byStage['watching']?.length || 0, color: '#6b7280' },
             { label: 'Thesis / Conviction', value: ((byStage['thesis']?.length || 0) + (byStage['conviction']?.length || 0)), color: '#A855F7' },
@@ -3454,6 +3463,7 @@ function DealsPage() {
 // ─── MEETINGS PAGE ────────────────────────────────────────────────────────────
 
 function MeetingsPage() {
+  const isMobile   = useIsMobile();
   const [meetings,  setMeetings]  = React.useState([]);
   const [contacts,  setContacts]  = React.useState([]);
   const [loading,   setLoading]   = React.useState(true);
@@ -3633,7 +3643,7 @@ function MeetingsPage() {
               {!form.contactId && (
                 <input value={form.contactName} onChange={e => setForm(p => ({ ...p, contactName: e.target.value }))} placeholder="Or type contact name *" required={!form.contactId} style={fieldStyle} />
               )}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
                 <div><div style={labelStyle}>Company</div><input value={form.company} onChange={e => setForm(p => ({ ...p, company: e.target.value }))} style={fieldStyle} /></div>
                 <div><div style={labelStyle}>Type</div>
                   <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))} style={fieldStyle}>
@@ -3669,7 +3679,7 @@ function MeetingsPage() {
 
       {/* Stats row */}
       {!loading && meetings.length > 0 && (
-        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3,1fr)', marginBottom: 16 }}>
+        <div className="kpi-grid" style={{ gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(3,1fr)', marginBottom: 16 }}>
           <div className="stat-card accent">
             <span className="stat-label">Next Meeting</span>
             {nextMeeting ? <>
