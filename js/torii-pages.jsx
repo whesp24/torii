@@ -1,6 +1,6 @@
 // ─── TORII SUB-PAGES: Portfolio, Japan, News, Voices, Stock ──────────────────
 
-const API_URL = '/api';
+const API_URL = 'https://torii-backend.onrender.com/api';
 
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
