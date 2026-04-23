@@ -1,6 +1,7 @@
 import Tweet from '../models/Tweet.js';
 
 // X API v2 — Bearer Token stored in TWITTER_BEARER_TOKEN env var
+// Free tier uses search/recent (NOT user timelines — that requires Basic $100/mo)
 const BEARER = process.env.TWITTER_BEARER_TOKEN;
 const BASE   = 'https://api.twitter.com/2';
 
@@ -10,8 +11,14 @@ const CURATED_USERS = [
   { handle: 'dsundheim',       displayName: 'D. Sundheim' },
   { handle: 'jeff_weinstein',  displayName: 'Jeff Weinstein' },
   { handle: 'HannoLustig',     displayName: 'Hanno Lustig' },
-  { handle: 'patrick_oshag',   displayName: 'Patrick O\'Shaughnessy' },
+  { handle: 'patrick_oshag',   displayName: "Patrick O'Shaughnessy" },
 ];
+
+// Build display name lookup
+const HANDLE_MAP = {};
+for (const u of CURATED_USERS) {
+  HANDLE_MAP[u.handle.toLowerCase()] = u.displayName;
+}
 
 const xGet = (path) => fetch(`${BASE}${path}`, {
   headers: { Authorization: `Bearer ${BEARER}` }
@@ -23,65 +30,75 @@ export async function fetchAndUpdateTweets() {
     return;
   }
 
-  // 1. Batch-resolve all handles → user IDs
-  const usernames = CURATED_USERS.map(u => u.handle).join(',');
-  const usersRes = await xGet(`/users/by?usernames=${usernames}&user.fields=name,username`);
+  // Single search query for all curated accounts (free tier compatible)
+  // Free tier: search/recent — up to 10 req/month (rate limited to 1 per 15 min)
+  const fromClauses = CURATED_USERS.map(u => `from:${u.handle}`).join(' OR ');
+  const query = encodeURIComponent(`(${fromClauses}) -is:retweet -is:reply`);
+  const fields = 'tweet.fields=created_at,text,entities,author_id&expansions=author_id&user.fields=name,username&max_results=10';
 
-  if (!usersRes.ok) {
-    console.error('X API /users/by failed:', usersRes.status, await usersRes.text());
+  const url = `${BASE}/tweets/search/recent?query=${query}&${fields}`;
+
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${BEARER}` }
+    });
+  } catch (err) {
+    console.error('X API search/recent network error:', err.message);
     return;
   }
 
-  const { data: users = [] } = await usersRes.json();
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`X API search/recent failed (${res.status}):`, body);
+    return;
+  }
+
+  const json = await res.json();
+  const tweets = json.data || [];
+  const includes = json.includes || {};
+  const usersById = {};
+  for (const u of (includes.users || [])) {
+    usersById[u.id] = u;
+  }
+
   let saved = 0;
-
-  // 2. Fetch recent tweets for each user
-  for (const user of users) {
+  for (const tweet of tweets) {
     try {
-      const tweetsRes = await xGet(
-        `/users/${user.id}/tweets?max_results=10&exclude=retweets,replies` +
-        `&tweet.fields=created_at,text,entities`
-      );
+      const author = usersById[tweet.author_id];
+      if (!author) continue;
 
-      if (!tweetsRes.ok) {
-        console.error(`X API tweets failed for @${user.username}: ${tweetsRes.status}`);
-        continue;
-      }
+      const handle = author.username;
+      const handleLower = handle.toLowerCase();
 
-      const { data: tweets = [] } = await tweetsRes.json();
-      const meta = CURATED_USERS.find(u => u.handle.toLowerCase() === user.username.toLowerCase());
+      // Only store tweets from our curated list
+      if (!HANDLE_MAP[handleLower]) continue;
 
-      for (const tweet of tweets) {
-        const url = `https://x.com/${user.username}/status/${tweet.id}`;
-        const exists = await Tweet.findOne({ url });
-        if (exists) continue;
+      const tweetUrl = `https://x.com/${handle}/status/${tweet.id}`;
+      const exists = await Tweet.findOne({ url: tweetUrl });
+      if (exists) continue;
 
-        await Tweet.create({
-          author:        meta?.displayName || user.name,
-          authorHandle:  user.username,
-          content:       tweet.text,
-          url,
-          createdAt:     new Date(tweet.created_at),
-          tags:          (tweet.entities?.hashtags  || []).map(h => h.tag),
-          mentions:      (tweet.entities?.mentions  || []).map(m => m.username),
-          relatedSymbols:(tweet.entities?.cashtags  || []).map(c => c.tag.toUpperCase()),
-          sentiment:     classifySentiment(tweet.text)
-        });
-        saved++;
-      }
-
-      await sleep(150); // stay well within rate limits
+      await Tweet.create({
+        author:        HANDLE_MAP[handleLower] || author.name,
+        authorHandle:  handle,
+        content:       tweet.text,
+        url:           tweetUrl,
+        createdAt:     new Date(tweet.created_at),
+        tags:          (tweet.entities?.hashtags  || []).map(h => h.tag),
+        mentions:      (tweet.entities?.mentions  || []).map(m => m.username),
+        relatedSymbols:(tweet.entities?.cashtags  || []).map(c => c.tag.toUpperCase()),
+        sentiment:     classifySentiment(tweet.text)
+      });
+      saved++;
     } catch (err) {
-      console.error(`Error fetching @${user.username}:`, err.message);
+      console.error('Error saving tweet:', err.message);
     }
   }
 
-  console.log(`✓ X API: ${saved} new tweets saved`);
+  console.log(`✓ X API search: ${saved} new tweets saved (${tweets.length} fetched)`);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 function classifySentiment(text = '') {
   const pos = ['bull','up','gain','buy','long','rally','surge'].filter(w => text.toLowerCase().includes(w)).length;
   const neg = ['bear','down','fall','sell','short','crash','weak'].filter(w => text.toLowerCase().includes(w)).length;

@@ -15,13 +15,15 @@ export async function fetchLiveQuote(symbol) {
       const q = await qRes.json();
       const p = await pRes.json();
 
-      if (q && q.c && q.c > 0) {
+      // q.c = 0 when market is closed — fall back to previous close (q.pc)
+      const price = (q.c && q.c > 0) ? q.c : q.pc;
+      if (price && price > 0) {
+        const change = q.d ?? 0;
+        const changePercent = q.dp ?? 0;
         return {
           symbol: sym,
           name: p.name || sym,
-          price: q.c,
-          change: q.d ?? 0,
-          changePercent: q.dp ?? 0,
+          price, change, changePercent,
           volume: 0,
           marketCap: p.marketCapitalization ? p.marketCapitalization * 1e6 : null,
           high52Week: null,
