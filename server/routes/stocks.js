@@ -1,5 +1,6 @@
 import express from 'express';
 import Stock from '../models/Stock.js';
+import yahooFinance from 'yahoo-finance2';
 
 const router = express.Router();
 
@@ -17,8 +18,6 @@ router.get('/', async (req, res) => {
 router.get('/live/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
-    const yahooFinance = (await import('yahoo-finance2')).default;
-
     // Suppress strict validation — some small-caps have incomplete data
     const quote = await yahooFinance.quote(symbol, {}, { validateResult: false });
 
