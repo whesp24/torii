@@ -308,13 +308,19 @@ function SidebarHoldings({ page, onNav, collapsed }) {
   const [holdings, setHoldings] = React.useState([]);
 
   React.useEffect(() => {
-    let positions = [];
-    try { positions = JSON.parse(localStorage.getItem('torii_portfolio') || '[]'); } catch {}
-    if (positions.length === 0) { setHoldings([]); return; }
-    Promise.all(positions.slice(0, 8).map(p =>
-      fetch(`${SHELL_API}/stocks/live/${p.ticker}`).then(r => r.ok ? r.json() : null).catch(() => null)
-        .then(d => ({ ticker: p.ticker, shares: p.shares, price: d?.price || 0, pct: d?.changePercent || 0 }))
-    )).then(setHoldings);
+    // Fetch from backend so sidebar stays in sync across devices
+    fetch(`${SHELL_API}/positions`)
+      .then(r => r.ok ? r.json() : [])
+      .then(positions => {
+        if (!positions.length) { setHoldings([]); return; }
+        Promise.all(positions.slice(0, 8).map(p =>
+          fetch(`${SHELL_API}/stocks/live/${p.ticker}`)
+            .then(r => r.ok ? r.json() : null)
+            .catch(() => null)
+            .then(d => ({ ticker: p.ticker, shares: p.shares, price: d?.price || 0, pct: d?.changePercent || 0 }))
+        )).then(setHoldings);
+      })
+      .catch(() => {});
   }, []);
 
   return (

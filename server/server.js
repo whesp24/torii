@@ -25,6 +25,8 @@ import alertRoutes from './routes/alerts.js';
 import earningsRoutes from './routes/earnings.js';
 import analyticsRoutes from './routes/analytics.js';
 import pushRoutes from './routes/push.js';
+import positionRoutes from './routes/positions.js';
+import contactRoutes from './routes/contacts.js';
 
 dotenv.config();
 
@@ -54,6 +56,8 @@ app.use('/api/alerts', alertRoutes);
 app.use('/api/earnings', earningsRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/push', pushRoutes);
+app.use('/api/positions', positionRoutes);
+app.use('/api/contacts', contactRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

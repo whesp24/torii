@@ -4,30 +4,37 @@ const API_URL = 'https://torii-backend.onrender.com/api';
 
 // ─── PORTFOLIO PAGE ───────────────────────────────────────────────────────────
 
-const PORTFOLIO_KEY = 'torii_portfolio';
-
-function loadSavedPositions() {
-  try {
-    const s = localStorage.getItem(PORTFOLIO_KEY);
-    return s ? JSON.parse(s) : [];
-  } catch { return []; }
-}
-
 function PortfolioPage({ onNav }) {
-  const [positions, setPositions] = React.useState(loadSavedPositions);
-  const [holdings, setHoldings] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [showAdd, setShowAdd] = React.useState(false);
+  const [positions, setPositions] = React.useState([]);
+  const [holdings, setHoldings]   = React.useState([]);
+  const [loading, setLoading]     = React.useState(true);
+  const [showAdd, setShowAdd]     = React.useState(false);
   const [newTicker, setNewTicker] = React.useState('');
   const [newShares, setNewShares] = React.useState('');
-  const [newCost, setNewCost] = React.useState('');
-  const [addLoading] = React.useState(false);
-  const [addError, setAddError] = React.useState('');
+  const [newCost, setNewCost]     = React.useState('');
+  const [addLoading, setAddLoading] = React.useState(false);
+  const [addError, setAddError]   = React.useState('');
 
-  // Persist positions to localStorage
+  // Load positions from backend (syncs across devices)
+  function fetchPositions() {
+    return fetch(`${API_URL}/positions`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        // data is array of {ticker, shares, costBasis, _id, ...}
+        setPositions(data);
+        // Also keep localStorage in sync as fallback cache
+        try { localStorage.setItem('torii_portfolio', JSON.stringify(data.map(p => ({ ticker: p.ticker, shares: p.shares, costBasis: p.costBasis })))); } catch {}
+        return data;
+      })
+      .catch(() => {
+        // Fallback to localStorage if backend unreachable
+        try { const s = localStorage.getItem('torii_portfolio'); return s ? JSON.parse(s) : []; } catch { return []; }
+      });
+  }
+
   React.useEffect(() => {
-    localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(positions));
-  }, [positions]);
+    fetchPositions().then(data => setPositions(data));
+  }, []);
 
   // Fetch live prices for all positions
   React.useEffect(() => {
@@ -38,11 +45,11 @@ function PortfolioPage({ onNav }) {
         .then(r => r.ok ? r.json() : null)
         .catch(() => null)
         .then(d => ({
-          id: i + 1,
+          id: p._id || i + 1,
           ticker: p.ticker,
           name: d?.name || p.ticker,
           shares: p.shares,
-          costBasis: p.costBasis || d?.price || 0,
+          costBasis: p.costBasis || 0,
           price: d?.price || 0,
           pct: d?.changePercent || 0,
           change: d?.change || 0,
@@ -59,12 +66,26 @@ function PortfolioPage({ onNav }) {
     if (!ticker) { setAddError('Enter a ticker symbol'); return; }
     if (isNaN(shares) || shares <= 0) { setAddError('Enter a valid number of shares'); return; }
     if (positions.find(p => p.ticker === ticker)) { setAddError(`${ticker} is already in your portfolio`); return; }
-    // Add immediately — price loads in background via useEffect
-    setPositions(prev => [...prev, { ticker, shares, costBasis: parseFloat(newCost) || 0 }]);
-    setShowAdd(false); setNewTicker(''); setNewShares(''); setNewCost(''); setAddError('');
+    setAddLoading(true);
+    fetch(`${API_URL}/positions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, shares, costBasis: parseFloat(newCost) || 0 }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(saved => {
+        if (saved) setPositions(prev => [...prev, saved]);
+        setAddLoading(false);
+        setShowAdd(false); setNewTicker(''); setNewShares(''); setNewCost(''); setAddError('');
+      })
+      .catch(() => { setAddError('Failed to save — check connection'); setAddLoading(false); });
   };
 
-  const removePosition = ticker => setPositions(prev => prev.filter(p => p.ticker !== ticker));
+  const removePosition = ticker => {
+    fetch(`${API_URL}/positions/${ticker}`, { method: 'DELETE' }).catch(() => {});
+    setPositions(prev => prev.filter(p => p.ticker !== ticker));
+    setHoldings(prev => prev.filter(h => h.ticker !== ticker));
+  };
 
   const total  = holdings.reduce((s,h) => s + (h.value || 0), 0);
   const dayChg = holdings.reduce((s,h) => s + ((h.change || 0) * (h.shares || 0)), 0);
@@ -1411,10 +1432,11 @@ function ToolsPage() {
   const [stopPrice, setStopPrice]   = React.useState('');
   const [targetPrice, setTargetPrice] = React.useState('');
 
-  // Cost Basis / P&L state
-  const [positions, setPositions] = React.useState(() => {
-    try { return JSON.parse(localStorage.getItem('torii_portfolio') || '[]'); } catch { return []; }
-  });
+  // Cost Basis / P&L state — load from backend
+  const [positions, setPositions] = React.useState([]);
+  React.useEffect(() => {
+    fetch(`${API_URL}/positions`).then(r => r.ok ? r.json() : []).then(setPositions).catch(() => {});
+  }, []);
   const [liveData, setLiveData] = React.useState({});
   const [loadingPL, setLoadingPL] = React.useState(true);
 
@@ -2012,12 +2034,6 @@ function PushSettingsPage() {
 
 // ─── NETWORKING PAGE (Spider Web Graph + List View) ──────────────────────────
 
-const NET_KEY = 'torii_contacts';
-
-function loadContacts() {
-  try { return JSON.parse(localStorage.getItem(NET_KEY) || '[]'); } catch { return []; }
-}
-
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
 function initials(name) {
@@ -2228,25 +2244,44 @@ function NetworkGraph({ contacts, onSelectNode, selectedId }) {
 }
 
 function NetworkingPage() {
-  const [contacts, setContacts]   = React.useState(loadContacts);
-  const [view, setView]           = React.useState('graph');
-  const [showAdd, setShowAdd]     = React.useState(false);
+  const [contacts, setContacts]     = React.useState([]);
+  const [view, setView]             = React.useState('graph');
+  const [showAdd, setShowAdd]       = React.useState(false);
   const [selectedId, setSelectedId] = React.useState(null);
-  const [form, setForm]           = React.useState({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
+  const [loadingNet, setLoadingNet] = React.useState(true);
+  const [form, setForm]             = React.useState({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
 
+  // Load from backend
   React.useEffect(() => {
-    localStorage.setItem(NET_KEY, JSON.stringify(contacts));
-  }, [contacts]);
+    fetch(`${API_URL}/contacts`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        // Normalize: backend uses _id, graph uses id
+        setContacts(data.map(c => ({ ...c, id: c._id })));
+        setLoadingNet(false);
+      })
+      .catch(() => setLoadingNet(false));
+  }, []);
 
   function addContact(e) {
     e.preventDefault();
     if (!form.name.trim()) return;
-    setContacts(p => [...p, { ...form, id: uid(), addedAt: new Date().toISOString() }]);
-    setForm({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
-    setShowAdd(false);
+    fetch(`${API_URL}/contacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(saved => {
+        if (saved) setContacts(p => [...p, { ...saved, id: saved._id }]);
+        setForm({ name: '', role: '', company: '', school: '', location: '', linkedIn: '', notes: '' });
+        setShowAdd(false);
+      })
+      .catch(() => {});
   }
 
   function removeContact(id) {
+    fetch(`${API_URL}/contacts/${id}`, { method: 'DELETE' }).catch(() => {});
     setContacts(p => p.filter(c => c.id !== id));
     if (selectedId === id) setSelectedId(null);
   }
