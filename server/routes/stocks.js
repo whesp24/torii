@@ -1,6 +1,6 @@
 import express from 'express';
 import Stock from '../models/Stock.js';
-import { fetchLiveQuote } from '../services/stockService.js';
+import { fetchLiveQuote, fetchFinnhubChart, fetchYahooChart } from '../services/stockService.js';
 
 const router = express.Router();
 
@@ -14,35 +14,24 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Historical chart data for a symbol (powers the 1D/5D/1M/3M/1Y/All buttons)
+// Historical chart data — Finnhub for US stocks, Yahoo+cookie for indices/forex
 router.get('/chart/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
-  const range = req.query.range || '5d';
-  const intervalMap = { '1d':'5m', '5d':'30m', '1mo':'1d', '3mo':'1d', '1y':'1wk', 'max':'1mo' };
-  const interval = intervalMap[range] || '1d';
+  const range = req.query.range || '1mo';
+  const isIndex = sym.startsWith('^') || sym.includes('=') || sym.endsWith('.T');
 
   try {
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=${interval}&range=${range}`;
-    const r = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://finance.yahoo.com/',
+    let points = [];
+    if (!isIndex && process.env.FINNHUB_API_KEY) {
+      try {
+        points = await fetchFinnhubChart(sym, range);
+      } catch (e) {
+        console.warn(`Finnhub chart failed for ${sym}, trying Yahoo: ${e.message}`);
       }
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const result = data?.chart?.result?.[0];
-    if (!result) throw new Error('No chart data');
-
-    const timestamps = result.timestamp || [];
-    const closes = result.indicators?.quote?.[0]?.close || [];
-
-    const points = timestamps
-      .map((t, i) => ({ time: new Date(t * 1000).toISOString(), price: closes[i] }))
-      .filter(d => d.price != null);
-
+    }
+    if (points.length === 0) {
+      points = await fetchYahooChart(sym, range);
+    }
     res.json(points);
   } catch (err) {
     res.status(500).json({ error: err.message });

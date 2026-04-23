@@ -206,7 +206,8 @@ function PortfolioSnap({ onNav }) {
 
     if (positions.length === 0) { setHoldings([]); setLoading(false); return; }
 
-    Promise.all(positions.slice(0, 6).map((p, i) =>
+    // Fetch ALL positions so total is accurate, show top movers
+    Promise.all(positions.map((p, i) =>
       fetch(`${API_URL}/stocks/live/${p.ticker}`)
         .then(r => r.ok ? r.json() : null).catch(() => null)
         .then(d => ({

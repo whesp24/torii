@@ -285,8 +285,60 @@ function PortfolioPage({ onNav }) {
 
 // ─── JAPAN PAGE ───────────────────────────────────────────────────────────────
 
+const JAPAN_STOCKS = [
+  { symbol:'7203.T', label:'Toyota',       group:'Equities' },
+  { symbol:'9984.T', label:'SoftBank',     group:'Equities' },
+  { symbol:'6758.T', label:'Sony',         group:'Equities' },
+  { symbol:'6861.T', label:'Keyence',      group:'Equities' },
+  { symbol:'8306.T', label:'Mitsubishi UFJ',group:'Equities'},
+  { symbol:'6501.T', label:'Hitachi',      group:'Equities' },
+  { symbol:'8035.T', label:'Tokyo Electron',group:'Equities'},
+  { symbol:'9432.T', label:'NTT',          group:'Equities' },
+];
+const JAPAN_KPIS = [
+  { symbol:'^N225',    label:'Nikkei 225', dec:0, accent:true },
+  { symbol:'USDJPY=X', label:'USD/JPY',    dec:2, tag:'FX'    },
+  { symbol:'EWJ',      label:'EWJ ETF',    dec:2, tag:'ETF'   },
+  { symbol:'^TOPX',    label:'TOPIX',      dec:0, tag:'INDEX' },
+];
+
 function JapanPage() {
-  const groups = [...new Set(MOCK.japanDetail.map(r => r.group))];
+  const [kpis,    setKpis]    = React.useState({});
+  const [stocks,  setStocks]  = React.useState([]);
+  const [chart,   setChart]   = React.useState([]);
+  const [range,   setRange]   = React.useState('1mo');
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    // Load KPIs
+    fetch(`${API_URL}/kpis`)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const map = {};
+          data.forEach(k => { map[k.symbol] = k; });
+          setKpis(map);
+        }
+      }).catch(() => {});
+
+    // Load Japan equities live prices
+    Promise.all(JAPAN_STOCKS.map(s =>
+      fetch(`${API_URL}/stocks/live/${s.symbol}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(d => ({ ...s, price: d?.price || 0, pct: d?.changePercent || 0, name: d?.name || s.label }))
+    )).then(res => { setStocks(res); setLoading(false); });
+  }, []);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/stocks/chart/%5EN225?range=${range}`)
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data) && data.length) setChart(data); })
+      .catch(() => {});
+  }, [range]);
+
+  const chartPrices = chart.map(d => d.price);
+  const chartLabels = chart.map(d => d.time);
+  const rangeMap = { '1mo':'1M', '3mo':'3M', '1y':'1Y', '5d':'5D', '1d':'1D' };
 
   return (
     <div className="page-root">
@@ -300,70 +352,67 @@ function JapanPage() {
 
       {/* Hero KPIs */}
       <div className="kpi-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:16}}>
-        {[
-          {label:'Nikkei 225', sym:'^N225',    src:'japan', dec:0, accent:true},
-          {label:'USD / JPY',  sym:'USDJPY=X', src:'japan', dec:2, tag:'FX'},
-          {label:'EWJ',        sym:'EWJ',       src:'japan', dec:2, tag:'ETF'},
-          {label:'TOPIX',      sym:'^TOPX',     src:'japan', dec:0, tag:'INDEX'},
-        ].map(({label,sym,src,dec,accent,tag}) => {
-          const q = getQ(sym,src);
-          return <StatCard key={sym} label={label} tag={tag} price={q?.price} pct={q?.pct} dec={dec} accent={accent} />;
+        {JAPAN_KPIS.map(({symbol,label,dec,accent,tag}) => {
+          const k = kpis[symbol];
+          const mock = [...(MOCK.japan||[]),...(MOCK.macro||[])].find(q => q.symbol === symbol);
+          const price = k?.price ?? mock?.price;
+          const pct   = k?.changePercent ?? mock?.pct;
+          return <StatCard key={symbol} label={label} tag={tag} price={price} pct={pct} dec={dec} accent={accent} />;
         })}
       </div>
 
       {/* Nikkei chart */}
       <div className="card" style={{marginBottom:14}}>
         <div className="card-head" style={{marginBottom:10}}>
-          <div className="section-label" style={{marginBottom:0}}>Nikkei 225 · 1 Month</div>
+          <div className="section-label" style={{marginBottom:0}}>Nikkei 225</div>
           <div style={{display:'flex',gap:6}}>
-            {['1W','1M','3M','YTD'].map((r,i) => (
-              <button key={r} className={`range-btn${i===1?' active':''}`}>{r}</button>
+            {['1d','5d','1mo','3mo','1y'].map(r => (
+              <button key={r} className={`range-btn${range===r?' active':''}`} onClick={() => setRange(r)}>
+                {rangeMap[r]||r}
+              </button>
             ))}
           </div>
         </div>
-        <AreaChart data={MOCK.nikkeiChart.prices} labels={MOCK.nikkeiChart.dates} height={140} />
+        {chartPrices.length > 0
+          ? <AreaChart data={chartPrices} labels={chartLabels} height={140} />
+          : <AreaChart data={MOCK.nikkeiChart.prices} labels={MOCK.nikkeiChart.dates} height={140} />
+        }
       </div>
 
-      {/* Detail tables by group */}
-      {groups.map(group => (
-        <div key={group} className="card" style={{marginBottom:14,padding:0,overflow:'hidden'}}>
-          <div style={{padding:'12px 20px',borderBottom:'1px solid var(--bdr)'}}>
-            <div className="section-label" style={{marginBottom:0}}>{group}</div>
-          </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th style={{textAlign:'right'}}>Price</th>
-                <th style={{textAlign:'right'}}>Change</th>
-                <th style={{textAlign:'right'}}>Open</th>
-                <th style={{textAlign:'right'}}>High</th>
-                <th style={{textAlign:'right'}}>Low</th>
-                <th style={{textAlign:'right'}}>Volume</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK.japanDetail.filter(r => r.group === group).map(r => {
-                const up = r.pct >= 0;
-                const color = up ? 'var(--green)' : 'var(--red-loss)';
-                return (
-                  <tr key={r.symbol}>
-                    <td><span style={{fontFamily:'var(--font-mono)',fontWeight:600,fontSize:12}}>{r.label}</span></td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600}}>{fmtPrice(r.price,r.group==='FX'?2:r.price<100?2:0)}</td>
-                    <td style={{textAlign:'right'}}>
-                      <span style={{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:600,color}}>{up?'+':''}{r.pct.toFixed(2)}%</span>
-                    </td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--fg3)'}}>{fmtPrice(r.open,r.group==='FX'?2:0)}</td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--green)'}}>{fmtPrice(r.high,r.group==='FX'?2:0)}</td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--red-loss)'}}>{fmtPrice(r.low,r.group==='FX'?2:0)}</td>
-                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:11,color:'var(--fg3)'}}>{r.vol}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* Live Japan equities table */}
+      <div className="card" style={{marginBottom:14,padding:0,overflow:'hidden'}}>
+        <div style={{padding:'12px 20px',borderBottom:'1px solid var(--bdr)'}}>
+          <div className="section-label" style={{marginBottom:0}}>Japan Equities</div>
         </div>
-      ))}
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Name</th>
+              <th style={{textAlign:'right'}}>Price (¥)</th>
+              <th style={{textAlign:'right'}}>Day %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={4} style={{padding:20,textAlign:'center',color:'var(--fg3)',fontSize:11}}>Loading…</td></tr>
+            ) : stocks.map(s => {
+              const up = s.pct >= 0;
+              return (
+                <tr key={s.symbol}>
+                  <td><span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12}}>{s.symbol}</span></td>
+                  <td style={{fontSize:12,color:'var(--fg2)'}}>{s.name || s.label}</td>
+                  <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600}}>
+                    {s.price > 0 ? `¥${s.price.toLocaleString('en-US',{maximumFractionDigits:0})}` : '—'}
+                  </td>
+                  <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600,color:up?'var(--green)':'var(--red-loss)'}}>
+                    {up?'+':''}{s.pct.toFixed(2)}%
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

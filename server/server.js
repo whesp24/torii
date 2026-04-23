@@ -58,10 +58,16 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../index.html'));
 });
 
-// Initialize KPIs, Tasks, and Watchlist on startup
+// Initialize data on startup
 initializeKPIs().catch(err => console.error('Error initializing KPIs:', err));
 initializeTasks().catch(err => console.error('Error initializing tasks:', err));
 initializeWatchlist().catch(err => console.error('Error initializing watchlist:', err));
+
+// Fetch tweets and news immediately on startup so data is fresh without waiting for cron
+setTimeout(() => {
+  fetchAndUpdateTweets().catch(err => console.error('Startup tweet fetch error:', err));
+  fetchAndUpdateNews().catch(err => console.error('Startup news fetch error:', err));
+}, 5000); // 5s delay to let MongoDB finish connecting
 
 // Scheduled Jobs
 cron.schedule('*/30 * * * *', () => {

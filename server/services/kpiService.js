@@ -5,10 +5,13 @@ import { fetchYahooQuote } from './stockService.js';
 const KPI_CONFIG = [
   { symbol: '^N225',    label: 'Nikkei 225' },
   { symbol: 'USDJPY=X', label: 'USD / JPY'  },
+  { symbol: '^TOPX',    label: 'TOPIX'      },
   { symbol: '^GSPC',    label: 'S&P 500'    },
+  { symbol: '^DJI',     label: 'DJIA'       },
   { symbol: '^VIX',     label: 'VIX'        },
   { symbol: 'GC=F',     label: 'Gold'       },
   { symbol: 'EWJ',      label: 'EWJ ETF'    },
+  { symbol: '^TNX',     label: '10Y'        },
 ];
 
 export async function updateAllKPIs() {
