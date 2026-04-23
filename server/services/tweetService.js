@@ -1,91 +1,71 @@
 import Tweet from '../models/Tweet.js';
+import Parser from 'rss-parser';
 
-// StockTwits user streams for the curated finance accounts.
-// These accounts exist on StockTwits with the same handles as Twitter.
+const parser = new Parser({ timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ToriiApp/1.0)' } });
+
+// Curated finance accounts with display info
 const CURATED_USERS = [
-  { stHandle: 'KevinLMak',       displayName: 'Kevin Mak' },
-  { stHandle: 'ContrarianCurse', displayName: 'SuspendedCap' },
-  { stHandle: 'dsundheim',       displayName: 'D. Sundheim' },
-  { stHandle: 'jeff_weinstein',  displayName: 'Jeff Weinstein' },
-  { stHandle: 'HannoLustig',     displayName: 'Hanno Lustig' },
-  { stHandle: 'patrick_oshag',   displayName: 'Patrick O\'Shaughnessy' },
+  { handle: 'KevinLMak',       displayName: 'Kevin Mak' },
+  { handle: 'ContrarianCurse', displayName: 'SuspendedCap' },
+  { handle: 'dsundheim',       displayName: 'D. Sundheim' },
+  { handle: 'jeff_weinstein',  displayName: 'Jeff Weinstein' },
+  { handle: 'HannoLustig',     displayName: 'Hanno Lustig' },
+  { handle: 'patrick_oshag',   displayName: 'Patrick O\'Shaughnessy' },
 ];
 
-// Fallback: symbol-based streams if user streams are empty/unavailable
-const FALLBACK_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'SPY', 'QQQ', 'NFLX', 'GOOGL'];
-
-const STOCKTWITS_BASE = 'https://api.stocktwits.com/api/2';
+// Working nitter instances — tried in order until one works
+const NITTER_INSTANCES = [
+  'nitter.privacydev.net',
+  'nitter.poast.org',
+  'nitter.bird.froth.zone',
+  'nitter.cz',
+  'nitter.1d4.us',
+];
 
 export async function fetchAndUpdateTweets() {
   let saved = 0;
 
-  // 1. Try to fetch from each curated user's stream
-  for (const { stHandle, displayName } of CURATED_USERS) {
-    try {
-      const url = `${STOCKTWITS_BASE}/streams/user/${stHandle}.json?limit=10`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'ToriiApp/1.0' } });
-      if (!res.ok) continue; // user not on StockTwits — skip silently
+  for (const { handle, displayName } of CURATED_USERS) {
+    let fetched = false;
 
-      const data = await res.json();
-      if (!data.messages || !Array.isArray(data.messages)) continue;
+    // Try each nitter instance until one works
+    for (const instance of NITTER_INSTANCES) {
+      if (fetched) break;
+      try {
+        const feedUrl = `https://${instance}/${handle}/rss`;
+        const feed = await parser.parseURL(feedUrl);
 
-      for (const msg of data.messages) {
-        const exists = await Tweet.findOne({ url: `https://stocktwits.com/message/${msg.id}` });
-        if (exists) continue;
+        for (const item of (feed.items || []).slice(0, 10)) {
+          if (!item.link) continue;
+          const exists = await Tweet.findOne({ url: item.link });
+          if (exists) continue;
 
-        await Tweet.create({
-          author: displayName,
-          authorHandle: stHandle,
-          content: msg.body || '',
-          url: `https://stocktwits.com/message/${msg.id}`,
-          createdAt: new Date(msg.created_at),
-          tags: extractHashtags(msg.body || ''),
-          mentions: extractMentions(msg.body || ''),
-          relatedSymbols: msg.symbols?.map(s => s.symbol) || [],
-          sentiment: normalizeSentiment(msg.entities?.sentiment?.basic)
-        });
-        saved++;
+          const content = item.contentSnippet || item.title || '';
+          await Tweet.create({
+            author: displayName,
+            authorHandle: handle,
+            content: content.trim(),
+            url: item.link,
+            createdAt: item.pubDate ? new Date(item.pubDate) : new Date(),
+            tags: extractHashtags(content),
+            mentions: extractMentions(content),
+            relatedSymbols: extractSymbols(content),
+            sentiment: classifySentiment(content)
+          });
+          saved++;
+        }
+
+        console.log(`✓ Fetched tweets for @${handle} via ${instance}`);
+        fetched = true;
+      } catch (err) {
+        // Try next instance silently
       }
-      await sleep(300);
-    } catch (err) {
-      console.error(`StockTwits user error (${stHandle}):`, err.message);
     }
-  }
 
-  // 2. Supplement with symbol-based streams to fill gaps
-  for (const symbol of FALLBACK_SYMBOLS) {
-    try {
-      const url = `${STOCKTWITS_BASE}/streams/symbol/${symbol}.json?limit=5`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'ToriiApp/1.0' } });
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      if (!data.messages) continue;
-
-      for (const msg of data.messages) {
-        const exists = await Tweet.findOne({ url: `https://stocktwits.com/message/${msg.id}` });
-        if (exists) continue;
-
-        // Only save posts with actual financial content (filter out low-quality)
-        if (!msg.body || msg.body.length < 20) continue;
-
-        await Tweet.create({
-          author: msg.user?.name || msg.user?.username || 'StockTwits',
-          authorHandle: msg.user?.username || 'stocktwits',
-          content: msg.body,
-          url: `https://stocktwits.com/message/${msg.id}`,
-          createdAt: new Date(msg.created_at),
-          tags: extractHashtags(msg.body),
-          mentions: extractMentions(msg.body),
-          relatedSymbols: msg.symbols?.map(s => s.symbol) || [symbol],
-          sentiment: normalizeSentiment(msg.entities?.sentiment?.basic)
-        });
-        saved++;
-      }
-      await sleep(200);
-    } catch (err) {
-      console.error(`StockTwits symbol error (${symbol}):`, err.message);
+    if (!fetched) {
+      console.log(`ℹ No nitter instance worked for @${handle} — skipping`);
     }
+    await sleep(500);
   }
 
   console.log(`✓ Tweets update: ${saved} new posts saved`);
@@ -96,9 +76,9 @@ export async function fetchAndUpdateTweets() {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function extractHashtags(t = '') { return (t.match(/#\w+/g) || []).map(h => h.slice(1)); }
 function extractMentions(t = '') { return (t.match(/@\w+/g) || []).map(m => m.slice(1)); }
-function normalizeSentiment(raw = '') {
-  const l = (raw || '').toLowerCase();
-  if (l === 'bullish') return 'positive';
-  if (l === 'bearish') return 'negative';
-  return 'neutral';
+function extractSymbols(t = '') { return (t.match(/\$[A-Z]{1,5}/g) || []).map(s => s.slice(1)); }
+function classifySentiment(text = '') {
+  const pos = ['bull', 'up', 'gain', 'buy', 'long', 'rally', 'surge', 'strong'].filter(w => text.toLowerCase().includes(w)).length;
+  const neg = ['bear', 'down', 'fall', 'sell', 'short', 'crash', 'weak', 'drop'].filter(w => text.toLowerCase().includes(w)).length;
+  return pos > neg ? 'positive' : neg > pos ? 'negative' : 'neutral';
 }

@@ -485,28 +485,36 @@ const VOICE_TOPICS = {
 
 function VoicesPage() {
   const [selected, setSelected] = React.useState('all');
-  const [news, setNews] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
+  const [tweets, setTweets]     = React.useState([]);
+  const [loading, setLoading]   = React.useState(true);
 
   React.useEffect(() => {
-    fetch(`${API_URL}/news`)
+    fetch(`${API_URL}/tweets`)
       .then(r => r.json())
-      .then(d => { setNews(Array.isArray(d) ? d.slice(0, 60) : []); setLoading(false); })
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setTweets(data.map(t => ({
+            id: t._id,
+            handle: t.authorHandle || 'unknown',
+            name: t.author || 'Unknown',
+            content: t.content || '',
+            url: t.url || '#',
+            createdAt: t.createdAt,
+            sentiment: t.sentiment || 'neutral'
+          })));
+        }
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
 
-  // Filter news by selected account's topics
-  const filteredNews = React.useMemo(() => {
-    if (selected === 'all') return news.slice(0, 30);
-    const topics = VOICE_TOPICS[selected] || [];
-    const filtered = news.filter(n => {
-      const text = ((n.title || '') + ' ' + (n.description || '') + ' ' + (n.category || '')).toLowerCase();
-      return topics.some(kw => text.includes(kw));
-    });
-    return filtered.length > 0 ? filtered : news.slice(0, 10); // fallback to latest news
-  }, [news, selected]);
+  // Only show tweets from curated handles
+  const curatedHandles = VOICE_ACCOUNTS.map(a => a.handle.toLowerCase());
+  const curatedTweets = tweets.filter(t => curatedHandles.includes(t.handle.toLowerCase()));
 
-  const acct = VOICE_ACCOUNTS.find(a => a.handle === selected);
+  const displayed = selected === 'all'
+    ? curatedTweets
+    : curatedTweets.filter(t => t.handle.toLowerCase() === selected.toLowerCase());
 
   return (
     <div className="page-root">
@@ -542,41 +550,36 @@ function VoicesPage() {
         ))}
       </div>
 
-      {/* Feed label */}
-      {acct && (
-        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,padding:'8px 12px',background:'var(--surf)',borderRadius:8,border:'1px solid var(--bdr)'}}>
-          <div className="voice-avatar" style={{background:acct.color,width:28,height:28,fontSize:10}}>{acct.initials}</div>
-          <div>
-            <span style={{fontSize:12,fontWeight:600,color:'var(--fg)'}}>{acct.name}</span>
-            <span style={{fontSize:11,color:'var(--fg3)',marginLeft:6}}>· {acct.topics.join(', ')} coverage</span>
-          </div>
-        </div>
-      )}
-
-      {/* News feed styled as voice posts */}
+      {/* Tweet feed — content from nitter RSS */}
       <div style={{display:'flex',flexDirection:'column',gap:10}}>
         {loading && <div style={{padding:40,textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>Loading feed…</div>}
-        {!loading && filteredNews.map((n, i) => (
-          <a key={n._id || i} href={n.url} target="_blank" rel="noopener"
-            style={{display:'block',textDecoration:'none',background:'var(--surf)',border:'1px solid var(--bdr)',borderRadius:12,padding:'14px 16px'}}>
-            <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
-              <div style={{width:36,height:36,borderRadius:'50%',background:'var(--surf2)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:10,fontFamily:'var(--font-mono)',color:'var(--fg3)',fontWeight:700,border:'1px solid var(--bdr)'}}>
-                {(n.source || 'N').charAt(0).toUpperCase()}
-              </div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
-                  <span style={{fontSize:12,fontWeight:600,color:'var(--fg)'}}>{n.source || 'Financial News'}</span>
-                  <span style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>{timeAgo(n.publishedAt)}</span>
-                  {n.category && <span style={{fontSize:9,padding:'2px 6px',background:'var(--surf2)',border:'1px solid var(--bdr)',borderRadius:4,color:'var(--fg3)',fontFamily:'var(--font-mono)',textTransform:'uppercase'}}>{n.category}</span>}
+        {!loading && displayed.map(t => {
+          const acct = VOICE_ACCOUNTS.find(a => a.handle.toLowerCase() === t.handle.toLowerCase());
+          return (
+            <a key={t.id} href={t.url} target="_blank" rel="noopener noreferrer"
+              style={{display:'block',textDecoration:'none',background:'var(--surf)',border:'1px solid var(--bdr)',borderRadius:12,padding:'14px 16px'}}>
+              <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                <div className="voice-avatar" style={{background: acct?.color || 'var(--surf2)', width:38, height:38, fontSize:12, flexShrink:0}}>
+                  {acct?.initials || t.handle.charAt(0).toUpperCase()}
                 </div>
-                <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.5,fontWeight:500}}>{n.title}</div>
-                {n.description && <div style={{fontSize:11,color:'var(--fg2)',lineHeight:1.45,marginTop:4,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{n.description}</div>}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                    <span style={{fontSize:13,fontWeight:700,color:'var(--fg)'}}>{t.name}</span>
+                    <span style={{fontSize:11,color:'var(--fg3)'}}>@{t.handle}</span>
+                    <span style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)',marginLeft:'auto'}}>{timeAgo(t.createdAt)}</span>
+                  </div>
+                  <div style={{fontSize:13,color:'var(--fg)',lineHeight:1.55}}>{t.content}</div>
+                  <div style={{marginTop:8,fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>View on X ↗</div>
+                </div>
               </div>
-            </div>
-          </a>
-        ))}
-        {!loading && filteredNews.length === 0 && (
-          <div style={{padding:'40px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12}}>No coverage found yet — check back after news updates</div>
+            </a>
+          );
+        })}
+        {!loading && displayed.length === 0 && (
+          <div style={{padding:'32px',textAlign:'center',color:'var(--fg3)',fontFamily:'var(--font-mono)',fontSize:12,lineHeight:1.6}}>
+            No posts yet from your curated accounts.<br/>
+            The server fetches new posts every 10 minutes via X/nitter RSS.
+          </div>
         )}
       </div>
     </div>
@@ -588,46 +591,44 @@ function VoicesPage() {
 const TIMEFRAME_RANGE = { '1D':'1d', '5D':'5d', '1M':'1mo', '3M':'3mo', '1Y':'1y', 'All':'max' };
 
 function StockPage({ ticker, onBack }) {
-  const [quote, setQuote] = React.useState(null);
-  const [loadingQ, setLoadingQ] = React.useState(true);
+  // ── ALL hooks must come before any early returns ──────────────────────────
+  const [quote, setQuote]         = React.useState(null);
+  const [loadingQ, setLoadingQ]   = React.useState(true);
   const [timeframe, setTimeframe] = React.useState('5D');
   const [chartPrices, setChartPrices] = React.useState([]);
   const [chartLoading, setChartLoading] = React.useState(false);
-  const [relatedNews, setRelatedNews] = React.useState([]);
+  const [relatedNews, setRelatedNews]   = React.useState([]);
 
-  // Fetch chart data whenever timeframe changes
-  React.useEffect(() => {
-    setChartLoading(true);
-    fetch(`${API_URL}/stocks/chart/${ticker}?range=${TIMEFRAME_RANGE[timeframe]}`)
-      .then(r => r.ok ? r.json() : [])
-      .then(pts => { setChartPrices(pts.map(p => p.price).filter(Boolean)); setChartLoading(false); })
-      .catch(() => setChartLoading(false));
-  }, [ticker, timeframe]);
+  // Position from localStorage (memoized so it doesn't re-run on every render)
+  const pos = React.useMemo(() => {
+    const saved = loadSavedPositions();
+    return saved.find(p => p.ticker === ticker) || null;
+  }, [ticker]);
 
-  // Fetch related news — search by ticker + company name, fallback to latest real news
-  React.useEffect(() => {
-    const company = h?.name && h.name !== ticker ? h.name.split(' ')[0] : ticker;
-    // Try ticker first, then company name, then latest news
-    const trySearch = (q) => fetch(`${API_URL}/news/search?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : []);
-    trySearch(ticker)
-      .then(async d => {
-        if (d && d.length > 0) return d;
-        if (company !== ticker) return trySearch(company);
-        return [];
-      })
-      .then(async d => {
-        if (d && d.length > 0) return setRelatedNews(d);
-        // fallback: show latest real news from DB (no mock)
-        const latest = await fetch(`${API_URL}/news`).then(r => r.ok ? r.json() : []).catch(() => []);
-        setRelatedNews(Array.isArray(latest) ? latest.slice(0, 4) : []);
-      })
-      .catch(() => {});
-  }, [ticker, h?.name]);
+  // Derived display object from quote state
+  const h = React.useMemo(() => {
+    if (!quote) return null;
+    return {
+      ticker,
+      name: quote.name || ticker,
+      price: quote.price || 0,
+      pct: quote.changePercent || 0,
+      change: quote.change || 0,
+      shares: pos?.shares || 0,
+      costBasis: pos?.costBasis || quote.price || 0,
+      value: (quote.price || 0) * (pos?.shares || 0),
+      prevClose: (quote.price || 0) - (quote.change || 0)
+    };
+  }, [quote, pos, ticker]);
 
-  // Get user's position data from localStorage for shares/cost info
-  const positions = loadSavedPositions();
-  const pos = positions.find(p => p.ticker === ticker);
+  // Period % computed from chart data (first → last price)
+  const periodPct = React.useMemo(() => {
+    if (chartPrices.length < 2) return h?.pct || 0;
+    const first = chartPrices[0], last = chartPrices[chartPrices.length - 1];
+    return first > 0 ? ((last - first) / first) * 100 : (h?.pct || 0);
+  }, [chartPrices, h?.pct]);
 
+  // Fetch live quote
   React.useEffect(() => {
     setLoadingQ(true);
     fetch(`${API_URL}/stocks/live/${ticker}`)
@@ -636,19 +637,29 @@ function StockPage({ ticker, onBack }) {
       .catch(() => setLoadingQ(false));
   }, [ticker]);
 
-  // Build a display object from either live data or fallback
-  const h = quote ? {
-    ticker,
-    name: quote.name || ticker,
-    price: quote.price || 0,
-    pct: quote.changePercent || 0,
-    change: quote.change || 0,
-    shares: pos?.shares || 0,
-    costBasis: pos?.costBasis || quote.price || 0,
-    value: (quote.price || 0) * (pos?.shares || 0),
-    prevClose: (quote.price || 0) - (quote.change || 0)
-  } : null;
+  // Fetch chart data on timeframe change
+  React.useEffect(() => {
+    setChartLoading(true);
+    fetch(`${API_URL}/stocks/chart/${ticker}?range=${TIMEFRAME_RANGE[timeframe]}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(pts => { setChartPrices(pts.map(p => p.price).filter(Boolean)); setChartLoading(false); })
+      .catch(() => setChartLoading(false));
+  }, [ticker, timeframe]);
 
+  // Fetch related news (ticker search, then latest news fallback)
+  React.useEffect(() => {
+    const trySearch = q => fetch(`${API_URL}/news/search?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : []);
+    trySearch(ticker)
+      .then(async d => {
+        if (d?.length > 0) return d;
+        const latest = await fetch(`${API_URL}/news`).then(r => r.ok ? r.json() : []).catch(() => []);
+        return Array.isArray(latest) ? latest.slice(0, 4) : [];
+      })
+      .then(d => setRelatedNews(d))
+      .catch(() => {});
+  }, [ticker]);
+
+  // ── Early returns (all hooks above this line) ─────────────────────────────
   if (loadingQ) return (
     <div className="page-root">
       <button onClick={onBack} style={{display:'flex',alignItems:'center',gap:6,marginBottom:16,background:'none',border:'none',color:'var(--fg3)',cursor:'pointer',fontSize:12,fontFamily:'var(--font-mono)',padding:0}}>← Back to Portfolio</button>
@@ -669,16 +680,7 @@ function StockPage({ ticker, onBack }) {
   const dayPnL = h.shares > 0 ? h.change * h.shares : null;
 
   const timeframes = ['1D', '5D', '1M', '3M', '1Y', 'All'];
-  // Use live chart data; fall back to mock sparkline while loading
   const displayChart = chartPrices.length > 0 ? chartPrices : (MOCK.sparklines[ticker] || []);
-
-  // Calculate ACTUAL period % from chart data (first → last price)
-  const periodPct = React.useMemo(() => {
-    if (chartPrices.length < 2) return h.pct; // fall back to day % while loading
-    const first = chartPrices[0];
-    const last = chartPrices[chartPrices.length - 1];
-    return first > 0 ? ((last - first) / first) * 100 : h.pct;
-  }, [chartPrices, h.pct]);
   const periodUp = periodPct >= 0;
   const periodColor = periodUp ? 'var(--green)' : 'var(--red-loss)';
 
