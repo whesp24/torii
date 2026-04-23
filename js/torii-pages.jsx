@@ -336,7 +336,7 @@ const JAPAN_KPIS = [
   { symbol:'^TOPX',    label:'TOPIX',      dec:0, tag:'INDEX' },
 ];
 
-function JapanPage() {
+function JapanPage({ onNav }) {
   const isMobile   = useIsMobile();
   const [kpis,    setKpis]    = React.useState({});
   const [stocks,  setStocks]  = React.useState([]);
@@ -433,8 +433,11 @@ function JapanPage() {
             ) : stocks.map(s => {
               const up = s.pct >= 0;
               return (
-                <tr key={s.symbol}>
-                  <td><span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12}}>{s.symbol}</span></td>
+                <tr key={s.symbol} onClick={() => onNav && onNav(`stock-${s.symbol}`)}
+                  style={{ cursor: onNav ? 'pointer' : 'default' }}
+                  onMouseEnter={e => { if (onNav) e.currentTarget.style.background = 'var(--surf2)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = ''; }}>
+                  <td><span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12,color:'var(--red)'}}>{s.symbol}</span></td>
                   <td style={{fontSize:12,color:'var(--fg2)'}}>{s.name || s.label}</td>
                   <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600}}>
                     {s.price > 0 ? `¥${s.price.toLocaleString('en-US',{maximumFractionDigits:0})}` : '—'}
@@ -3915,6 +3918,625 @@ function MeetingsPage() {
   );
 }
 
+// ─── TRADE JOURNAL PAGE ───────────────────────────────────────────────────────
+
+const TIMEFRAME_COLORS = { day: '#f59e0b', swing: '#3b82f6', position: '#a855f7', 'long-term': '#22c55e' };
+const OUTCOME_COLORS   = { confirmed: '#22c55e', invalidated: '#ef4444', partial: '#f59e0b', pending: 'var(--fg3)' };
+const OUTCOME_LABELS   = { confirmed: '✓ Confirmed', invalidated: '✗ Invalidated', partial: '~ Partial', pending: '⏳ Pending' };
+const ACTION_COLORS    = { buy: '#22c55e', sell: '#ef4444', short: '#f97316', cover: '#3b82f6' };
+
+function JournalPage() {
+  const isMobile = useIsMobile();
+  const [trades,    setTrades]    = React.useState([]);
+  const [stats,     setStats]     = React.useState(null);
+  const [loading,   setLoading]   = React.useState(true);
+  const [filter,    setFilter]    = React.useState('all');
+  const [showForm,  setShowForm]  = React.useState(false);
+  const [closing,   setClosing]   = React.useState(null); // trade being closed
+  const [expanded,  setExpanded]  = React.useState(null);
+  const [form, setForm] = React.useState({ ticker:'', action:'buy', date: new Date().toISOString().slice(0,16), price:'', quantity:'', thesis:'', timeframe:'position', conviction:7, catalysts:'' });
+  const [closeForm, setCloseForm] = React.useState({ exitPrice:'', exitDate: new Date().toISOString().slice(0,10), thesisOutcome:'pending', postMortem:'' });
+
+  const EMPTY_FORM = { ticker:'', action:'buy', date: new Date().toISOString().slice(0,16), price:'', quantity:'', thesis:'', timeframe:'position', conviction:7, catalysts:'' };
+
+  function loadAll() {
+    const q = filter === 'all' ? '' : `?status=${filter}`;
+    Promise.all([
+      fetch(`${API_URL}/trades${q}`).then(r => r.json()).catch(() => []),
+      fetch(`${API_URL}/trades/stats`).then(r => r.json()).catch(() => null),
+    ]).then(([t, s]) => { setTrades(Array.isArray(t) ? t : []); setStats(s); setLoading(false); });
+  }
+  React.useEffect(() => { setLoading(true); loadAll(); }, [filter]);
+
+  async function saveTrade(e) {
+    e.preventDefault();
+    const payload = { ...form, price: parseFloat(form.price), quantity: parseFloat(form.quantity), catalysts: form.catalysts.split('\n').filter(Boolean) };
+    const res = await fetch(`${API_URL}/trades`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const created = await res.json();
+    setTrades(p => [created, ...p]);
+    setShowForm(false); setForm(EMPTY_FORM);
+    fetch(`${API_URL}/trades/stats`).then(r=>r.json()).then(setStats).catch(()=>{});
+  }
+
+  async function closeTrade(e) {
+    e.preventDefault();
+    if (!closing) return;
+    const payload = { status:'closed', exitPrice: parseFloat(closeForm.exitPrice), exitDate: closeForm.exitDate, thesisOutcome: closeForm.thesisOutcome, postMortem: closeForm.postMortem };
+    const res = await fetch(`${API_URL}/trades/${closing._id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const updated = await res.json();
+    setTrades(p => p.map(t => t._id === closing._id ? updated : t));
+    setClosing(null);
+    fetch(`${API_URL}/trades/stats`).then(r=>r.json()).then(setStats).catch(()=>{});
+  }
+
+  async function deleteTrade(id, e) {
+    e.stopPropagation();
+    await fetch(`${API_URL}/trades/${id}`, { method:'DELETE' });
+    setTrades(p => p.filter(t => t._id !== id));
+    fetch(`${API_URL}/trades/stats`).then(r=>r.json()).then(setStats).catch(()=>{});
+  }
+
+  function tradePnl(t) {
+    if (t.status !== 'closed' || !t.exitPrice) return null;
+    const mult = (t.action === 'buy' || t.action === 'cover') ? 1 : -1;
+    return { val: mult * (t.exitPrice - t.price) * t.quantity, pct: mult * (t.exitPrice - t.price) / t.price * 100 };
+  }
+
+  const fld = { width:'100%', padding:'8px 12px', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, background:'var(--surf)', color:'var(--fg)', boxSizing:'border-box' };
+  const lbl = { fontSize:11, color:'var(--fg3)', marginBottom:4, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' };
+  const visibleTrades = filter === 'all' ? trades : trades.filter(t => t.status === filter);
+
+  return (
+    <div className="page-root">
+      {/* Add trade modal */}
+      {showForm && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e => { if (e.target===e.currentTarget) setShowForm(false); }}>
+          <div style={{background:'var(--bg)',border:'1px solid var(--bdr)',borderRadius:14,padding:24,width:'100%',maxWidth:560,maxHeight:'90vh',overflowY:'auto'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+              <div style={{fontWeight:700,fontSize:15}}>Log Trade</div>
+              <button onClick={() => setShowForm(false)} style={{background:'none',border:'none',cursor:'pointer',fontSize:18,color:'var(--fg3)'}}>✕</button>
+            </div>
+            <form onSubmit={saveTrade} style={{display:'flex',flexDirection:'column',gap:12}}>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:10}}>
+                <div><div style={lbl}>Ticker *</div><input value={form.ticker} onChange={e=>setForm(p=>({...p,ticker:e.target.value.toUpperCase()}))} placeholder="AAPL" required style={fld}/></div>
+                <div><div style={lbl}>Action *</div>
+                  <select value={form.action} onChange={e=>setForm(p=>({...p,action:e.target.value}))} style={fld}>
+                    {['buy','sell','short','cover'].map(a=><option key={a} value={a}>{a.charAt(0).toUpperCase()+a.slice(1)}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr 1fr',gap:10}}>
+                <div><div style={lbl}>Price *</div><input type="number" step="0.01" value={form.price} onChange={e=>setForm(p=>({...p,price:e.target.value}))} placeholder="0.00" required style={fld}/></div>
+                <div><div style={lbl}>Quantity *</div><input type="number" step="0.01" value={form.quantity} onChange={e=>setForm(p=>({...p,quantity:e.target.value}))} placeholder="0" required style={fld}/></div>
+                <div><div style={lbl}>Date *</div><input type="datetime-local" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} required style={fld}/></div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:10}}>
+                <div><div style={lbl}>Timeframe</div>
+                  <select value={form.timeframe} onChange={e=>setForm(p=>({...p,timeframe:e.target.value}))} style={fld}>
+                    {['day','swing','position','long-term'].map(t=><option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div><div style={lbl}>Conviction {form.conviction}/10</div>
+                  <input type="range" min={1} max={10} value={form.conviction} onChange={e=>setForm(p=>({...p,conviction:Number(e.target.value)}))}
+                    style={{width:'100%',marginTop:10,accentColor:'var(--red)'}}/>
+                </div>
+              </div>
+              <div><div style={lbl}>Investment Thesis</div>
+                <textarea value={form.thesis} onChange={e=>setForm(p=>({...p,thesis:e.target.value}))} placeholder="Why this trade? What's the edge?" rows={3} style={{...fld,resize:'vertical',lineHeight:1.6}}/>
+              </div>
+              <div><div style={lbl}>Catalysts (one per line)</div>
+                <textarea value={form.catalysts} onChange={e=>setForm(p=>({...p,catalysts:e.target.value}))} placeholder="Earnings beat&#10;Product launch" rows={2} style={{...fld,resize:'vertical'}}/>
+              </div>
+              <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+                <button type="button" onClick={()=>setShowForm(false)} style={{padding:'9px 18px',background:'transparent',color:'var(--fg3)',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,cursor:'pointer'}}>Cancel</button>
+                <button type="submit" style={{padding:'9px 20px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer'}}>Log Trade</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Close trade modal */}
+      {closing && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setClosing(null);}}>
+          <div style={{background:'var(--bg)',border:'1px solid var(--bdr)',borderRadius:14,padding:24,width:'100%',maxWidth:460}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Close Trade — {closing.ticker}</div>
+            <div style={{fontSize:12,color:'var(--fg3)',marginBottom:18}}>Entry: ${closing.price} × {closing.quantity} shares</div>
+            <form onSubmit={closeTrade} style={{display:'flex',flexDirection:'column',gap:12}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                <div><div style={lbl}>Exit Price *</div><input type="number" step="0.01" value={closeForm.exitPrice} onChange={e=>setCloseForm(p=>({...p,exitPrice:e.target.value}))} placeholder="0.00" required style={fld}/></div>
+                <div><div style={lbl}>Exit Date</div><input type="date" value={closeForm.exitDate} onChange={e=>setCloseForm(p=>({...p,exitDate:e.target.value}))} style={fld}/></div>
+              </div>
+              <div><div style={lbl}>Thesis Outcome</div>
+                <select value={closeForm.thesisOutcome} onChange={e=>setCloseForm(p=>({...p,thesisOutcome:e.target.value}))} style={fld}>
+                  <option value="confirmed">✓ Confirmed — thesis played out</option>
+                  <option value="partial">~ Partial — partially right</option>
+                  <option value="invalidated">✗ Invalidated — thesis was wrong</option>
+                  <option value="pending">⏳ Pending — still watching</option>
+                </select>
+              </div>
+              <div><div style={lbl}>Post-Mortem / Lessons</div>
+                <textarea value={closeForm.postMortem} onChange={e=>setCloseForm(p=>({...p,postMortem:e.target.value}))} placeholder="What happened? What did you learn?" rows={3} style={{...fld,resize:'vertical',lineHeight:1.6}}/>
+              </div>
+              {closeForm.exitPrice && (
+                (() => {
+                  const mult = (closing.action==='buy'||closing.action==='cover')?1:-1;
+                  const pnl = mult*(parseFloat(closeForm.exitPrice)-closing.price)*closing.quantity;
+                  const pct = mult*(parseFloat(closeForm.exitPrice)-closing.price)/closing.price*100;
+                  return <div style={{padding:'10px 14px',background:pnl>=0?'rgba(34,197,94,0.08)':'rgba(239,68,68,0.08)',border:`1px solid ${pnl>=0?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)'}`,borderRadius:8,fontSize:13,fontFamily:'var(--font-mono)',fontWeight:700,color:pnl>=0?'#22c55e':'#ef4444'}}>
+                    P&L: {pnl>=0?'+':''}{pnl.toFixed(2)} ({pct>=0?'+':''}{pct.toFixed(2)}%)
+                  </div>;
+                })()
+              )}
+              <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+                <button type="button" onClick={()=>setClosing(null)} style={{padding:'9px 18px',background:'transparent',color:'var(--fg3)',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,cursor:'pointer'}}>Cancel</button>
+                <button type="submit" style={{padding:'9px 20px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer'}}>Close Trade</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="page-header" style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
+        <div>
+          <h1 className="page-title">Trade Journal</h1>
+          <p className="page-sub">{trades.length} trades logged{stats?.winRate!=null?` · ${stats.winRate.toFixed(0)}% win rate`:''}</p>
+        </div>
+        <button onClick={()=>setShowForm(true)} style={{padding:'8px 16px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer',flexShrink:0}}>+ Log Trade</button>
+      </div>
+
+      {/* Stats */}
+      {stats && stats.totalTrades > 0 && (
+        <div className="kpi-grid" style={{gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(4,1fr)',marginBottom:16}}>
+          {[
+            { label:'Win Rate',        value: stats.winRate!=null ? `${stats.winRate.toFixed(0)}%` : '—',  color: stats.winRate>=50?'#22c55e':'#ef4444' },
+            { label:'Total P&L',       value: stats.totalPnl!=null ? `${stats.totalPnl>=0?'+':''}$${Math.abs(stats.totalPnl).toFixed(0)}` : '—', color: stats.totalPnl>=0?'#22c55e':'#ef4444' },
+            { label:'Thesis Accuracy', value: stats.thesisAccuracy!=null ? `${stats.thesisAccuracy.toFixed(0)}%` : '—', color:'var(--fg)' },
+            { label:'Avg Conviction',  value: stats.avgConviction!=null ? `${stats.avgConviction.toFixed(1)}/10` : '—', color:'var(--fg)' },
+          ].map(({label,value,color})=>(
+            <div key={label} className="stat-card"><span className="stat-label">{label}</span><span className="stat-value" style={{color}}>{value}</span></div>
+          ))}
+        </div>
+      )}
+
+      {/* Filter chips */}
+      <div style={{display:'flex',gap:6,marginBottom:14}}>
+        {['all','open','closed'].map(f=>(
+          <button key={f} onClick={()=>setFilter(f)} style={{padding:'5px 14px',borderRadius:20,border:`1px solid ${filter===f?'var(--red)':'var(--bdr)'}`,background:filter===f?'var(--red-dim)':'var(--surf)',color:filter===f?'var(--red)':'var(--fg3)',fontSize:12,fontWeight:700,cursor:'pointer',textTransform:'capitalize'}}>
+            {f}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div style={{textAlign:'center',padding:48,color:'var(--fg3)'}}>Loading…</div>}
+
+      {!loading && trades.length===0 && (
+        <div className="card" style={{textAlign:'center',padding:'56px 24px'}}>
+          <div style={{fontSize:48,marginBottom:14}}>📓</div>
+          <div style={{fontWeight:700,fontSize:18,marginBottom:8}}>No trades logged yet</div>
+          <div style={{color:'var(--fg3)',fontSize:13,marginBottom:20,maxWidth:380,margin:'0 auto 20px'}}>Track every trade with entry thesis, conviction level, and outcome. Learn from what works and what doesn't.</div>
+          <button onClick={()=>setShowForm(true)} style={{padding:'10px 22px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer'}}>Log your first trade</button>
+        </div>
+      )}
+
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        {visibleTrades.map(trade => {
+          const pnl = tradePnl(trade);
+          const isExp = expanded===trade._id;
+          return (
+            <div key={trade._id} className="card" style={{cursor:'pointer',borderLeft:`3px solid ${ACTION_COLORS[trade.action]||'var(--bdr)'}`}}
+              onClick={()=>setExpanded(isExp?null:trade._id)}>
+              <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
+                    <span style={{fontFamily:'var(--font-mono)',fontWeight:800,fontSize:15,color:'var(--fg)'}}>{trade.ticker}</span>
+                    <span style={{fontSize:11,padding:'2px 7px',borderRadius:4,background:`${ACTION_COLORS[trade.action]}22`,color:ACTION_COLORS[trade.action],fontWeight:700,textTransform:'uppercase'}}>{trade.action}</span>
+                    <span style={{fontSize:11,padding:'2px 7px',borderRadius:4,background:`${TIMEFRAME_COLORS[trade.timeframe]||'#6b7280'}22`,color:TIMEFRAME_COLORS[trade.timeframe]||'#6b7280',fontWeight:600}}>{trade.timeframe}</span>
+                    {trade.status==='closed' && pnl && (
+                      <span style={{fontSize:12,fontFamily:'var(--font-mono)',fontWeight:700,color:pnl.val>=0?'#22c55e':'#ef4444'}}>
+                        {pnl.val>=0?'+':''}${Math.abs(pnl.val).toFixed(0)} ({pnl.pct>=0?'+':''}{pnl.pct.toFixed(1)}%)
+                      </span>
+                    )}
+                    {trade.status==='closed' && (
+                      <span style={{fontSize:10,padding:'2px 7px',borderRadius:4,background:`${OUTCOME_COLORS[trade.thesisOutcome]}22`,color:OUTCOME_COLORS[trade.thesisOutcome],fontWeight:700}}>{OUTCOME_LABELS[trade.thesisOutcome]}</span>
+                    )}
+                    {trade.status==='open' && <span style={{fontSize:10,padding:'2px 6px',borderRadius:4,background:'rgba(74,222,128,0.1)',color:'#4ade80',fontWeight:700}}>OPEN</span>}
+                  </div>
+                  <div style={{fontSize:12,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>
+                    ${trade.price.toFixed(2)} × {trade.quantity} · {new Date(trade.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+                    {trade.exitPrice ? ` → $${trade.exitPrice.toFixed(2)}` : ''}
+                  </div>
+                  {trade.thesis && <div style={{fontSize:12,color:'var(--fg2)',marginTop:4,lineHeight:1.5,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:isExp?'unset':2,WebkitBoxOrient:'vertical'}}>{trade.thesis}</div>}
+                  {isExp && trade.postMortem && (
+                    <div style={{marginTop:8,padding:'8px 12px',background:'var(--surf2)',borderRadius:6,fontSize:12,color:'var(--fg2)',lineHeight:1.6}}>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>Post-Mortem</div>
+                      {trade.postMortem}
+                    </div>
+                  )}
+                  {isExp && trade.catalysts?.length>0 && (
+                    <div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap'}}>
+                      {trade.catalysts.map((c,i)=><span key={i} style={{fontSize:10,padding:'2px 8px',background:'var(--surf2)',borderRadius:4,color:'var(--fg3)'}}>↑ {c}</span>)}
+                    </div>
+                  )}
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:5,alignItems:'flex-end',flexShrink:0}}>
+                  <div style={{fontSize:10,color:'var(--fg3)',fontFamily:'var(--font-mono)'}}>C:{trade.conviction}/10</div>
+                  {trade.status==='open' && (
+                    <button onClick={e=>{e.stopPropagation();setClosing(trade);setCloseForm({exitPrice:'',exitDate:new Date().toISOString().slice(0,10),thesisOutcome:'pending',postMortem:''});}}
+                      style={{padding:'4px 10px',background:'var(--surf2)',color:'var(--fg)',border:'1px solid var(--bdr)',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>
+                      Close
+                    </button>
+                  )}
+                  <button onClick={e=>deleteTrade(trade._id,e)} style={{padding:'4px 8px',background:'transparent',color:'var(--fg3)',border:'1px solid var(--bdr)',borderRadius:6,fontSize:11,cursor:'pointer'}}>✕</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── SENTIMENT PAGE ───────────────────────────────────────────────────────────
+
+function SentimentPage() {
+  const isMobile = useIsMobile();
+  const [tickers,   setTickers]   = React.useState([]);
+  const [results,   setResults]   = React.useState([]);
+  const [analyzing, setAnalyzing] = React.useState(false);
+  const [analyzed,  setAnalyzed]  = React.useState(false);
+  const [addInput,  setAddInput]  = React.useState('');
+
+  // Pre-load portfolio + watchlist tickers
+  React.useEffect(() => {
+    Promise.all([
+      fetch(`${API_URL}/positions`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+      fetch(`${API_URL}/watchlist`).then(r=>r.ok?r.json():[]).catch(()=>[]),
+    ]).then(([pos, wl]) => {
+      const allTickers = [...new Set([
+        ...pos.map(p=>p.ticker),
+        ...wl.map(w=>w.symbol||w.ticker),
+      ])].filter(Boolean).slice(0, 12);
+      setTickers(allTickers);
+    });
+  }, []);
+
+  async function analyze() {
+    if (tickers.length === 0) return;
+    setAnalyzing(true);
+    try {
+      const res = await fetch(`${API_URL}/sentiment/analyze`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ tickers }),
+      });
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : []);
+      setAnalyzed(true);
+    } catch { setResults([]); }
+    setAnalyzing(false);
+  }
+
+  function addTicker() {
+    const t = addInput.trim().toUpperCase();
+    if (!t || tickers.includes(t)) { setAddInput(''); return; }
+    setTickers(p=>[...p, t]);
+    setAddInput('');
+  }
+
+  function sentimentColor(score) {
+    if (score > 0.3) return '#22c55e';
+    if (score < -0.3) return '#ef4444';
+    return '#6b7280';
+  }
+  function sentimentLabel(score) {
+    if (score > 0.5) return 'Very Bullish';
+    if (score > 0.2) return 'Bullish';
+    if (score < -0.5) return 'Very Bearish';
+    if (score < -0.2) return 'Bearish';
+    return 'Neutral';
+  }
+
+  return (
+    <div className="page-root">
+      <div className="page-header" style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
+        <div>
+          <h1 className="page-title">Sentiment Analysis</h1>
+          <p className="page-sub">AI-powered news &amp; social sentiment per ticker</p>
+        </div>
+        <button onClick={analyze} disabled={analyzing||tickers.length===0}
+          style={{padding:'8px 16px',background:analyzing?'var(--surf2)':'var(--red)',color:analyzing?'var(--fg3)':'white',border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:analyzing?'default':'pointer',flexShrink:0}}>
+          {analyzing ? '⟳ Analyzing…' : '⟳ Analyze'}
+        </button>
+      </div>
+
+      {/* Ticker selector */}
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Tickers to Analyze</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:12}}>
+          {tickers.map(t=>(
+            <div key={t} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',background:'var(--surf2)',border:'1px solid var(--bdr)',borderRadius:20}}>
+              <span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12,color:'var(--fg)'}}>{t}</span>
+              <button onClick={()=>setTickers(p=>p.filter(x=>x!==t))} style={{background:'none',border:'none',cursor:'pointer',color:'var(--fg3)',fontSize:12,lineHeight:1,padding:'0 2px'}}>×</button>
+            </div>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <input value={addInput} onChange={e=>setAddInput(e.target.value.toUpperCase())} onKeyDown={e=>e.key==='Enter'&&addTicker()} placeholder="Add ticker…"
+            style={{flex:1,padding:'7px 12px',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,background:'var(--surf)',color:'var(--fg)'}}/>
+          <button onClick={addTicker} style={{padding:'7px 14px',background:'var(--surf2)',color:'var(--fg)',border:'1px solid var(--bdr)',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}}>Add</button>
+        </div>
+        <div style={{fontSize:11,color:'var(--fg3)',marginTop:8}}>Pre-loaded from your portfolio &amp; watchlist. Analysis reads recent news headlines through AI.</div>
+      </div>
+
+      {!analyzed && !analyzing && (
+        <div className="card" style={{textAlign:'center',padding:'48px 24px'}}>
+          <div style={{fontSize:44,marginBottom:12}}>📡</div>
+          <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>Ready to analyze</div>
+          <div style={{color:'var(--fg3)',fontSize:13,maxWidth:380,margin:'0 auto 20px'}}>Click Analyze to run AI sentiment scoring across recent news for each ticker. Takes ~10 seconds.</div>
+          <button onClick={analyze} disabled={tickers.length===0} style={{padding:'10px 22px',background:'var(--red)',color:'white',border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer'}}>Run Sentiment Analysis</button>
+        </div>
+      )}
+
+      {analyzing && (
+        <div style={{textAlign:'center',padding:48,color:'var(--fg3)'}}>
+          <div style={{fontSize:13,marginBottom:8}}>Scanning news &amp; AI scoring {tickers.length} tickers…</div>
+          <div style={{fontSize:11,fontFamily:'var(--font-mono)'}}>This takes about 10–20 seconds</div>
+        </div>
+      )}
+
+      {analyzed && !analyzing && (
+        <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(2,1fr)',gap:10}}>
+          {results.map(r => {
+            const color = sentimentColor(r.score||0);
+            const pct = Math.round(Math.abs(r.score||0)*100);
+            const barWidth = `${Math.min(pct,100)}%`;
+            return (
+              <div key={r.ticker} className="card" style={{padding:'16px 18px'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+                  <div>
+                    <div style={{fontFamily:'var(--font-mono)',fontWeight:800,fontSize:16,color:'var(--fg)'}}>{r.ticker}</div>
+                    <div style={{fontSize:12,fontWeight:700,color,marginTop:2}}>{sentimentLabel(r.score||0)}</div>
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{fontSize:22,fontWeight:800,fontFamily:'var(--font-mono)',color}}>{r.score>=0?'+':''}{((r.score||0)*100).toFixed(0)}</div>
+                    <div style={{fontSize:10,color:'var(--fg3)'}}>score</div>
+                  </div>
+                </div>
+                {/* Sentiment bar */}
+                <div style={{height:6,background:'var(--surf2)',borderRadius:3,marginBottom:10,overflow:'hidden',position:'relative'}}>
+                  <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:1,background:'var(--bdr)'}}/>
+                  <div style={{position:'absolute',height:'100%',background:color,borderRadius:3,
+                    ...(r.score>=0 ? {left:'50%',width:`${pct/2}%`} : {right:'50%',width:`${pct/2}%`})}}/>
+                </div>
+                {/* Confidence */}
+                {r.confidence!=null && (
+                  <div style={{fontSize:11,color:'var(--fg3)',marginBottom:8}}>
+                    Confidence: <span style={{fontWeight:600,color:'var(--fg2)'}}>{Math.round((r.confidence||0)*100)}%</span>
+                    {r.headline && <span style={{marginLeft:8,fontStyle:'italic'}}>"{r.headline.slice(0,60)}{r.headline.length>60?'…':''}"</span>}
+                  </div>
+                )}
+                {/* Drivers */}
+                {r.drivers?.length>0 && (
+                  <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                    {r.drivers.slice(0,3).map((d,i)=>(
+                      <div key={i} style={{fontSize:11,color:'var(--fg3)',paddingLeft:10,borderLeft:`2px solid ${color}44`}}>· {d}</div>
+                    ))}
+                  </div>
+                )}
+                {(!r.drivers||r.drivers.length===0) && r.headline && (
+                  <div style={{fontSize:11,color:'var(--fg3)'}}>No recent news coverage found</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SCENARIO PAGE ────────────────────────────────────────────────────────────
+
+const SCENARIOS = [
+  { id:'tech_selloff', name:'Tech Selloff',     desc:'QQQ −20% AI de-rate',       icon:'💻', color:'#ef4444',
+    shocks:{ semis:-0.30, bigtech:-0.20, tech_etf:-0.20, market_etf:-0.12, japan_etf:-0.08, japan:-0.10, gold:0.05, oil:-0.05, general:-0.08 } },
+  { id:'market_crash', name:'Market Crash',     desc:'S&P −30%, VIX spikes to 45',icon:'📉', color:'#dc2626',
+    shocks:{ semis:-0.40, bigtech:-0.30, tech_etf:-0.30, market_etf:-0.30, japan_etf:-0.22, japan:-0.25, gold:0.12, oil:-0.20, general:-0.28 } },
+  { id:'rate_spike',   name:'Rate Spike +100bp',desc:'10Y yield → 6%',             icon:'📈', color:'#f59e0b',
+    shocks:{ semis:-0.18, bigtech:-0.15, tech_etf:-0.15, market_etf:-0.10, japan_etf:0.02, japan:0.03, gold:-0.08, oil:0.02, general:-0.08 } },
+  { id:'yen_strength', name:'Yen Strength',     desc:'USD/JPY −10% yen rally',     icon:'🇯🇵', color:'#8b5cf6',
+    shocks:{ semis:-0.03, bigtech:-0.02, tech_etf:-0.02, market_etf:-0.01, japan_etf:-0.10, japan:-0.12, gold:0.04, oil:0.02, general:-0.02 } },
+  { id:'oil_spike',    name:'Oil Spike +30%',   desc:'Brent surges on supply shock',icon:'🛢', color:'#f97316',
+    shocks:{ semis:-0.04, bigtech:-0.03, tech_etf:-0.03, market_etf:-0.04, japan_etf:-0.04, japan:-0.05, gold:0.05, oil:0.30, general:-0.04 } },
+  { id:'bull_rip',     name:'Bull Market Rip',  desc:'S&P +15%, risk-on everything',icon:'🚀', color:'#22c55e',
+    shocks:{ semis:0.28, bigtech:0.18, tech_etf:0.18, market_etf:0.15, japan_etf:0.10, japan:0.12, gold:-0.05, oil:0.06, general:0.12 } },
+];
+
+function classifyTicker(ticker) {
+  const t = (ticker||'').toUpperCase();
+  if (t.endsWith('.T')) return 'japan';
+  if (['EWJ','DXJ'].includes(t)) return 'japan_etf';
+  if (['NVDA','AMD','TSM','ASML','AMAT','LRCX','MU'].includes(t)) return 'semis';
+  if (['MSFT','GOOGL','AAPL','AMZN','META','NFLX'].includes(t)) return 'bigtech';
+  if (['QQQ','TQQQ','XLK'].includes(t)) return 'tech_etf';
+  if (['SPY','VOO','IVV','VTI'].includes(t)) return 'market_etf';
+  if (t.includes('GC') || t==='GOLD' || t==='GLD') return 'gold';
+  if (t.includes('CL') || t==='OIL' || t==='USO') return 'oil';
+  return 'general';
+}
+
+function ScenarioPage() {
+  const isMobile = useIsMobile();
+  const [positions,  setPositions]  = React.useState([]);
+  const [stocks,     setStocks]     = React.useState({});
+  const [selected,   setSelected]   = React.useState('tech_selloff');
+  const [loading,    setLoading]    = React.useState(true);
+  const [customShock, setCustomShock] = React.useState('');
+  const [aiNarrative, setAiNarrative] = React.useState('');
+  const [aiLoading,  setAiLoading]  = React.useState(false);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/positions`).then(r=>r.ok?r.json():[]).then(pos => {
+      setPositions(pos);
+      return Promise.all(pos.map(p =>
+        fetch(`${API_URL}/stocks/live/${p.ticker}`).then(r=>r.ok?r.json():null).catch(()=>null)
+      ));
+    }).then(liveData => {
+      const map = {};
+      liveData.forEach((d,i) => { if (d?.price) map[positions[i]?.ticker||''] = d; });
+      // If positions loaded async, use a ref pattern
+    }).catch(()=>{});
+    // Simpler: fetch positions then stocks
+    fetch(`${API_URL}/positions`).then(r=>r.ok?r.json():[]).catch(()=>[]).then(async pos => {
+      setPositions(pos);
+      const map = {};
+      await Promise.all(pos.map(async p => {
+        try {
+          const d = await fetch(`${API_URL}/stocks/live/${p.ticker}`).then(r=>r.ok?r.json():null);
+          if (d?.price) map[p.ticker] = d;
+        } catch {}
+      }));
+      setStocks(map);
+      setLoading(false);
+    });
+  }, []);
+
+  const scenario = SCENARIOS.find(s=>s.id===selected) || SCENARIOS[0];
+  const customPct = parseFloat(customShock)/100 || 0;
+
+  function computeImpact(pos) {
+    const live = stocks[pos.ticker];
+    const price = live?.price || pos.costBasis || 0;
+    const value = price * pos.quantity || price * pos.shares || 0;
+    const cls = classifyTicker(pos.ticker);
+    let shock;
+    if (selected === 'custom') {
+      shock = customPct;
+    } else {
+      shock = scenario.shocks[cls] ?? scenario.shocks.general ?? 0;
+    }
+    return { ticker: pos.ticker, value, shock, impact: value * shock };
+  }
+
+  const rows = positions.map(computeImpact).filter(r=>r.value>0);
+  const totalValue = rows.reduce((s,r)=>s+r.value, 0);
+  const totalImpact = rows.reduce((s,r)=>s+r.impact, 0);
+  const totalPct = totalValue > 0 ? totalImpact/totalValue*100 : 0;
+
+  async function getAiNarrative() {
+    setAiLoading(true); setAiNarrative('');
+    try {
+      const sc = selected==='custom' ? `Custom ${customShock}% shock across all positions` : `${scenario.name}: ${scenario.desc}`;
+      const msg = `Briefly explain in 3-4 sentences what would happen to this portfolio under the scenario: "${sc}". Total portfolio impact: ${totalPct>=0?'+':''}${totalPct.toFixed(1)}% (${totalImpact>=0?'+':''}$${Math.abs(totalImpact).toFixed(0)}). Top positions: ${rows.slice(0,4).map(r=>`${r.ticker} ${r.shock>=0?'+':''}${(r.shock*100).toFixed(0)}%`).join(', ')}. Be direct, reference specific dynamics like rates, FX, sector rotation. No filler.`;
+      const res = await fetch(`${API_URL}/assistant/chat`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: msg, conversationId:null }) });
+      const data = await res.json();
+      setAiNarrative(data.message||'');
+    } catch {}
+    setAiLoading(false);
+  }
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <h1 className="page-title">Portfolio Stress Test</h1>
+        <p className="page-sub">Model macro shocks against your current positions</p>
+      </div>
+
+      {/* Scenario picker */}
+      <div style={{display:'grid',gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(3,1fr)',gap:8,marginBottom:16}}>
+        {SCENARIOS.map(sc=>(
+          <button key={sc.id} onClick={()=>{setSelected(sc.id);setAiNarrative('');}}
+            style={{padding:'12px 14px',borderRadius:10,border:`2px solid ${selected===sc.id?sc.color:'var(--bdr)'}`,background:selected===sc.id?`${sc.color}15`:'var(--surf)',cursor:'pointer',textAlign:'left',transition:'all 0.15s'}}>
+            <div style={{fontSize:18,marginBottom:4}}>{sc.icon}</div>
+            <div style={{fontWeight:700,fontSize:12,color:selected===sc.id?sc.color:'var(--fg)',marginBottom:2}}>{sc.name}</div>
+            <div style={{fontSize:10,color:'var(--fg3)'}}>{sc.desc}</div>
+          </button>
+        ))}
+        <button onClick={()=>{setSelected('custom');setAiNarrative('');}}
+          style={{padding:'12px 14px',borderRadius:10,border:`2px solid ${selected==='custom'?'var(--fg)':'var(--bdr)'}`,background:selected==='custom'?'var(--surf2)':'var(--surf)',cursor:'pointer',textAlign:'left'}}>
+          <div style={{fontSize:18,marginBottom:4}}>✏️</div>
+          <div style={{fontWeight:700,fontSize:12,color:'var(--fg)',marginBottom:4}}>Custom Shock</div>
+          <input type="number" value={customShock} onChange={e=>setCustomShock(e.target.value)} onClick={e=>e.stopPropagation()} placeholder="+15 or -20"
+            style={{width:'100%',padding:'4px 8px',border:'1px solid var(--bdr)',borderRadius:6,fontSize:12,background:'var(--bg)',color:'var(--fg)'}}/>
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{textAlign:'center',padding:48,color:'var(--fg3)'}}>Loading portfolio…</div>
+      ) : positions.length===0 ? (
+        <div className="card" style={{textAlign:'center',padding:'48px 24px'}}>
+          <div style={{fontSize:40,marginBottom:12}}>📊</div>
+          <div style={{fontWeight:700,fontSize:16,marginBottom:6}}>No positions found</div>
+          <div style={{color:'var(--fg3)',fontSize:13}}>Add positions in the Portfolio tab to run scenarios.</div>
+        </div>
+      ) : (
+        <>
+          {/* Summary impact card */}
+          <div className="card" style={{marginBottom:12,padding:'18px 20px',borderLeft:`4px solid ${totalImpact>=0?'#22c55e':'#ef4444'}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+                  {selected==='custom'?`Custom ${customShock}% Shock`:scenario.name} — Portfolio Impact
+                </div>
+                <div style={{fontSize:28,fontWeight:800,fontFamily:'var(--font-mono)',color:totalImpact>=0?'#22c55e':'#ef4444'}}>
+                  {totalImpact>=0?'+':''}${Math.abs(totalImpact).toFixed(0)}
+                  <span style={{fontSize:16,marginLeft:8}}>{totalPct>=0?'+':''}{totalPct.toFixed(1)}%</span>
+                </div>
+                <div style={{fontSize:11,color:'var(--fg3)',marginTop:2}}>on ${totalValue.toFixed(0)} portfolio value</div>
+              </div>
+              <button onClick={getAiNarrative} disabled={aiLoading}
+                style={{padding:'8px 14px',background:'var(--surf2)',color:'var(--fg)',border:'1px solid var(--bdr)',borderRadius:8,fontSize:12,fontWeight:600,cursor:aiLoading?'default':'pointer'}}>
+                {aiLoading?'…':'✦ AI Explain'}
+              </button>
+            </div>
+            {aiNarrative && (
+              <div style={{marginTop:12,padding:'10px 14px',background:'var(--surf2)',borderRadius:8,fontSize:12,color:'var(--fg2)',lineHeight:1.7,borderLeft:'3px solid var(--red)'}}>
+                {aiNarrative}
+              </div>
+            )}
+          </div>
+
+          {/* Position-by-position table */}
+          <div className="card" style={{padding:0,overflow:'hidden'}}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Class</th>
+                  <th style={{textAlign:'right'}}>Value</th>
+                  <th style={{textAlign:'right'}}>Shock</th>
+                  <th style={{textAlign:'right'}}>P&L Impact</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.sort((a,b)=>Math.abs(b.impact)-Math.abs(a.impact)).map(r=>(
+                  <tr key={r.ticker}>
+                    <td><span style={{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12}}>{r.ticker}</span></td>
+                    <td><span style={{fontSize:10,padding:'2px 6px',background:'var(--surf2)',borderRadius:4,color:'var(--fg3)'}}>{classifyTicker(r.ticker)}</span></td>
+                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12}}>${r.value.toFixed(0)}</td>
+                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,color:r.shock>=0?'#22c55e':'#ef4444',fontWeight:700}}>
+                      {r.shock>=0?'+':''}{(r.shock*100).toFixed(0)}%
+                    </td>
+                    <td style={{textAlign:'right',fontFamily:'var(--font-mono)',fontSize:12,fontWeight:700,color:r.impact>=0?'#22c55e':'#ef4444'}}>
+                      {r.impact>=0?'+':''}${Math.abs(r.impact).toFixed(0)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{fontSize:10,color:'var(--fg3)',marginTop:8,textAlign:'center',fontFamily:'var(--font-mono)'}}>
+            Shock estimates based on historical beta by asset class. Not financial advice.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── BRIEFING PAGE ────────────────────────────────────────────────────────────
 
 function BriefingPage() {
@@ -4063,4 +4685,5 @@ Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
   AssistantPage, NotesPage, DealsPage, MeetingsPage, BriefingPage,
+  JournalPage, SentimentPage, ScenarioPage,
 });

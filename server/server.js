@@ -32,6 +32,8 @@ import notesRoutes from './routes/notes.js';
 import dealsRoutes from './routes/deals.js';
 import meetingsRoutes from './routes/meetings.js';
 import memosRoutes from './routes/memos.js';
+import tradeRoutes from './routes/trades.js';
+import sentimentRoutes from './routes/sentiment.js';
 
 dotenv.config();
 
@@ -68,6 +70,8 @@ app.use('/api/notes', notesRoutes);
 app.use('/api/deals', dealsRoutes);
 app.use('/api/meetings', meetingsRoutes);
 app.use('/api/memos', memosRoutes);
+app.use('/api/trades', tradeRoutes);
+app.use('/api/sentiment', sentimentRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

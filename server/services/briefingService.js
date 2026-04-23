@@ -29,8 +29,7 @@ export async function generateAndSaveBriefing({ force = false } = {}) {
     const now = new Date();
     const weekFromNow = new Date(Date.now() + 7 * 86400000);
 
-    const [stocks, positions, news, deals, meetings, kpis] = await Promise.all([
-      Stock.find().sort({ changePercent: -1 }).limit(20).lean(),
+    const [positions, news, deals, meetings, kpis] = await Promise.all([
       Position.find().lean(),
       News.find().sort({ publishedAt: -1 }).limit(8).lean().catch(() => []),
       Deal.find({ stage: { $in: ['thesis', 'conviction', 'position'] } }).lean(),
@@ -38,18 +37,32 @@ export async function generateAndSaveBriefing({ force = false } = {}) {
       KPI.find().lean(),
     ]);
 
+    // Fetch stocks for all position tickers + top movers
+    const positionTickers = positions.map(p => p.ticker);
+    const [positionStocks, topStocks] = await Promise.all([
+      positionTickers.length > 0 ? Stock.find({ symbol: { $in: positionTickers } }).lean() : [],
+      Stock.find().sort({ changePercent: -1 }).limit(20).lean(),
+    ]);
+    // Merge: position stocks take priority, then top movers for display
+    const stockMap = {};
+    for (const s of topStocks) stockMap[s.symbol] = s;
+    for (const s of positionStocks) stockMap[s.symbol] = s; // override with position-specific data
+    const stocks = Object.values(stockMap);
+
     // Portfolio summary
     let portfolioLines = [];
     let totalValue = 0, totalDayPnl = 0;
     if (positions.length > 0) {
       for (const p of positions) {
-        const stock = stocks.find(s => s.symbol === p.ticker) || stocks.find(s => s.ticker === p.ticker);
-        const price = stock?.price || p.costBasis;
+        const stock = stockMap[p.ticker];
+        // Use live price if available, else fall back to costBasis
+        const price = stock?.price ?? p.costBasis;
         const value = p.shares * price;
         const dayPnl = stock ? (stock.change || 0) * p.shares : 0;
         totalValue += value;
         totalDayPnl += dayPnl;
-        portfolioLines.push(`  ${p.ticker}: $${value.toFixed(0)} | ${stock?.changePercent >= 0 ? '+' : ''}${(stock?.changePercent || 0).toFixed(2)}% today (${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(0)})`);
+        const pctStr = stock ? `${stock.changePercent >= 0 ? '+' : ''}${(stock.changePercent || 0).toFixed(2)}%` : 'N/A';
+        portfolioLines.push(`  ${p.ticker}: $${value.toFixed(0)} | ${pctStr} today (${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(0)})`);
       }
     }
 
