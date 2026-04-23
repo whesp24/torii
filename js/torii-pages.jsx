@@ -4537,6 +4537,916 @@ function ScenarioPage() {
   );
 }
 
+// ─── MACRO DASHBOARD ─────────────────────────────────────────────────────────
+
+function MacroPage() {
+  const [indicators, setIndicators] = React.useState([]);
+  const [regime,     setRegime]     = React.useState(null);
+  const [loading,    setLoading]    = React.useState(true);
+  const [regLoading, setRegLoading] = React.useState(false);
+  const [chartSeries, setChartSeries] = React.useState(null); // { id, label, history }
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/macro`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setIndicators(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  function analyzeRegime() {
+    setRegLoading(true);
+    const payload = indicators.filter(i => i.value !== null).map(i => ({
+      label: i.label, value: i.value?.toFixed(i.dec ?? 2), unit: i.unit
+    }));
+    fetch(`${API_URL}/macro/regime`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ indicators: payload })
+    })
+      .then(r => r.json())
+      .then(d => { setRegime(d); setRegLoading(false); })
+      .catch(() => setRegLoading(false));
+  }
+
+  function loadChart(series) {
+    if (chartSeries?.id === series.id) { setChartSeries(null); return; }
+    fetch(`${API_URL}/macro/${series.id}/history`)
+      .then(r => r.json())
+      .then(hist => setChartSeries({ ...series, history: hist }))
+      .catch(() => {});
+  }
+
+  const yieldSeries = ['DGS2','DGS5','DGS10','DGS30'];
+  const yieldData   = indicators.filter(i => yieldSeries.includes(i.id));
+  const otherData   = indicators.filter(i => !yieldSeries.includes(i.id));
+
+  const regimeColors = { 'risk-on':'var(--green)', 'goldilocks':'var(--green)', 'risk-off':'var(--red-loss)', 'recession':'var(--red-loss)', 'stagflation':'#f59e0b', 'tightening':'#f59e0b', 'easing':'#60a5fa', 'recovery':'#60a5fa' };
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Macro Dashboard</h1>
+          <p className="page-sub">FRED data · yield curve · AI regime classification</p>
+        </div>
+        <button onClick={analyzeRegime} disabled={regLoading || indicators.length === 0}
+          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', opacity: (regLoading||indicators.length===0)?0.6:1 }}>
+          {regLoading ? 'Analyzing…' : '✦ Classify Regime'}
+        </button>
+      </div>
+
+      {/* Regime Banner */}
+      {regime && (
+        <div className="card" style={{ marginBottom:14, borderLeft:`3px solid ${regimeColors[regime.regime]||'var(--red)'}` }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+            <span style={{ fontFamily:'var(--font-mono)', fontWeight:800, fontSize:13, color:regimeColors[regime.regime]||'var(--red)', textTransform:'uppercase', letterSpacing:'0.1em' }}>
+              {regime.regime}
+            </span>
+            <span style={{ fontSize:11, color:'var(--fg3)' }}>macro regime</span>
+          </div>
+          <p style={{ fontSize:13, color:'var(--fg2)', lineHeight:1.6, margin:0 }}>{regime.summary}</p>
+        </div>
+      )}
+
+      {/* Yield Curve */}
+      <div className="card" style={{ marginBottom:14 }}>
+        <div className="section-label" style={{ marginBottom:12 }}>Yield Curve</div>
+        {loading ? (
+          <div style={{ color:'var(--fg3)', fontSize:12, fontFamily:'var(--font-mono)' }}>Loading FRED data…</div>
+        ) : (
+          <div style={{ display:'flex', alignItems:'flex-end', gap:0, height:80 }}>
+            {yieldData.map((s, i) => {
+              const maxV = Math.max(...yieldData.map(d => d.value||0));
+              const h = maxV > 0 ? Math.max(12, ((s.value||0)/maxV)*72) : 12;
+              const inverted = yieldData.length >= 2 && (yieldData[yieldData.length-1]?.value||0) < (yieldData[0]?.value||0);
+              return (
+                <div key={s.id} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+                  <span style={{ fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{(s.value||0).toFixed(2)}%</span>
+                  <div style={{ width:'60%', height:h, background: inverted?'var(--red-loss)':'var(--green)', borderRadius:'4px 4px 0 0', opacity:0.85 }} />
+                  <span style={{ fontSize:9, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{s.label.replace(' Treasury','')}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {yieldData.length >= 2 && (() => {
+          const spread = (yieldData[yieldData.length-1]?.value||0) - (yieldData[0]?.value||0);
+          return (
+            <div style={{ marginTop:10, fontSize:11, fontFamily:'var(--font-mono)', color: spread < 0 ? 'var(--red-loss)' : 'var(--green)' }}>
+              10Y−2Y spread: {spread >= 0 ? '+' : ''}{spread.toFixed(2)}% {spread < 0 ? '⚠ inverted' : ''}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Macro Indicators Grid */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:10, marginBottom:14 }}>
+        {loading ? (
+          Array(8).fill(0).map((_, i) => (
+            <div key={i} className="card" style={{ height:80, opacity:0.3 }} />
+          ))
+        ) : otherData.map(s => {
+          const up = s.change >= 0;
+          return (
+            <div key={s.id} className="card" style={{ cursor:'pointer', transition:'border-color 0.15s', borderColor: chartSeries?.id===s.id?'var(--red)':'var(--bdr)' }}
+              onClick={() => loadChart(s)}>
+              <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>{s.label}</div>
+              {s.value !== null ? (
+                <>
+                  <div style={{ fontSize:22, fontWeight:800, fontFamily:'var(--font-mono)', color:'var(--fg)' }}>
+                    {s.unit==='$T' ? `$${(s.value/1000).toFixed(1)}T` : `${s.value?.toFixed(s.dec??2)}${s.unit}`}
+                  </div>
+                  <div style={{ fontSize:11, fontFamily:'var(--font-mono)', color: up?'var(--green)':'var(--red-loss)', marginTop:4 }}>
+                    {up?'+':''}{s.change?.toFixed(s.dec??2)} MoM
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize:13, color:'var(--fg3)' }}>No FRED key</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Inline chart for selected indicator */}
+      {chartSeries && chartSeries.history?.length > 0 && (
+        <div className="card" style={{ marginBottom:14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+            <div className="section-label" style={{ marginBottom:0 }}>{chartSeries.label} — 24-month history</div>
+            <button onClick={() => setChartSeries(null)} style={{ background:'none', border:'none', color:'var(--fg3)', cursor:'pointer', fontSize:16 }}>✕</button>
+          </div>
+          <AreaChart
+            data={chartSeries.history.map(h => h.value)}
+            labels={chartSeries.history.map(h => h.date)}
+            height={140} showAxes={true}
+          />
+        </div>
+      )}
+
+      {!loading && indicators.length === 0 && (
+        <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)', fontSize:13 }}>
+          <div style={{ fontSize:24, marginBottom:8 }}>📊</div>
+          <div style={{ fontWeight:700, marginBottom:4 }}>Add FRED_API_KEY to Render env vars</div>
+          <div style={{ fontSize:12 }}>Free at <code>fred.stlouisfed.org/docs/api/api_key.html</code></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── WATCHLIST INTELLIGENCE ────────────────────────────────────────────────────
+
+function WatchlistIntelPage() {
+  const [items,       setItems]       = React.useState([]);
+  const [loading,     setLoading]     = React.useState(true);
+  const [expanded,    setExpanded]    = React.useState(null);
+  const [editing,     setEditing]     = React.useState({}); // { symbol: { thesis, catalysts, conviction } }
+  const [checking,    setChecking]    = React.useState({}); // { symbol: true }
+  const [prices,      setPrices]      = React.useState({});
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/watchlist`)
+      .then(r => r.json())
+      .then(data => {
+        setItems(Array.isArray(data) ? data : []);
+        setLoading(false);
+        // Fetch live prices for all
+        (Array.isArray(data) ? data : []).forEach(item => {
+          fetch(`${API_URL}/stocks/live/${item.symbol}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => d && setPrices(p => ({ ...p, [item.symbol]: d })))
+            .catch(() => {});
+        });
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  function saveIntelligence(symbol) {
+    const e = editing[symbol] || {};
+    fetch(`${API_URL}/watchlist/${symbol}/intelligence`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thesis: e.thesis, catalysts: e.catalysts, conviction: e.conviction })
+    })
+      .then(r => r.json())
+      .then(saved => {
+        setItems(p => p.map(i => i.symbol === symbol ? { ...i, ...saved } : i));
+        setEditing(p => { const n = { ...p }; delete n[symbol]; return n; });
+      }).catch(() => {});
+  }
+
+  function checkThesis(symbol) {
+    setChecking(p => ({ ...p, [symbol]: true }));
+    fetch(`${API_URL}/watchlist/${symbol}/thesis-check`, { method: 'POST' })
+      .then(r => r.json())
+      .then(result => {
+        setItems(p => p.map(i => i.symbol === symbol ? { ...i, thesisStatus: result.status, thesisSummary: result.summary, lastThesisCheck: new Date().toISOString() } : i));
+        setChecking(p => { const n = { ...p }; delete n[symbol]; return n; });
+      }).catch(() => setChecking(p => { const n = { ...p }; delete n[symbol]; return n; }));
+  }
+
+  const statusColor = { valid:'var(--green)', weakening:'#f59e0b', invalidated:'var(--red-loss)', unchecked:'var(--fg3)' };
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Watchlist Intelligence</h1>
+          <p className="page-sub">Thesis tracking · catalysts · AI validity checks</p>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="card" style={{ color:'var(--fg3)', fontSize:12, fontFamily:'var(--font-mono)' }}>Loading watchlist…</div>
+      ) : items.length === 0 ? (
+        <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)' }}>
+          <div style={{ fontSize:24, marginBottom:8 }}>👁</div>
+          <div>Add tickers to your Watchlist first</div>
+        </div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {items.map(item => {
+            const p = prices[item.symbol];
+            const up = (p?.changePercent||0) >= 0;
+            const isExpanded = expanded === item.symbol;
+            const ed = editing[item.symbol];
+            const thesis = ed?.thesis !== undefined ? ed.thesis : (item.thesis || '');
+            const conviction = ed?.conviction !== undefined ? ed.conviction : (item.conviction || 5);
+
+            return (
+              <div key={item.symbol} className="card" style={{ padding:0, overflow:'hidden' }}>
+                {/* Header row */}
+                <div style={{ display:'flex', alignItems:'center', gap:12, padding:'14px 18px', cursor:'pointer' }}
+                  onClick={() => setExpanded(isExpanded ? null : item.symbol)}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <span style={{ fontFamily:'var(--font-mono)', fontWeight:800, fontSize:14, color:'var(--red)' }}>{item.symbol}</span>
+                      <span style={{ fontSize:11, color:'var(--fg3)' }}>{item.name || item.category}</span>
+                      {item.thesisStatus && item.thesisStatus !== 'unchecked' && (
+                        <span style={{ fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:4, background:`${statusColor[item.thesisStatus]}22`, color:statusColor[item.thesisStatus], textTransform:'uppercase', letterSpacing:'0.06em' }}>
+                          {item.thesisStatus}
+                        </span>
+                      )}
+                    </div>
+                    {item.thesis && <div style={{ fontSize:11, color:'var(--fg3)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:500 }}>{item.thesis}</div>}
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    <div style={{ fontFamily:'var(--font-mono)', fontWeight:700, fontSize:14 }}>{p ? `$${p.price?.toFixed(2)}` : '—'}</div>
+                    <div style={{ fontFamily:'var(--font-mono)', fontSize:11, color: up?'var(--green)':'var(--red-loss)' }}>
+                      {p ? `${up?'+':''}${p.changePercent?.toFixed(2)}%` : ''}
+                    </div>
+                  </div>
+                  <div style={{ width:16, color:'var(--fg3)', fontSize:10 }}>{isExpanded ? '▲' : '▼'}</div>
+                </div>
+
+                {/* Expanded intel panel */}
+                {isExpanded && (
+                  <div style={{ borderTop:'1px solid var(--bdr)', padding:'16px 18px', display:'flex', flexDirection:'column', gap:14 }}>
+                    {/* Thesis editor */}
+                    <div>
+                      <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Investment Thesis</div>
+                      <textarea
+                        value={thesis}
+                        onChange={e => setEditing(p => ({ ...p, [item.symbol]: { ...(p[item.symbol]||{}), thesis: e.target.value } }))}
+                        placeholder="Write your thesis here…"
+                        style={{ width:'100%', minHeight:80, padding:'10px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, color:'var(--fg)', fontFamily:'inherit', resize:'vertical', boxSizing:'border-box' }}
+                      />
+                      {/* Thesis check result */}
+                      {item.thesisSummary && (
+                        <div style={{ marginTop:8, padding:'10px 12px', background:'var(--surf2)', borderRadius:8, fontSize:12, color:'var(--fg2)', borderLeft:`3px solid ${statusColor[item.thesisStatus]||'var(--fg3)'}` }}>
+                          <span style={{ fontWeight:700, color:statusColor[item.thesisStatus], textTransform:'uppercase', fontSize:10 }}>{item.thesisStatus}</span>
+                          {' — '}{item.thesisSummary}
+                          {item.lastThesisCheck && <span style={{ color:'var(--fg3)', fontSize:10, marginLeft:8 }}>· checked {new Date(item.lastThesisCheck).toLocaleDateString()}</span>}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Conviction + Check button */}
+                    <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Conviction {conviction}/10</div>
+                        <input type="range" min={1} max={10} value={conviction}
+                          onChange={e => setEditing(p => ({ ...p, [item.symbol]: { ...(p[item.symbol]||{}), conviction: +e.target.value } }))}
+                          style={{ width:'100%', accentColor:'var(--red)' }} />
+                      </div>
+                      <div style={{ display:'flex', gap:8 }}>
+                        <button onClick={() => saveIntelligence(item.symbol)}
+                          style={{ padding:'8px 14px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+                          Save
+                        </button>
+                        <button onClick={() => checkThesis(item.symbol)} disabled={!thesis || checking[item.symbol]}
+                          style={{ padding:'8px 14px', background:'var(--surf2)', color:'var(--fg)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', opacity:(!thesis||checking[item.symbol])?0.5:1 }}>
+                          {checking[item.symbol] ? 'Checking…' : '✦ Check Thesis'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Catalysts */}
+                    <div>
+                      <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Catalysts</div>
+                      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                        {(ed?.catalysts || item.catalysts || []).map((cat, i) => (
+                          <div key={i} style={{ display:'flex', gap:8, alignItems:'center' }}>
+                            <input type="checkbox" checked={cat.done||false}
+                              onChange={() => {
+                                const cats = [...(ed?.catalysts || item.catalysts || [])];
+                                cats[i] = { ...cats[i], done: !cats[i].done };
+                                setEditing(p => ({ ...p, [item.symbol]: { ...(p[item.symbol]||{}), catalysts: cats } }));
+                              }} style={{ accentColor:'var(--green)', flexShrink:0 }} />
+                            <span style={{ flex:1, fontSize:12, color: cat.done?'var(--fg3)':'var(--fg)', textDecoration: cat.done?'line-through':'none' }}>{cat.text}</span>
+                            {cat.date && <span style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{cat.date}</span>}
+                          </div>
+                        ))}
+                        <button onClick={() => {
+                          const text = prompt('Catalyst description?');
+                          if (!text) return;
+                          const date = prompt('Date (optional)?') || '';
+                          const cats = [...(ed?.catalysts || item.catalysts || []), { text, date, done: false }];
+                          setEditing(p => ({ ...p, [item.symbol]: { ...(p[item.symbol]||{}), catalysts: cats } }));
+                        }} style={{ alignSelf:'flex-start', padding:'4px 10px', background:'none', border:'1px dashed var(--bdr)', borderRadius:6, fontSize:11, color:'var(--fg3)', cursor:'pointer' }}>
+                          + Add catalyst
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 13F / INSIDER TRACKING ────────────────────────────────────────────────────
+
+function InsiderPage() {
+  const [funds,       setFunds]       = React.useState([]);
+  const [fundData,    setFundData]    = React.useState({});
+  const [form4Ticker, setForm4Ticker] = React.useState('');
+  const [form4Data,   setForm4Data]   = React.useState(null);
+  const [form4Loading,setForm4Loading]= React.useState(false);
+  const [tab,         setTab]         = React.useState('funds'); // 'funds' | 'form4'
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/insider/funds`)
+      .then(r => r.json())
+      .then(data => {
+        setFunds(Array.isArray(data) ? data : []);
+        // Load each fund's latest filing info
+        (Array.isArray(data) ? data : []).forEach(fund => {
+          fetch(`${API_URL}/insider/funds/${fund.cik}/latest`)
+            .then(r => r.json())
+            .then(d => setFundData(p => ({ ...p, [fund.cik]: d })))
+            .catch(() => {});
+        });
+      }).catch(() => {});
+  }, []);
+
+  function searchForm4() {
+    if (!form4Ticker.trim()) return;
+    setForm4Loading(true);
+    setForm4Data(null);
+    fetch(`${API_URL}/insider/form4/${form4Ticker.trim().toUpperCase()}`)
+      .then(r => r.json())
+      .then(d => { setForm4Data(d); setForm4Loading(false); })
+      .catch(() => setForm4Loading(false));
+  }
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">13F &amp; Insider Tracking</h1>
+          <p className="page-sub">SEC EDGAR · institutional filings · Form 4 insider transactions</p>
+        </div>
+      </div>
+
+      {/* Tab strip */}
+      <div className="filter-strip" style={{ marginBottom:16 }}>
+        {[['funds','Institutional 13F'],['form4','Insider Form 4']].map(([id, label]) => (
+          <button key={id} className={`filter-chip${tab===id?' active':''}`} onClick={() => setTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {tab === 'funds' && (
+        <div>
+          <div style={{ fontSize:11, color:'var(--fg3)', marginBottom:12, fontFamily:'var(--font-mono)' }}>
+            Notable fund 13F filings — sourced from SEC EDGAR. Click any row to view on EDGAR.
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {funds.map(fund => {
+              const d = fundData[fund.cik];
+              const latest = d?.recentFilings?.[0];
+              return (
+                <div key={fund.cik} className="card" style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>{fund.name}</div>
+                    <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>CIK: {fund.cik}</div>
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    {latest ? (
+                      <>
+                        <div style={{ fontSize:12, color:'var(--fg2)', fontFamily:'var(--font-mono)' }}>Latest 13F: {latest.date}</div>
+                        <a href={latest.url} target="_blank" rel="noopener"
+                          style={{ fontSize:11, color:'var(--red)', textDecoration:'none' }} onClick={e => e.stopPropagation()}>
+                          View on EDGAR ↗
+                        </a>
+                      </>
+                    ) : d ? (
+                      <span style={{ fontSize:11, color:'var(--fg3)' }}>No 13F found</span>
+                    ) : (
+                      <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Loading…</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop:16, padding:'12px 16px', background:'var(--surf)', borderRadius:10, fontSize:11, color:'var(--fg3)', lineHeight:1.6 }}>
+            <strong style={{ color:'var(--fg2)' }}>Note:</strong> 13F filings are quarterly and published 45 days after quarter-end. They reflect holdings as of the quarter close, not current positions.
+          </div>
+        </div>
+      )}
+
+      {tab === 'form4' && (
+        <div>
+          <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+            <input
+              value={form4Ticker}
+              onChange={e => setForm4Ticker(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key === 'Enter' && searchForm4()}
+              placeholder="Enter ticker (e.g. NVDA)"
+              style={{ flex:1, padding:'10px 14px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, color:'var(--fg)' }}
+            />
+            <button onClick={searchForm4} disabled={form4Loading}
+              style={{ padding:'10px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+              {form4Loading ? 'Searching…' : 'Search'}
+            </button>
+          </div>
+
+          {form4Data && (
+            <div>
+              <div style={{ marginBottom:10, fontSize:12, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                {form4Data.count} Form 4 filings found for <strong style={{ color:'var(--red)' }}>{form4Data.ticker}</strong> (last 90 days)
+              </div>
+              {form4Data.filings?.length === 0 ? (
+                <div className="card" style={{ textAlign:'center', color:'var(--fg3)', padding:30 }}>No insider transactions found in last 90 days</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {form4Data.filings?.map((f, i) => (
+                    <div key={i} className="card" style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px' }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:600, fontSize:13 }}>{f.filer}</div>
+                        <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Filed: {f.date} · Period: {f.period}</div>
+                      </div>
+                      <a href={f.url} target="_blank" rel="noopener"
+                        style={{ fontSize:11, color:'var(--red)', textDecoration:'none', fontWeight:700 }}>
+                        EDGAR ↗
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!form4Data && !form4Loading && (
+            <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)' }}>
+              <div style={{ fontSize:24, marginBottom:8 }}>📋</div>
+              <div>Search a ticker to see recent insider Form 4 filings</div>
+              <div style={{ fontSize:11, marginTop:6 }}>Covers director/officer buy/sell transactions from SEC EDGAR</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PORTFOLIO ATTRIBUTION ─────────────────────────────────────────────────────
+
+function AttributionPage() {
+  const [positions,  setPositions]  = React.useState([]);
+  const [trades,     setTrades]     = React.useState([]);
+  const [prices,     setPrices]     = React.useState({});
+  const [loading,    setLoading]    = React.useState(true);
+
+  React.useEffect(() => {
+    Promise.all([
+      fetch(`${API_URL}/positions`).then(r => r.json()).catch(() => []),
+      fetch(`${API_URL}/trades`).then(r => r.json()).catch(() => []),
+    ]).then(([pos, tr]) => {
+      setPositions(Array.isArray(pos) ? pos : []);
+      setTrades(Array.isArray(tr) ? tr : []);
+      setLoading(false);
+      // Fetch live prices
+      (Array.isArray(pos) ? pos : []).forEach(p => {
+        fetch(`${API_URL}/stocks/live/${p.ticker}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => d && setPrices(prev => ({ ...prev, [p.ticker]: d })))
+          .catch(() => {});
+      });
+    });
+  }, []);
+
+  // Sector classification (simple heuristic — extend as needed)
+  function getSector(ticker) {
+    const t = (ticker||'').toUpperCase();
+    if (['NVDA','AMD','TSM','ASML','AMAT','LRCX','MU','INTC','AVGO','QCOM'].includes(t)) return 'Semis';
+    if (['MSFT','GOOGL','AAPL','META','NFLX','CRM','SNOW','PLTR'].includes(t)) return 'Big Tech';
+    if (['AMZN','SHOP','BABA','JD','MELI'].includes(t)) return 'E-Commerce';
+    if (['JPM','BAC','GS','MS','WFC','C','MUFG','8306.T'].includes(t)) return 'Financials';
+    if (['VOO','SPY','QQQ','IVV','VTI','EWJ'].includes(t)) return 'ETFs';
+    if (t.endsWith('.T')) return 'Japan';
+    if (['GLD','GC=F','SLV','USO','CL=F'].includes(t)) return 'Commodities';
+    if (['CRCL','ONDS','MMS','QXO','VRT','TPL'].includes(t)) return 'Special Sits';
+    return 'Other';
+  }
+
+  // Build attribution data
+  const positionData = positions.map(p => {
+    const live = prices[p.ticker];
+    const currentPrice = live?.price || p.costBasis;
+    const value  = p.shares * currentPrice;
+    const cost   = p.shares * p.costBasis;
+    const pnl    = value - cost;
+    const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
+    const dayPnl = live ? (live.change||0) * p.shares : 0;
+    return { ticker: p.ticker, shares: p.shares, costBasis: p.costBasis, currentPrice, value, cost, pnl, pnlPct, dayPnl, sector: getSector(p.ticker) };
+  });
+
+  const totalValue  = positionData.reduce((s, p) => s + p.value, 0);
+  const totalCost   = positionData.reduce((s, p) => s + p.cost, 0);
+  const totalPnl    = totalValue - totalCost;
+  const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+  const totalDayPnl = positionData.reduce((s, p) => s + p.dayPnl, 0);
+
+  // Sector attribution
+  const sectorMap = {};
+  for (const p of positionData) {
+    if (!sectorMap[p.sector]) sectorMap[p.sector] = { value:0, pnl:0, cost:0, tickers:[] };
+    sectorMap[p.sector].value  += p.value;
+    sectorMap[p.sector].pnl   += p.pnl;
+    sectorMap[p.sector].cost  += p.cost;
+    sectorMap[p.sector].tickers.push(p.ticker);
+  }
+  const sectors = Object.entries(sectorMap).map(([name, d]) => ({
+    name, value: d.value, pnl: d.pnl, pnlPct: d.cost > 0 ? (d.pnl/d.cost)*100 : 0,
+    weight: totalValue > 0 ? (d.value/totalValue)*100 : 0, tickers: d.tickers
+  })).sort((a, b) => b.value - a.value);
+
+  // Closed trades P&L by sector/timeframe
+  const closedTrades = trades.filter(t => t.status === 'closed' && t.exitPrice);
+  const byTimeframe = {};
+  for (const t of closedTrades) {
+    const tf = t.timeframe || 'position';
+    const pnl = (t.action==='buy'||t.action==='cover' ? 1 : -1) * (t.exitPrice - t.price) * t.quantity;
+    if (!byTimeframe[tf]) byTimeframe[tf] = { pnl:0, count:0, wins:0 };
+    byTimeframe[tf].pnl   += pnl;
+    byTimeframe[tf].count += 1;
+    if (pnl > 0) byTimeframe[tf].wins += 1;
+  }
+
+  const sectorColors = ['#4a9eff','#4ade80','#f59e0b','#e879f9','#fb923c','#60a5fa','#34d399','#f87171'];
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Portfolio Attribution</h1>
+          <p className="page-sub">P&amp;L breakdown by sector · position sizing · trade performance</p>
+        </div>
+      </div>
+
+      {/* Summary bar */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:10, marginBottom:16 }}>
+        {[
+          { label:'Total Value', value: `$${(totalValue/1000).toFixed(1)}k`, sub: `${totalPnlPct>=0?'+':''}${totalPnlPct.toFixed(1)}% vs cost` },
+          { label:'Total P&L', value: `${totalPnl>=0?'+':''}$${Math.abs(totalPnl).toFixed(0)}`, sub: totalPnl>=0?'unrealized gain':'unrealized loss', color: totalPnl>=0?'var(--green)':'var(--red-loss)' },
+          { label:"Today's P&L", value: `${totalDayPnl>=0?'+':''}$${Math.abs(totalDayPnl).toFixed(0)}`, sub:'day change', color: totalDayPnl>=0?'var(--green)':'var(--red-loss)' },
+          { label:'Positions', value: positions.length, sub:`${sectors.length} sectors` },
+          { label:'Closed Trades', value: closedTrades.length, sub:`${Object.keys(byTimeframe).length} timeframes` },
+        ].map((s, i) => (
+          <div key={i} className="card">
+            <div style={{ fontSize:10, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em', fontFamily:'var(--font-mono)', marginBottom:6 }}>{s.label}</div>
+            <div style={{ fontSize:20, fontWeight:800, fontFamily:'var(--font-mono)', color: s.color||'var(--fg)' }}>{s.value}</div>
+            <div style={{ fontSize:11, color:'var(--fg3)', marginTop:2 }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
+        {/* Sector allocation bar chart */}
+        <div className="card">
+          <div className="section-label" style={{ marginBottom:14 }}>Sector Allocation</div>
+          {loading ? <div style={{ color:'var(--fg3)', fontSize:12 }}>Loading…</div> : sectors.length === 0 ? <div style={{ color:'var(--fg3)', fontSize:12 }}>No positions</div> : (
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {sectors.map((s, i) => (
+                <div key={s.name}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                    <span style={{ fontSize:11, fontWeight:600 }}>{s.name}</span>
+                    <span style={{ fontSize:11, fontFamily:'var(--font-mono)', color: s.pnl>=0?'var(--green)':'var(--red-loss)' }}>
+                      {s.pnl>=0?'+':''}${Math.abs(s.pnl).toFixed(0)} ({s.pnlPct>=0?'+':''}{ s.pnlPct.toFixed(1)}%)
+                    </span>
+                  </div>
+                  <div style={{ height:6, background:'var(--surf2)', borderRadius:3, overflow:'hidden' }}>
+                    <div style={{ height:'100%', width:`${s.weight}%`, background:sectorColors[i%sectorColors.length], borderRadius:3, transition:'width 0.4s' }} />
+                  </div>
+                  <div style={{ fontSize:9, color:'var(--fg3)', marginTop:2 }}>{s.weight.toFixed(1)}% · {s.tickers.join(', ')}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Trade P&L by timeframe */}
+        <div className="card">
+          <div className="section-label" style={{ marginBottom:14 }}>Closed Trade P&amp;L by Timeframe</div>
+          {closedTrades.length === 0 ? (
+            <div style={{ color:'var(--fg3)', fontSize:12 }}>No closed trades yet — log trades in the Journal tab</div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              {Object.entries(byTimeframe).map(([tf, d]) => (
+                <div key={tf} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <div style={{ width:70, fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)', textTransform:'capitalize' }}>{tf}</div>
+                  <div style={{ flex:1, height:8, background:'var(--surf2)', borderRadius:4, overflow:'hidden', position:'relative' }}>
+                    <div style={{ position:'absolute', left:'50%', top:0, bottom:0, width:1, background:'var(--bdr)' }} />
+                    {d.pnl !== 0 && (
+                      <div style={{
+                        position:'absolute',
+                        [d.pnl>0?'left':'right']: d.pnl>0 ? '50%' : '50%',
+                        width: `${Math.min(50, Math.abs(d.pnl)/100)}%`,
+                        top:0, bottom:0,
+                        background: d.pnl>0 ? 'var(--green)' : 'var(--red-loss)',
+                        borderRadius:4,
+                      }} />
+                    )}
+                  </div>
+                  <div style={{ width:80, textAlign:'right', fontSize:11, fontFamily:'var(--font-mono)', color: d.pnl>=0?'var(--green)':'var(--red-loss)', fontWeight:700 }}>
+                    {d.pnl>=0?'+':''}${d.pnl.toFixed(0)}
+                  </div>
+                  <div style={{ width:50, fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{d.wins}/{d.count}W</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Position-level P&L table */}
+      <div className="card" style={{ padding:0, overflow:'hidden' }}>
+        <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--bdr)' }}>
+          <div className="section-label" style={{ marginBottom:0 }}>Position P&amp;L Detail</div>
+        </div>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Ticker</th><th>Sector</th><th style={{ textAlign:'right' }}>Shares</th>
+              <th style={{ textAlign:'right' }}>Cost</th><th style={{ textAlign:'right' }}>Price</th>
+              <th style={{ textAlign:'right' }}>Value</th><th style={{ textAlign:'right' }}>P&amp;L</th>
+              <th style={{ textAlign:'right' }}>P&amp;L %</th><th style={{ textAlign:'right' }}>Weight</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={9} style={{ padding:20, textAlign:'center', color:'var(--fg3)' }}>Loading…</td></tr>
+            ) : positionData.length === 0 ? (
+              <tr><td colSpan={9} style={{ padding:20, textAlign:'center', color:'var(--fg3)' }}>No positions — add them in Portfolio tab</td></tr>
+            ) : positionData.sort((a,b) => b.value-a.value).map(p => (
+              <tr key={p.ticker}>
+                <td><span style={{ fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--red)', fontSize:12 }}>{p.ticker}</span></td>
+                <td style={{ fontSize:11, color:'var(--fg3)' }}>{p.sector}</td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12 }}>{p.shares}</td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12 }}>${p.costBasis?.toFixed(2)}</td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12 }}>${p.currentPrice?.toFixed(2)}</td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12 }}>${p.value?.toFixed(0)}</td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12, fontWeight:700, color: p.pnl>=0?'var(--green)':'var(--red-loss)' }}>
+                  {p.pnl>=0?'+':''}${p.pnl?.toFixed(0)}
+                </td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12, color: p.pnlPct>=0?'var(--green)':'var(--red-loss)' }}>
+                  {p.pnlPct>=0?'+':''}{ p.pnlPct?.toFixed(1)}%
+                </td>
+                <td style={{ textAlign:'right', fontFamily:'var(--font-mono)', fontSize:12, color:'var(--fg3)' }}>
+                  {totalValue>0 ? (p.value/totalValue*100).toFixed(1) : '0'}%
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── RESEARCH REPOSITORY ───────────────────────────────────────────────────────
+
+function ResearchPage() {
+  const [items,    setItems]    = React.useState([]);
+  const [loading,  setLoading]  = React.useState(true);
+  const [query,    setQuery]    = React.useState('');
+  const [typeFilter, setTypeFilter] = React.useState('all');
+  const [drafting, setDrafting] = React.useState(false);
+  const [editing,  setEditing]  = React.useState(null);
+  const [form,     setForm]     = React.useState({ title:'', content:'', type:'note', tags:'', tickers:'', conviction:5, source:'', pinned:false });
+
+  const TYPES = ['all','thesis','memo','note','article','model','other'];
+  const TYPE_COLORS = { thesis:'#4a9eff', memo:'#f59e0b', note:'var(--fg3)', article:'#4ade80', model:'#e879f9', other:'var(--fg3)' };
+
+  function load() {
+    const params = new URLSearchParams();
+    if (typeFilter !== 'all') params.set('type', typeFilter);
+    if (query.trim()) params.set('q', query.trim());
+    fetch(`${API_URL}/research?${params}`)
+      .then(r => r.json())
+      .then(data => { setItems(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }
+
+  React.useEffect(() => { load(); }, [typeFilter]);
+
+  function save() {
+    const payload = {
+      title: form.title.trim(),
+      content: form.content,
+      type: form.type,
+      tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),
+      tickers: form.tickers.split(',').map(t => t.trim()).filter(Boolean),
+      conviction: form.conviction,
+      source: form.source,
+      pinned: form.pinned,
+    };
+    const url = editing ? `${API_URL}/research/${editing._id}` : `${API_URL}/research`;
+    const method = editing ? 'PUT' : 'POST';
+    fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(r => r.json())
+      .then(() => { setDrafting(false); setEditing(null); setForm({ title:'', content:'', type:'note', tags:'', tickers:'', conviction:5, source:'', pinned:false }); load(); })
+      .catch(() => {});
+  }
+
+  function deleteItem(id) {
+    fetch(`${API_URL}/research/${id}`, { method: 'DELETE' })
+      .then(() => setItems(p => p.filter(i => i._id !== id)))
+      .catch(() => {});
+  }
+
+  function startEdit(item) {
+    setEditing(item);
+    setForm({ title: item.title, content: item.content||'', type: item.type||'note',
+      tags: (item.tags||[]).join(', '), tickers: (item.tickers||[]).join(', '),
+      conviction: item.conviction||5, source: item.source||'', pinned: item.pinned||false });
+    setDrafting(true);
+  }
+
+  const displayed = items.filter(i =>
+    !query.trim() ||
+    i.title.toLowerCase().includes(query.toLowerCase()) ||
+    (i.content||'').toLowerCase().includes(query.toLowerCase()) ||
+    (i.tags||[]).some(t => t.includes(query.toLowerCase())) ||
+    (i.tickers||[]).some(t => t.includes(query.toUpperCase()))
+  );
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Research Repository</h1>
+          <p className="page-sub">Theses · memos · notes · linked to tickers &amp; deals</p>
+        </div>
+        <button onClick={() => { setEditing(null); setForm({ title:'', content:'', type:'note', tags:'', tickers:'', conviction:5, source:'', pinned:false }); setDrafting(true); }}
+          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          + New
+        </button>
+      </div>
+
+      {/* Draft / Edit modal */}
+      {drafting && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={e => e.target===e.currentTarget && setDrafting(false)}>
+          <div style={{ background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:14, padding:24, width:'100%', maxWidth:640, maxHeight:'90vh', overflowY:'auto', display:'flex', flexDirection:'column', gap:14 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontWeight:700, fontSize:15 }}>{editing ? 'Edit' : 'New'} Research Item</span>
+              <button onClick={() => setDrafting(false)} style={{ background:'none', border:'none', fontSize:18, cursor:'pointer', color:'var(--fg3)' }}>✕</button>
+            </div>
+            {[
+              { label:'Title *', field:'title', placeholder:'e.g. NVDA AI cycle thesis' },
+              { label:'Source / URL', field:'source', placeholder:'https://…' },
+              { label:'Tickers (comma-separated)', field:'tickers', placeholder:'NVDA, AMD, TSM' },
+              { label:'Tags (comma-separated)', field:'tags', placeholder:'ai, semis, long-term' },
+            ].map(({ label, field, placeholder }) => (
+              <div key={field}>
+                <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>{label}</div>
+                <input value={form[field]} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))} placeholder={placeholder}
+                  style={{ width:'100%', padding:'8px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+              </div>
+            ))}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div>
+                <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>Type</div>
+                <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}
+                  style={{ width:'100%', padding:'8px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, color:'var(--fg)' }}>
+                  {TYPES.filter(t=>t!=='all').map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>Conviction {form.conviction}/10</div>
+                <input type="range" min={1} max={10} value={form.conviction} onChange={e => setForm(p => ({ ...p, conviction: +e.target.value }))}
+                  style={{ width:'100%', marginTop:6, accentColor:'var(--red)' }} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:11, color:'var(--fg3)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>Content</div>
+              <textarea value={form.content} onChange={e => setForm(p => ({ ...p, content: e.target.value }))} placeholder="Write your thesis, memo, or notes here…"
+                style={{ width:'100%', minHeight:160, padding:'10px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, color:'var(--fg)', fontFamily:'inherit', resize:'vertical', boxSizing:'border-box' }} />
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'space-between', alignItems:'center' }}>
+              <label style={{ display:'flex', gap:6, alignItems:'center', fontSize:12, color:'var(--fg3)', cursor:'pointer' }}>
+                <input type="checkbox" checked={form.pinned} onChange={e => setForm(p => ({ ...p, pinned: e.target.checked }))} style={{ accentColor:'var(--red)' }} />
+                Pin to top
+              </label>
+              <div style={{ display:'flex', gap:8 }}>
+                <button onClick={() => setDrafting(false)} style={{ padding:'8px 16px', background:'none', border:'1px solid var(--bdr)', borderRadius:8, fontSize:12, cursor:'pointer', color:'var(--fg3)' }}>Cancel</button>
+                <button onClick={save} disabled={!form.title.trim()}
+                  style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', opacity:form.title.trim()?1:0.5 }}>
+                  {editing ? 'Update' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters + search */}
+      <div style={{ display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center' }}>
+        <div style={{ position:'relative', flex:'0 0 220px' }}>
+          <svg style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', opacity:0.4 }} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input className="search-input" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…" style={{ paddingLeft:30 }}
+            onKeyDown={e => e.key === 'Enter' && load()} />
+        </div>
+        <div className="filter-strip">
+          {TYPES.map(t => (
+            <button key={t} className={`filter-chip${typeFilter===t?' active':''}`} onClick={() => setTypeFilter(t)}
+              style={typeFilter===t && t!=='all' ? { borderColor: TYPE_COLORS[t], color: TYPE_COLORS[t], background:`${TYPE_COLORS[t]}22` } : {}}>
+              {t==='all' ? 'All' : t.charAt(0).toUpperCase()+t.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Items */}
+      {loading ? (
+        <div className="card" style={{ color:'var(--fg3)', fontSize:12, fontFamily:'var(--font-mono)' }}>Loading…</div>
+      ) : displayed.length === 0 ? (
+        <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)' }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>📂</div>
+          <div style={{ fontWeight:700, marginBottom:4 }}>Research repository is empty</div>
+          <div style={{ fontSize:12 }}>Click "+ New" to add a thesis, memo, or note</div>
+        </div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {displayed.map(item => (
+            <div key={item._id} className="card" style={{ borderLeft: item.pinned ? '3px solid var(--red)' : undefined }}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:4, flexWrap:'wrap' }}>
+                    <span style={{ fontWeight:700, fontSize:14 }}>{item.pinned ? '📌 ' : ''}{item.title}</span>
+                    <span style={{ fontSize:10, fontWeight:700, padding:'2px 6px', borderRadius:4, background:`${TYPE_COLORS[item.type]||'var(--fg3)'}22`, color:TYPE_COLORS[item.type]||'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>{item.type}</span>
+                    {item.conviction > 7 && <span style={{ fontSize:10, color:'var(--red)', fontFamily:'var(--font-mono)' }}>C{item.conviction}</span>}
+                  </div>
+                  {item.content && (
+                    <p style={{ fontSize:12, color:'var(--fg2)', margin:'0 0 6px', lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
+                      {item.content}
+                    </p>
+                  )}
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    {(item.tickers||[]).map(t => (
+                      <span key={t} style={{ fontSize:10, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--red)', background:'var(--red-dim)', padding:'1px 6px', borderRadius:4 }}>{t}</span>
+                    ))}
+                    {(item.tags||[]).map(t => (
+                      <span key={t} style={{ fontSize:10, color:'var(--fg3)', background:'var(--surf2)', padding:'1px 6px', borderRadius:4 }}>{t}</span>
+                    ))}
+                  </div>
+                  {item.source && (
+                    <a href={item.source} target="_blank" rel="noopener" style={{ fontSize:10, color:'var(--fg3)', marginTop:4, display:'block', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {item.source}
+                    </a>
+                  )}
+                </div>
+                <div style={{ display:'flex', gap:6, flexShrink:0 }}>
+                  <button onClick={() => startEdit(item)} style={{ padding:'4px 8px', background:'none', border:'1px solid var(--bdr)', borderRadius:6, fontSize:11, cursor:'pointer', color:'var(--fg3)' }}>Edit</button>
+                  <button onClick={() => deleteItem(item._id)} style={{ padding:'4px 8px', background:'none', border:'1px solid var(--bdr)', borderRadius:6, fontSize:11, cursor:'pointer', color:'var(--red-loss)' }}>✕</button>
+                </div>
+              </div>
+              <div style={{ fontSize:10, color:'var(--fg3)', marginTop:8, fontFamily:'var(--font-mono)' }}>
+                {new Date(item.updatedAt||item.createdAt).toLocaleDateString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── BRIEFING PAGE ────────────────────────────────────────────────────────────
 
 function BriefingPage() {
@@ -4686,4 +5596,5 @@ Object.assign(window, {
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
   AssistantPage, NotesPage, DealsPage, MeetingsPage, BriefingPage,
   JournalPage, SentimentPage, ScenarioPage,
+  MacroPage, WatchlistIntelPage, InsiderPage, AttributionPage, ResearchPage,
 });

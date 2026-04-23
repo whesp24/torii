@@ -24,11 +24,16 @@ const NAV = [
   { id:'journal',    label:'Journal',   icon:'journal'   },
   { id:'sentiment',  label:'Sentiment', icon:'sentiment' },
   { id:'scenario',   label:'Scenario',  icon:'scenario'  },
+  { id:'macro',      label:'Macro',     icon:'macro'     },
+  { id:'watchintel', label:'WL Intel',  icon:'watchintel'},
+  { id:'insider',    label:'Insider',   icon:'insider'   },
+  { id:'attribution',label:'Attribution',icon:'attribution'},
+  { id:'research',   label:'Research',  icon:'research'  },
 ];
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario'];
+const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','watchintel','insider','attribution','research'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +60,12 @@ function NavIcon({ id, active }) {
   if (id==='meetings')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="5"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="10" x2="22" y2="10"/><path d="M12 14v4m-2-2h4"/></svg>;
   if (id==='journal')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="10" y1="7" x2="16" y2="7"/><line x1="10" y1="11" x2="16" y2="11"/><line x1="10" y1="15" x2="14" y2="15"/></svg>;
   if (id==='sentiment') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>;
-  if (id==='scenario')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>;
+  if (id==='scenario')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>;
+  if (id==='macro')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 20h20"/><path d="M6 20V10"/><path d="M10 20V4"/><path d="M14 20V14"/><path d="M18 20V8"/></svg>;
+  if (id==='watchintel')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/><circle cx="12" cy="12" r="3"/></svg>;
+  if (id==='insider')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+  if (id==='attribution') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>;
+  if (id==='research')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>;
   return null;
 }
 
@@ -723,9 +733,14 @@ function App() {
         {page==='notes'      && <NotesPage />}
         {page==='deals'      && <DealsPage />}
         {page==='meetings'   && <MeetingsPage />}
-        {page==='journal'    && <JournalPage />}
-        {page==='sentiment'  && <SentimentPage />}
-        {page==='scenario'   && <ScenarioPage />}
+        {page==='journal'     && <JournalPage />}
+        {page==='sentiment'   && <SentimentPage />}
+        {page==='scenario'    && <ScenarioPage />}
+        {page==='macro'       && <MacroPage />}
+        {page==='watchintel'  && <WatchlistIntelPage />}
+        {page==='insider'     && <InsiderPage />}
+        {page==='attribution' && <AttributionPage />}
+        {page==='research'    && <ResearchPage />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 

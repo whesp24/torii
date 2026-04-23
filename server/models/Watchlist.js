@@ -33,6 +33,15 @@ const watchlistSchema = new mongoose.Schema({
     enum: ['above', 'below', 'none'],
     default: 'none'
   },
+  // Intelligence fields
+  thesis:      { type: String, default: '' },
+  catalysts:   [{ text: String, date: String, done: Boolean }],
+  conviction:  { type: Number, min: 1, max: 10, default: 5 },
+  sector:      { type: String, default: '' },
+  lastThesisCheck: { type: Date, default: null },
+  thesisStatus:    { type: String, enum: ['valid','weakening','invalidated','unchecked'], default: 'unchecked' },
+  thesisSummary:   { type: String, default: '' },
+
   // Latest price data cache
   lastPrice: {
     type: Number,

@@ -34,6 +34,9 @@ import meetingsRoutes from './routes/meetings.js';
 import memosRoutes from './routes/memos.js';
 import tradeRoutes from './routes/trades.js';
 import sentimentRoutes from './routes/sentiment.js';
+import macroRoutes from './routes/macro.js';
+import insiderRoutes from './routes/insider.js';
+import researchRoutes from './routes/research.js';
 
 dotenv.config();
 
@@ -72,6 +75,9 @@ app.use('/api/meetings', meetingsRoutes);
 app.use('/api/memos', memosRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/sentiment', sentimentRoutes);
+app.use('/api/macro', macroRoutes);
+app.use('/api/insider', insiderRoutes);
+app.use('/api/research', researchRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
