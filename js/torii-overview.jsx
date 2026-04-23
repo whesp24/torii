@@ -125,6 +125,16 @@ const FILTER_HANDLE_MAP = {
 };
 const CURATED_HANDLES_LOWER = Object.values(FILTER_HANDLE_MAP);
 
+// Per-account avatar color and initials for the tweet cards
+const VOICE_META = {
+  'kevinlmak':       { color: '#3B82F6', initials: 'KM' },
+  'contrariancurse': { color: '#8B5CF6', initials: 'SC' },
+  'dsundheim':       { color: '#10B981', initials: 'DS' },
+  'jeff_weinstein':  { color: '#F59E0B', initials: 'JW' },
+  'hannolustig':     { color: '#EF4444', initials: 'HL' },
+  'patrick_oshag':   { color: '#EC4899', initials: 'PO' },
+};
+
 function VoicesFeedPanel() {
   const [filter, setFilter] = React.useState('All');
   const [tweets, setTweets] = React.useState([]);
@@ -135,16 +145,22 @@ function VoicesFeedPanel() {
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
-          const transformed = data.map(tweet => ({
-            id: tweet._id || Math.random(),
-            author: tweet.author || 'Unknown',
-            handle: (tweet.authorHandle || 'unknown').toLowerCase(),
-            name: tweet.author || 'Unknown',
-            content: tweet.content || '',
-            url: tweet.url || '#',
-            createdAt: tweet.createdAt || new Date().toISOString(),
-            sentiment: tweet.sentiment || 'neutral'
-          })).filter(t => CURATED_HANDLES_LOWER.includes(t.handle));
+          const transformed = data.map(tweet => {
+            const handle = (tweet.authorHandle || 'unknown').toLowerCase();
+            const meta = VOICE_META[handle] || { color: '#555', initials: handle.slice(0,2).toUpperCase() };
+            return {
+              id:       tweet._id || Math.random(),
+              handle,
+              name:     tweet.author || 'Unknown',
+              // TweetCard reads .text for body content
+              text:     tweet.content || '',
+              url:      tweet.url || '#',
+              time:     tweet.createdAt ? timeAgo(tweet.createdAt) : '',
+              color:    meta.color,
+              initials: meta.initials,
+              sentiment: tweet.sentiment || 'neutral',
+            };
+          }).filter(t => CURATED_HANDLES_LOWER.includes(t.handle));
           setTweets(transformed);
         }
       })
