@@ -242,15 +242,34 @@ function Sidebar({ page, onNav, tasks, onAddTask, onToggleTask, collapsed, onCol
             </button>
             {tasksOpen && (
               <div className="tasks-list">
-                {tasks.map(t => (
-                  <div key={t.id} className={`task-item${t.done?' done':''}`}>
-                    <button className={`task-check${t.done?' checked':''}`} onClick={() => onToggleTask(t.id)}>
-                      {t.done && <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="2,6 5,9 10,3"/></svg>}
-                    </button>
-                    <span className={`task-text${t.priority==='high'?' task-urgent':''}`}>{t.text}</span>
-                    {t.auto && <span className="task-auto-tag">auto</span>}
+                {tasks.length === 0 && (
+                  <div style={{padding:'8px 4px',color:'var(--fg3)',fontSize:10,fontFamily:'var(--font-mono)'}}>
+                    Loading events…
                   </div>
-                ))}
+                )}
+                {tasks.map(t => {
+                  const tagColors = {
+                    fed:'#F59E0B', boj:'#EF4444', macro:'#8B5CF6',
+                    earnings:'#3B82F6', alert:'#FF6B6B', routine:'var(--fg3)',
+                  };
+                  const tagColor = t.tag ? (tagColors[t.tag] || 'var(--fg3)') : null;
+                  return (
+                    <div key={t.id} className={`task-item${t.done?' done':''}`}>
+                      <button className={`task-check${t.done?' checked':''}`} onClick={() => onToggleTask(t.id)}>
+                        {t.done && <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="2,6 5,9 10,3"/></svg>}
+                      </button>
+                      <span className={`task-text${t.priority==='high'?' task-urgent':''}`}>{t.text}</span>
+                      {t.tag && tagColor && (
+                        <span style={{
+                          fontSize:8, fontFamily:'var(--font-mono)', fontWeight:700,
+                          color:tagColor, border:`1px solid ${tagColor}`,
+                          borderRadius:3, padding:'1px 4px', flexShrink:0,
+                          textTransform:'uppercase', letterSpacing:'0.05em', opacity:0.85,
+                        }}>{t.tag}</span>
+                      )}
+                    </div>
+                  );
+                })}
                 <form onSubmit={handleAdd} className="task-add-form">
                   <input className="task-input" value={taskInput}
                     onChange={e => setTaskInput(e.target.value)} placeholder="+ Add task…" />
@@ -380,7 +399,7 @@ function App() {
   const [page,      setPage]     = React.useState(() => localStorage.getItem('tpage')  || 'overview');
   const [theme,     setTheme]    = React.useState(() => localStorage.getItem('ttheme') || 'ember');
   const [notifs,    setNotifs]   = React.useState(MOCK.notifications);
-  const [tasks,     setTasks]    = React.useState(MOCK.tasks);
+  const [tasks,     setTasks]    = React.useState([]);
   const [notifOpen, setNOpen]    = React.useState(false);
   const [cmdOpen,   setCmdOpen]  = React.useState(false);
   const [collapsed, setCollapse] = React.useState(false);
@@ -401,6 +420,27 @@ function App() {
 
   React.useEffect(() => { localStorage.setItem('tpage', page); }, [page]);
 
+  // Fetch smart tasks from API on load (and when Render wakes)
+  React.useEffect(() => {
+    function loadSmartTasks() {
+      fetch(`${SHELL_API}/tasks/smart`)
+        .then(r => r.ok ? r.json() : [])
+        .then(smart => {
+          if (!Array.isArray(smart) || smart.length === 0) return;
+          // Map smart tasks to sidebar format, preserve any user-added manual tasks
+          setTasks(prev => {
+            const manualIds = new Set(smart.map(t => t.id));
+            const manual = prev.filter(t => !t.auto && !manualIds.has(t.id));
+            return [...smart, ...manual];
+          });
+        })
+        .catch(() => {});
+    }
+    loadSmartTasks();
+    window.addEventListener('render-awake', loadSmartTasks);
+    return () => window.removeEventListener('render-awake', loadSmartTasks);
+  }, []);
+
   // ⌘K shortcut
   React.useEffect(() => {
     function handler(e) {
@@ -420,10 +460,21 @@ function App() {
   }, [notifOpen]);
 
   function addTask(text) {
-    setTasks(p => [...p, { id: Date.now(), text, done:false, auto:false, priority:'low' }]);
+    const newTask = { id: `manual-${Date.now()}`, text, done: false, auto: false, priority: 'low' };
+    setTasks(p => [...p, newTask]);
+    // Also save to backend
+    fetch(`${SHELL_API}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: text, priority: 'low', category: 'manual' })
+    }).catch(() => {});
   }
   function toggleTask(id) {
-    setTasks(p => p.map(t => t.id===id ? {...t,done:!t.done} : t));
+    setTasks(p => p.map(t => t.id === id ? { ...t, done: !t.done } : t));
+    // Persist to backend if it's a DB task (MongoDB _id is 24 chars hex)
+    if (/^[a-f0-9]{24}$/.test(String(id))) {
+      fetch(`${SHELL_API}/tasks/${id}/toggle`, { method: 'PATCH' }).catch(() => {});
+    }
   }
   function handleCmdAction(hint) {
     if (hint==='theme') setTheme(t => t==='ember'?'liquid':'ember');

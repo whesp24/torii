@@ -7,8 +7,28 @@ import {
   deleteTask,
   toggleTask,
 } from '../services/taskService.js';
+import { generateSmartTasks } from '../services/smartTaskService.js';
 
 const router = express.Router();
+
+// Smart AI-generated tasks (calendar events + earnings + market movers)
+// Cache for 4 hours so we don't hammer Finnhub
+let _smartCache = null;
+let _smartCacheTime = 0;
+
+router.get('/smart', async (req, res) => {
+  try {
+    const age = Date.now() - _smartCacheTime;
+    if (!_smartCache || age > 4 * 60 * 60 * 1000) {
+      _smartCache = await generateSmartTasks();
+      _smartCacheTime = Date.now();
+    }
+    res.json(_smartCache);
+  } catch (err) {
+    console.error('Smart tasks error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Get all tasks
 router.get('/', async (req, res) => {
