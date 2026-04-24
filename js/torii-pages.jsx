@@ -7975,7 +7975,7 @@ function ConvictionPage() {
       gathered.push({ label:'Short Interest', value: 'No short data available', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
-    // Congressional trading
+    // Congressional trading — absence of trades is NEUTRAL, not missing data
     if (cong && Array.isArray(cong.trades) && cong.trades.length > 0) {
       const buys  = cong.trades.filter(tx => tx.isBuy).length;
       const sells = cong.trades.filter(tx => !tx.isBuy).length;
@@ -7983,51 +7983,66 @@ function ConvictionPage() {
       total += delta;
       gathered.push({ label:'Congressional Trading', value: `${buys} buys / ${sells} sells (90d)`, direction: buys>sells?'bullish':buys<sells?'bearish':'neutral', delta, source:'STOCK Act' });
     } else {
-      gathered.push({ label:'Congressional Trading', value: 'No trades in 90d', direction: 'neutral', delta: 0, source:'STOCK Act', noData: true });
+      // No trades = neutral (0pts) — not missing data, just no congressional interest
+      gathered.push({ label:'Congressional Trading', value: 'No congressional trades in 90d · neutral signal', direction: 'neutral', delta: 0, source:'STOCK Act' });
     }
 
-    // Options flow — Yahoo Finance options chain (P/C ratio), legacy endpoint fallback
+    // Options flow — yahoo-finance2 options chain (P/C ratio + unusual activity)
     const pcRatio = opts?.putCallRatio ?? null;
-    if (pcRatio != null) {
-      // Legacy endpoint format
+    if (pcRatio != null && opts?.totalContracts > 0) {
       const delta = pcRatio < 0.5 ? +10 : pcRatio < 0.7 ? +6 : pcRatio < 0.9 ? +3 : pcRatio < 1.1 ? 0 : pcRatio < 1.3 ? -4 : pcRatio < 1.6 ? -7 : -10;
       total += delta;
+      const unusualNote = opts.unusual?.length > 0 ? ` · ${opts.unusual.length} unusual` : '';
+      const callPut = opts.totalCallVol && opts.totalPutVol ? ` · ${(opts.totalCallVol/1000).toFixed(0)}K calls / ${(opts.totalPutVol/1000).toFixed(0)}K puts` : '';
       gathered.push({ label:'Options Flow',
-        value: `P/C ratio ${pcRatio.toFixed(2)} — ${opts.sentiment || (pcRatio<0.8?'bullish':pcRatio>1.2?'bearish':'neutral')}`,
+        value: `P/C ratio ${pcRatio.toFixed(2)} (${opts.sentiment || (pcRatio<0.8?'bullish':pcRatio>1.2?'bearish':'neutral')})${callPut}${unusualNote}`,
         direction: delta>=4?'bullish':delta<=-4?'bearish':'neutral', delta, source:'Yahoo Finance' });
     } else {
-      gathered.push({ label:'Options Flow', value: 'No options activity or not listed', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
+      // Not optionable or no activity — show as neutral not N/A
+      gathered.push({ label:'Options Flow', value: 'No options listed · not applicable for this security', direction: 'neutral', delta: 0, source:'Yahoo Finance' });
     }
 
-    // Insider Form 4 — buy vs sell breakdown
+    // Insider Form 4 — SEC EDGAR primary, Yahoo Finance fallback
+    const yfInsiderBuys  = yf?.insiderBuys  || 0;
+    const yfInsiderSells = yf?.insiderSells || 0;
     if (ins && !ins.error && ins.filings?.length > 0) {
       const buys  = ins.filings.filter(f => f.isBuy).length;
       const sells = ins.filings.filter(f => f.isSell).length;
       const net   = buys - sells;
       const delta = net >= 3 ? +12 : net > 0 ? +6 : net <= -3 ? -12 : net < 0 ? -6 : +2;
       total += delta;
-      const dir   = delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral';
+      const dir = delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral';
       gathered.push({ label:'Insider Transactions', value: `${buys} buys / ${sells} sells · ${ins.filings.length} Form 4s (90d)`, direction: dir, delta, source:'SEC EDGAR' });
+    } else if (yfInsiderBuys + yfInsiderSells > 0) {
+      // Yahoo Finance insiderTransactions module (from quoteSummary)
+      const net   = yfInsiderBuys - yfInsiderSells;
+      const delta = net > 2 ? +8 : net > 0 ? +4 : net < -2 ? -8 : net < 0 ? -4 : 0;
+      total += delta;
+      gathered.push({ label:'Insider Transactions',
+        value: `${yfInsiderBuys} buys / ${yfInsiderSells} sells (recent filings)`,
+        direction: net > 0 ? 'bullish' : net < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
     } else {
-      gathered.push({ label:'Insider Transactions', value: 'No Form 4s in 90d', direction: 'neutral', delta: 0, source:'SEC EDGAR', noData: true });
+      // No insider activity = neutral (directors not buying/selling = no signal)
+      gathered.push({ label:'Insider Transactions', value: 'No insider transactions in 90d · neutral', direction: 'neutral', delta: 0, source:'SEC EDGAR' });
     }
 
-    // Upcoming catalysts — MongoDB events + Yahoo earnings date
+    // Upcoming catalysts — MongoDB events + Yahoo earnings date (extended to 90d window)
     const hasMongoCats = Array.isArray(cats) && cats.length > 0;
-    const hasEarnings  = yf?.daysToEarnings != null && yf.daysToEarnings <= 60;
+    const hasEarnings  = yf?.daysToEarnings != null && yf.daysToEarnings >= 0 && yf.daysToEarnings <= 90;
     if (hasMongoCats || hasEarnings) {
       const high  = hasMongoCats ? cats.filter(c => c.impact === 'high').length : 0;
       let catDelta = high >= 2 ? +8 : high === 1 ? +4 : hasMongoCats ? +2 : 0;
       const catParts = [];
       if (hasEarnings) {
         catParts.push(`Earnings in ${yf.daysToEarnings}d`);
-        catDelta += yf.daysToEarnings <= 7 ? +5 : yf.daysToEarnings <= 14 ? +3 : +2;
+        catDelta += yf.daysToEarnings <= 7 ? +5 : yf.daysToEarnings <= 14 ? +3 : yf.daysToEarnings <= 30 ? +2 : +1;
       }
       if (hasMongoCats) catParts.push(`${cats.length} event${cats.length>1?'s':''}${high>0?` (${high} high-impact)`:''}`);
       total += catDelta;
-      gathered.push({ label:'Upcoming Catalysts', value: catParts.join(' · '), direction: 'bullish', delta: catDelta, source:'Yahoo Finance + Calendar' });
+      gathered.push({ label:'Upcoming Catalysts', value: catParts.join(' · '), direction: catDelta>=3?'bullish':'neutral', delta: catDelta, source:'Yahoo Finance + Calendar' });
     } else {
-      gathered.push({ label:'Upcoming Catalysts', value: 'No earnings or events in next 60d', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
+      // No near-term catalyst = neutral (not missing data)
+      gathered.push({ label:'Upcoming Catalysts', value: 'No earnings catalyst in next 90d · neutral', direction: 'neutral', delta: 0, source:'Yahoo Finance' });
     }
 
     // Technical Setup — RSI + Moving Averages (from 1y chart data)
@@ -8126,8 +8141,32 @@ function ConvictionPage() {
       total += delta;
       gathered.push({ label:'Valuation', value: valParts.join(' · '),
         direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+    } else if (yf?.peRatio != null && yf.peRatio <= 0) {
+      // Loss-making company — negative P/E is bearish, but check for path to profitability
+      const valParts = ['Loss-making (negative P/E)'];
+      let delta = -5;
+      if (yf.fwdPE != null && yf.fwdPE > 0 && yf.fwdPE < 30) {
+        delta += 3; // Expected to turn profitable soon
+        valParts.push(`Fwd P/E ${yf.fwdPE.toFixed(1)} (path to profit)`);
+      } else if (yf.fwdPE != null && yf.fwdPE > 0) {
+        valParts.push(`Fwd P/E ${yf.fwdPE.toFixed(1)}`);
+      }
+      if (yf.revenueGrowth != null && yf.revenueGrowth > 30) {
+        delta += 2; // High-growth loss-maker → less bearish
+        valParts.push(`Rev +${yf.revenueGrowth.toFixed(0)}% (growth premium)`);
+      }
+      total += delta;
+      gathered.push({ label:'Valuation', value: valParts.join(' · '),
+        direction: delta >= -2 ? 'neutral' : 'bearish', delta, source:'Yahoo Finance' });
+    } else if (yf?.fwdPE != null && yf.fwdPE > 0) {
+      // No trailing P/E but has forward P/E (pre-revenue or non-standard)
+      const fpe = yf.fwdPE;
+      const delta = fpe < 15 ? +3 : fpe < 25 ? +1 : fpe > 50 ? -2 : 0;
+      total += delta;
+      gathered.push({ label:'Valuation', value: `Fwd P/E ${fpe.toFixed(1)} · no trailing P/E`,
+        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
     } else {
-      gathered.push({ label:'Valuation', value: yf?.peRatio != null ? 'Loss-making (negative P/E)' : 'No valuation data', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
+      gathered.push({ label:'Valuation', value: 'No valuation data available', direction:'neutral', delta:0, source:'Yahoo Finance' });
     }
 
     // Social Sentiment — StockTwits tagged messages (Da et al. 2011, Chen et al. 2014)
@@ -8143,7 +8182,7 @@ function ConvictionPage() {
       gathered.push({ label:'Social Sentiment', value:'No StockTwits data / insufficient tagged messages', direction:'neutral', delta:0, source:'StockTwits', noData:true });
     }
 
-    // EPS Surprise — Alpha Vantage EARNINGS (beat/miss history = strong forward-looking signal)
+    // EPS Surprise — Yahoo Finance primary (via epsHistory from quoteSummary), AV route secondary
     if (epsSurprise && !epsSurprise.error && epsSurprise.total >= 2) {
       const { beats, total: epsTotal, avgSurprisePct, mostRecentBeat, mostRecentSurprisePct } = epsSurprise;
       const beatPct = beats / epsTotal;
@@ -8160,8 +8199,33 @@ function ConvictionPage() {
       gathered.push({ label:'EPS Surprise',
         value: `${beats}/${epsTotal} beats (last 4Q) · avg ${avgSurprisePct > 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% ${recentStr}`,
         direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Alpha Vantage' });
+    } else if (yf?.epsHistory?.length >= 2) {
+      // Fallback: Yahoo Finance epsHistory from quoteSummary (surprise is a decimal, e.g. 0.05 = 5%)
+      const yfHist = yf.epsHistory.filter(q => q.surprise != null);
+      if (yfHist.length >= 2) {
+        const beats = yfHist.filter(q => q.surprise > 0).length;
+        const avgSurprisePct = (yfHist.reduce((s, q) => s + q.surprise, 0) / yfHist.length) * 100;
+        const beatPct = beats / yfHist.length;
+        const lastQ = yfHist[yfHist.length - 1];
+        const mostRecentBeat = lastQ.surprise > 0;
+        const mostRecentSurprisePct = lastQ.surprise * 100;
+        let delta = 0;
+        if (beatPct >= 0.75 && avgSurprisePct > 5)  delta = +8;
+        else if (beatPct >= 0.5 && avgSurprisePct > 0) delta = +4;
+        else if (beatPct < 0.25)                     delta = -6;
+        else if (avgSurprisePct < -5)                delta = -4;
+        if (mostRecentBeat && mostRecentSurprisePct > 10)  delta = Math.min(delta + 3, 10);
+        if (!mostRecentBeat && mostRecentSurprisePct < -10) delta = Math.max(delta - 3, -8);
+        total += delta;
+        const recentStr = `· most recent: ${mostRecentBeat ? '✓ beat' : '✗ miss'} (${mostRecentSurprisePct > 0 ? '+' : ''}${mostRecentSurprisePct.toFixed(1)}%)`;
+        gathered.push({ label:'EPS Surprise',
+          value: `${beats}/${yfHist.length} beats · avg ${avgSurprisePct > 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% ${recentStr}`,
+          direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+      } else {
+        gathered.push({ label:'EPS Surprise', value: 'Earnings loaded · no estimate comparison available', direction:'neutral', delta:0, source:'Yahoo Finance' });
+      }
     } else {
-      gathered.push({ label:'EPS Surprise', value: 'No earnings history with estimates available', direction:'neutral', delta:0, source:'Alpha Vantage', noData:true });
+      gathered.push({ label:'EPS Surprise', value: 'No earnings history with estimates available', direction:'neutral', delta:0, source:'Yahoo Finance' });
     }
 
     // Institutional Ownership — Yahoo Finance (smart money validation signal)
