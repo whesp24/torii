@@ -5702,10 +5702,1542 @@ function BriefingPage() {
   );
 }
 
+// ─── CATALYST CALENDAR ───────────────────────────────────────────────────────
+
+function CalendarPage() {
+  const now = new Date();
+  const [year,    setYear]    = React.useState(now.getFullYear());
+  const [month,   setMonth]   = React.useState(now.getMonth());
+  const [events,  setEvents]  = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [filters, setFilters] = React.useState({ catalyst: true, earnings: true, meetings: true });
+  const [selected,setSelected]= React.useState(null);   // { date, events[] }
+  const [showAdd, setShowAdd] = React.useState(false);
+  const [form,    setForm]    = React.useState({ ticker:'', title:'', type:'other', date:'', impact:'medium', notes:'' });
+  const [saving,  setSaving]  = React.useState(false);
+
+  function load() {
+    setLoading(true);
+    Promise.all([
+      fetch(`${API_URL}/catalysts/month?year=${year}&month=${month}`).then(r => r.json()).catch(() => []),
+      fetch(`${API_URL}/meetings`).then(r => r.json()).catch(() => []),
+    ]).then(([cats, meets]) => {
+      const meetEvents = (Array.isArray(meets) ? meets : []).map(m => ({
+        _id: m._id, title: m.title || m.subject || 'Meeting', type: 'meeting',
+        date: m.date || m.startTime, ticker: '', impact: 'medium', source: 'meeting',
+      }));
+      setEvents([...(Array.isArray(cats) ? cats : []), ...meetEvents]);
+      setLoading(false);
+    });
+  }
+  React.useEffect(load, [year, month]);
+
+  function prevMonth() { if (month === 0) { setYear(y => y-1); setMonth(11); } else setMonth(m => m-1); }
+  function nextMonth() { if (month === 11) { setYear(y => y+1); setMonth(0); } else setMonth(m => m+1); }
+
+  async function addCatalyst(e) {
+    e.preventDefault();
+    setSaving(true);
+    await fetch(`${API_URL}/catalysts`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) }).catch(() => {});
+    setSaving(false);
+    setShowAdd(false);
+    setForm({ ticker:'', title:'', type:'other', date:'', impact:'medium', notes:'' });
+    load();
+  }
+
+  async function deleteEvent(id) {
+    await fetch(`${API_URL}/catalysts/${id}`, { method:'DELETE' }).catch(() => {});
+    load();
+    setSelected(null);
+  }
+
+  const TYPE_COLOR = {
+    earnings:'#f59e0b', fda:'#ef4444', lockup:'#8b5cf6', analyst_day:'#3b82f6',
+    spin_off:'#10b981', conference:'#06b6d4', product_launch:'#ec4899',
+    dividend:'#84cc16', split:'#f97316', macro:'#6366f1', index_rebal:'#0ea5e9',
+    meeting:'#64748b', other:'var(--fg3)',
+  };
+  const IMPACT_DOT = { high:'#ef4444', medium:'#f59e0b', low:'#22c55e' };
+
+  // Build calendar grid
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const TYPE_OPTIONS = ['earnings','fda','lockup','analyst_day','spin_off','index_rebal','conference','product_launch','dividend','split','macro','other'];
+
+  function eventsForDay(d) {
+    if (!d) return [];
+    const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    return events.filter(ev => {
+      if (!ev.date) return false;
+      const evDate = new Date(ev.date).toISOString().slice(0,10);
+      if (evDate !== key) return false;
+      if (ev.source === 'meeting' || ev.type === 'meeting') return filters.meetings;
+      if (ev.source === 'earnings' || ev.type === 'earnings') return filters.earnings;
+      return filters.catalyst;
+    });
+  }
+
+  const today = new Date();
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Calendar</h1>
+          <p className="page-sub">Catalyst events · earnings · meetings</p>
+        </div>
+        <button onClick={() => setShowAdd(true)}
+          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          + Add Catalyst
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
+        {[['catalyst','Catalysts','#ef4444'],['earnings','Earnings','#f59e0b'],['meetings','Meetings','#64748b']].map(([k,label,color]) => (
+          <button key={k} onClick={() => setFilters(f => ({ ...f, [k]: !f[k] }))}
+            style={{ padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:600, cursor:'pointer', transition:'all 0.15s',
+              background: filters[k] ? color : 'transparent',
+              border: `1.5px solid ${filters[k] ? color : 'var(--bdr)'}`,
+              color: filters[k] ? '#fff' : 'var(--fg3)' }}>
+            {label}
+          </button>
+        ))}
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
+          <button onClick={prevMonth} style={{ padding:'6px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, cursor:'pointer', color:'var(--fg)', fontSize:14 }}>‹</button>
+          <span style={{ fontWeight:700, fontSize:14, minWidth:160, textAlign:'center' }}>{MONTH_NAMES[month]} {year}</span>
+          <button onClick={nextMonth} style={{ padding:'6px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, cursor:'pointer', color:'var(--fg)', fontSize:14 }}>›</button>
+        </div>
+      </div>
+
+      {/* Calendar grid */}
+      <div className="card" style={{ padding:0, overflow:'hidden' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', borderBottom:'1px solid var(--bdr)' }}>
+          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+            <div key={d} style={{ padding:'8px 4px', textAlign:'center', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)', fontWeight:700, letterSpacing:'0.05em' }}>{d}</div>
+          ))}
+        </div>
+        {loading ? (
+          <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading…</div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)' }}>
+            {cells.map((d, i) => {
+              const dayEvents = eventsForDay(d);
+              const isToday = d && today.getDate()===d && today.getMonth()===month && today.getFullYear()===year;
+              return (
+                <div key={i} onClick={() => d && setSelected({ day: d, events: dayEvents })}
+                  style={{ minHeight:80, padding:'6px 8px', borderRight: (i+1)%7===0?'none':'1px solid var(--bdr)', borderBottom:'1px solid var(--bdr)',
+                    background: isToday?'rgba(239,68,68,0.06)':'transparent', cursor: d?'pointer':'default',
+                    opacity: d?1:0.2, transition:'background 0.1s' }}
+                  onMouseEnter={e => d && (e.currentTarget.style.background = isToday?'rgba(239,68,68,0.1)':'var(--surf)')}
+                  onMouseLeave={e => e.currentTarget.style.background = isToday?'rgba(239,68,68,0.06)':'transparent'}>
+                  <div style={{ fontSize:11, fontWeight: isToday?800:400, color: isToday?'var(--red)':'var(--fg2)', marginBottom:4, fontFamily:'var(--font-mono)' }}>{d}</div>
+                  <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                    {dayEvents.slice(0,3).map((ev,j) => (
+                      <div key={j} style={{ fontSize:9, padding:'1px 4px', borderRadius:3, fontWeight:600, lineHeight:1.4,
+                        background:`${TYPE_COLOR[ev.type]||'#64748b'}22`,
+                        color: TYPE_COLOR[ev.type]||'var(--fg3)',
+                        whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                        {ev.ticker?`${ev.ticker} `:''}
+                        {(ev.title||'').slice(0,18)}
+                      </div>
+                    ))}
+                    {dayEvents.length > 3 && (
+                      <div style={{ fontSize:9, color:'var(--fg3)', paddingLeft:4 }}>+{dayEvents.length-3} more</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Day detail panel */}
+      {selected && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200, display:'flex', alignItems:'flex-end', justifyContent:'center' }}
+          onClick={() => setSelected(null)}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background:'var(--bg)', borderRadius:'16px 16px 0 0', padding:20, width:'100%', maxWidth:600, maxHeight:'60vh', overflowY:'auto' }}>
+            <div style={{ fontWeight:800, fontSize:16, marginBottom:12 }}>
+              {MONTH_NAMES[month]} {selected.day}, {year}
+              <span style={{ marginLeft:8, fontFamily:'var(--font-mono)', fontSize:11, color:'var(--fg3)', fontWeight:400 }}>
+                {selected.events.length} event{selected.events.length!==1?'s':''}
+              </span>
+            </div>
+            {selected.events.length === 0 ? (
+              <div style={{ color:'var(--fg3)', fontSize:13 }}>No events this day</div>
+            ) : (
+              selected.events.map((ev,i) => (
+                <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'10px 0', borderBottom:'1px solid var(--bdr)' }}>
+                  <div style={{ width:10, height:10, borderRadius:'50%', marginTop:3, flexShrink:0, background: TYPE_COLOR[ev.type]||'var(--fg3)' }} />
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:600, fontSize:13 }}>{ev.ticker ? <strong style={{ color:'var(--red)' }}>{ev.ticker}</strong> : null}{ev.ticker ? ' · ' : ''}{ev.title}</div>
+                    <div style={{ fontSize:11, color:'var(--fg3)', marginTop:2 }}>{ev.type?.replace('_',' ')} · {ev.impact} impact</div>
+                    {ev.notes && <div style={{ fontSize:11, color:'var(--fg2)', marginTop:4 }}>{ev.notes}</div>}
+                  </div>
+                  {ev.source === 'catalyst' && (
+                    <button onClick={() => deleteEvent(ev._id)}
+                      style={{ background:'none', border:'none', color:'var(--fg3)', cursor:'pointer', fontSize:16 }}>×</button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add catalyst modal */}
+      {showAdd && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShowAdd(false)}>
+          <form onSubmit={addCatalyst} onClick={e => e.stopPropagation()}
+            style={{ background:'var(--bg)', borderRadius:16, padding:24, width:'100%', maxWidth:440, display:'flex', flexDirection:'column', gap:12 }}>
+            <h2 style={{ margin:0, fontSize:16, fontWeight:800 }}>Add Catalyst</h2>
+            {[['ticker','Ticker','text','NVDA'],['title','Title','text','FDA Decision'],['date','Date','date','']].map(([k,label,type,ph]) => (
+              <div key={k}>
+                <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:4 }}>{label}</label>
+                <input value={form[k]} onChange={e => setForm(f => ({...f,[k]:e.target.value}))} type={type} placeholder={ph} required={k!=='ticker'}
+                  style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+              </div>
+            ))}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <div>
+                <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:4 }}>Type</label>
+                <select value={form.type} onChange={e => setForm(f => ({...f,type:e.target.value}))}
+                  style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, color:'var(--fg)' }}>
+                  {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t.replace('_',' ')}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:4 }}>Impact</label>
+                <select value={form.impact} onChange={e => setForm(f => ({...f,impact:e.target.value}))}
+                  style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, color:'var(--fg)' }}>
+                  {['high','medium','low'].map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:4 }}>Notes</label>
+              <textarea value={form.notes} onChange={e => setForm(f => ({...f,notes:e.target.value}))} rows={2}
+                style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, color:'var(--fg)', resize:'vertical', boxSizing:'border-box' }} />
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button type="button" onClick={() => setShowAdd(false)}
+                style={{ flex:1, padding:'10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, cursor:'pointer', color:'var(--fg)' }}>Cancel</button>
+              <button type="submit" disabled={saving}
+                style={{ flex:1, padding:'10px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+                {saving ? 'Saving…' : 'Add Event'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CONGRESSIONAL TRADING TRACKER ────────────────────────────────────────────
+
+function CongressPage() {
+  const [trades,   setTrades]   = React.useState([]);
+  const [loading,  setLoading]  = React.useState(true);
+  const [error,    setError]    = React.useState('');
+  const [ticker,   setTicker]   = React.useState('');
+  const [chamber,  setChamber]  = React.useState('');
+  const [days,     setDays]     = React.useState('90');
+  const [typeF,    setTypeF]    = React.useState('all');  // all | buy | sell
+  const [cached,   setCached]   = React.useState(null);
+
+  function load(t, ch, d) {
+    setLoading(true);
+    setError('');
+    const params = new URLSearchParams({ days: d || days });
+    if (t || ticker) params.set('ticker', (t??ticker).toUpperCase());
+    if (ch ?? chamber) params.set('chamber', ch ?? chamber);
+    fetch(`${API_URL}/congressional?${params}`)
+      .then(r => r.json())
+      .then(d => {
+        setTrades(Array.isArray(d.trades) ? d.trades : []);
+        if (d.cached) setCached(new Date(d.cached));
+        if (d.error) setError(d.error);
+        setLoading(false);
+      })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }
+  React.useEffect(() => load(), []);
+
+  const filtered = React.useMemo(() => {
+    if (typeF === 'buy')  return trades.filter(t => t.isBuy);
+    if (typeF === 'sell') return trades.filter(t => !t.isBuy);
+    return trades;
+  }, [trades, typeF]);
+
+  const PARTY_COLOR = { D:'#3b82f6', R:'#ef4444', I:'#8b5cf6' };
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Congressional Trading</h1>
+          <p className="page-sub">House &amp; Senate stock disclosures · STOCK Act filings</p>
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="card" style={{ marginBottom:14, padding:'12px 16px' }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <div style={{ position:'relative', minWidth:140 }}>
+            <span style={{ position:'absolute', left:8, top:'50%', transform:'translateY(-50%)', fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>TICKER›</span>
+            <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key==='Enter' && load(ticker, chamber, days)}
+              placeholder="All" style={{ width:120, padding:'8px 10px 8px 58px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }} />
+          </div>
+          <div style={{ display:'flex', gap:4 }}>
+            {['30','60','90','180'].map(d => (
+              <button key={d} onClick={() => { setDays(d); load(ticker, chamber, d); }}
+                style={{ padding:'6px 10px', fontSize:11, fontFamily:'var(--font-mono)', fontWeight:700, border:'1px solid', borderRadius:6, cursor:'pointer',
+                  background: days===d?'var(--red)':'transparent', borderColor: days===d?'var(--red)':'var(--bdr)', color: days===d?'#fff':'var(--fg3)' }}>
+                {d}D
+              </button>
+            ))}
+          </div>
+          <div style={{ display:'flex', gap:4 }}>
+            {[['all','All'],['buy','Buys'],['sell','Sells']].map(([v,l]) => (
+              <button key={v} onClick={() => setTypeF(v)}
+                style={{ padding:'6px 10px', fontSize:11, fontWeight:600, border:'1px solid', borderRadius:6, cursor:'pointer',
+                  background: typeF===v?(v==='sell'?'rgba(239,68,68,0.15)':'rgba(34,197,94,0.15)'):'transparent',
+                  borderColor: typeF===v?(v==='sell'?'#ef4444':'#22c55e'):'var(--bdr)',
+                  color: typeF===v?(v==='sell'?'#ef4444':'#22c55e'):'var(--fg3)' }}>
+                {l}
+              </button>
+            ))}
+          </div>
+          {[['','All Chambers'],['House','House'],['Senate','Senate']].map(([v,l]) => (
+            <button key={v} onClick={() => { setChamber(v); load(ticker, v, days); }}
+              style={{ padding:'6px 10px', fontSize:11, border:'1px solid', borderRadius:6, cursor:'pointer',
+                background: chamber===v?'var(--surf)':'transparent', borderColor: chamber===v?'var(--fg2)':'var(--bdr)', color: chamber===v?'var(--fg)':'var(--fg3)' }}>
+              {l}
+            </button>
+          ))}
+          <button onClick={() => load(ticker, chamber, days)} style={{ marginLeft:'auto', padding:'7px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)' }}>
+            {loading ? '…' : 'REFRESH'}
+          </button>
+        </div>
+        {cached && <div style={{ marginTop:6, fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Data cached · refreshed {cached.toLocaleTimeString()} · source: Quiverquant</div>}
+      </div>
+
+      {error && <div className="card" style={{ marginBottom:12, padding:'10px 14px', color:'#ef4444', fontSize:12 }}>{error}</div>}
+
+      <div className="card" style={{ padding:0, overflow:'hidden' }}>
+        <div style={{ padding:'10px 16px', borderBottom:'1px solid var(--bdr)', display:'flex', gap:12, alignItems:'center' }}>
+          <span style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'var(--fg3)' }}>{filtered.length} transactions</span>
+          <span style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'var(--green)' }}>
+            {filtered.filter(t => t.isBuy).length} buys
+          </span>
+          <span style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'var(--red-loss)' }}>
+            {filtered.filter(t => !t.isBuy).length} sells
+          </span>
+        </div>
+        {loading ? (
+          <div style={{ padding:30, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading congressional disclosures…</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding:30, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>No transactions found for these filters</div>
+        ) : (
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead>
+                <tr style={{ background:'var(--surf)' }}>
+                  {['MEMBER','PARTY','CHAMBER','TICKER','TYPE','AMOUNT','DATE'].map(h => (
+                    <th key={h} style={{ padding:'8px 12px', textAlign:'left', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.08em', borderBottom:'1px solid var(--bdr)', whiteSpace:'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((t, i) => (
+                  <tr key={i} style={{ borderBottom:'1px solid var(--bdr)', cursor:'default' }}
+                    onMouseEnter={e => e.currentTarget.style.background='var(--surf)'}
+                    onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                    <td style={{ padding:'9px 12px', fontSize:12, fontWeight:600 }}>{t.name}</td>
+                    <td style={{ padding:'9px 12px' }}>
+                      <span style={{ fontSize:10, fontWeight:800, fontFamily:'var(--font-mono)', color: PARTY_COLOR[t.party?.[0]] || 'var(--fg3)', background:`${PARTY_COLOR[t.party?.[0]]||'#64748b'}22`, padding:'1px 6px', borderRadius:3 }}>{t.party}</span>
+                    </td>
+                    <td style={{ padding:'9px 12px', fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{t.chamber}</td>
+                    <td style={{ padding:'9px 12px', fontSize:13, fontWeight:800, fontFamily:'var(--font-mono)', color:'var(--fg)' }}>{t.ticker}</td>
+                    <td style={{ padding:'9px 12px' }}>
+                      <span style={{ fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:4, fontFamily:'var(--font-mono)',
+                        background: t.isBuy?'rgba(34,197,94,0.12)':'rgba(239,68,68,0.12)',
+                        color: t.isBuy?'var(--green)':'var(--red-loss)' }}>
+                        {t.isBuy ? 'BUY' : 'SELL'}
+                      </span>
+                    </td>
+                    <td style={{ padding:'9px 12px', fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg2)' }}>{t.amount}</td>
+                    <td style={{ padding:'9px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)', whiteSpace:'nowrap' }}>{t.date}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── OPTIONS FLOW MONITOR ─────────────────────────────────────────────────────
+
+function OptionsPage() {
+  const [ticker,  setTicker]  = React.useState('');
+  const [data,    setData]    = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [tab,     setTab]     = React.useState('unusual');
+
+  function search() {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return;
+    setLoading(true); setData(null);
+    fetch(`${API_URL}/options/${t}`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }
+
+  const pcColor = data?.putCallRatio == null ? 'var(--fg3)' :
+    data.putCallRatio < 0.7 ? 'var(--green)' : data.putCallRatio > 1.2 ? 'var(--red-loss)' : '#f59e0b';
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Options Flow</h1>
+          <p className="page-sub">Put/call ratio · unusual activity · options chain · Yahoo Finance</p>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom:14, padding:'12px 16px' }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <div style={{ position:'relative', flex:1 }}>
+            <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>TICKER›</span>
+            <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key==='Enter' && search()} placeholder="NVDA"
+              style={{ width:'100%', padding:'9px 12px 9px 64px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:14, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }} />
+          </div>
+          <button onClick={search} disabled={loading}
+            style={{ padding:'9px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)', opacity:loading?0.7:1 }}>
+            {loading ? 'LOADING…' : 'SEARCH'}
+          </button>
+        </div>
+      </div>
+
+      {data?.error && <div className="card" style={{ marginBottom:12, padding:'10px 14px', color:'#ef4444', fontSize:12 }}>{data.error}</div>}
+
+      {data && !data.error && (
+        <div>
+          {/* Summary cards */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))', gap:10, marginBottom:14 }}>
+            {[
+              { label:'PRICE', value: data.price ? `$${data.price.toFixed(2)}` : '—', color:'var(--fg)' },
+              { label:'P/C RATIO', value: data.putCallRatio?.toFixed(3) ?? '—', color: pcColor },
+              { label:'SENTIMENT', value: (data.sentiment||'').toUpperCase(), color: data.sentiment==='bullish'?'var(--green)':data.sentiment==='bearish'?'var(--red-loss)':'#f59e0b' },
+              { label:'CALL VOL', value: (data.totalCallVol||0).toLocaleString(), color:'var(--green)' },
+              { label:'PUT VOL', value: (data.totalPutVol||0).toLocaleString(), color:'var(--red-loss)' },
+              { label:'NEXT EXPIRY', value: data.expiry || '—', color:'var(--fg2)' },
+            ].map(s => (
+              <div key={s.label} className="card">
+                <div style={{ fontSize:9, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:6 }}>{s.label}</div>
+                <div style={{ fontSize:18, fontWeight:800, fontFamily:'var(--font-mono)', color: s.color }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Tab strip */}
+          <div className="filter-strip" style={{ marginBottom:12 }}>
+            {[['unusual','⚡ Unusual Activity'],['calls','Calls'],['puts','Puts']].map(([id,label]) => (
+              <button key={id} className={`filter-chip${tab===id?' active':''}`} onClick={() => setTab(id)}>{label}</button>
+            ))}
+          </div>
+
+          {/* Tables */}
+          {['unusual','calls','puts'].map(t => {
+            if (tab !== t) return null;
+            const rows = t==='unusual' ? data.unusual : t==='calls' ? data.calls : data.puts;
+            return (
+              <div key={t} className="card" style={{ padding:0, overflow:'hidden' }}>
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                    <thead>
+                      <tr style={{ background:'var(--surf)' }}>
+                        {(t==='unusual' ? ['SIDE','STRIKE','EXPIRY','VOLUME','OI','VOL/OI','IV','LAST'] : ['STRIKE','EXPIRY','VOLUME','OI','IV','BID','ASK','LAST','ITM']).map(h => (
+                          <th key={h} style={{ padding:'8px 12px', textAlign:'left', fontSize:9, fontFamily:'var(--font-mono)', color:'var(--fg3)', textTransform:'uppercase', borderBottom:'1px solid var(--bdr)', whiteSpace:'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(rows || []).map((o, i) => (
+                        <tr key={i} style={{ borderBottom:'1px solid var(--bdr)' }}
+                          onMouseEnter={e => e.currentTarget.style.background='var(--surf)'}
+                          onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                          {t==='unusual' && (
+                            <td style={{ padding:'8px 12px' }}>
+                              <span style={{ fontSize:10, fontWeight:800, fontFamily:'var(--font-mono)', padding:'2px 6px', borderRadius:3,
+                                background: o.side==='CALL'?'rgba(34,197,94,0.15)':'rgba(239,68,68,0.15)',
+                                color: o.side==='CALL'?'var(--green)':'var(--red-loss)' }}>{o.side}</span>
+                            </td>
+                          )}
+                          <td style={{ padding:'8px 12px', fontSize:12, fontFamily:'var(--font-mono)', fontWeight:700 }}>${o.strike}</td>
+                          <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{o.expiry}</td>
+                          <td style={{ padding:'8px 12px', fontSize:12, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }}>{(o.volume||0).toLocaleString()}</td>
+                          <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{(o.oi||0).toLocaleString()}</td>
+                          {t==='unusual' && <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'#f59e0b' }}>{o.oi>0?(o.volume/o.oi).toFixed(1)+'x':'new'}</td>}
+                          <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg2)' }}>{o.iv!=null?`${o.iv}%`:'—'}</td>
+                          {t!=='unusual' && <>
+                            <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>${o.bid?.toFixed(2)}</td>
+                            <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>${o.ask?.toFixed(2)}</td>
+                          </>}
+                          <td style={{ padding:'8px 12px', fontSize:12, fontFamily:'var(--font-mono)', color:'var(--green)' }}>${o.last?.toFixed(2)}</td>
+                          {t!=='unusual' && <td style={{ padding:'8px 12px', fontSize:11, color: o.itm?'var(--green)':'var(--fg3)' }}>{o.itm?'✓':'—'}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!data && !loading && (
+        <div className="card" style={{ textAlign:'center', padding:'40px 20px', color:'var(--fg3)' }}>
+          <div style={{ fontFamily:'var(--font-mono)', fontSize:28, marginBottom:12, color:'var(--bdr)' }}>OPTIONS</div>
+          <div style={{ fontSize:13, marginBottom:6 }}>Enter a ticker to see options flow</div>
+          <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>P/C ratio · unusual activity (vol/OI &gt; 2x) · full chain</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SHORT INTEREST DASHBOARD ─────────────────────────────────────────────────
+
+function ShortPage() {
+  const [ticker,  setTicker]  = React.useState('');
+  const [data,    setData]    = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  function search() {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return;
+    setLoading(true); setData(null);
+    fetch(`${API_URL}/short/${t}`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }
+
+  const shortPct = data?.shortInterestPct ?? data?.finra?.shortPct ?? null;
+  const squeeze  = shortPct != null && shortPct > 20;
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Short Interest</h1>
+          <p className="page-sub">Short % of float · days to cover · FINRA daily volume · Finnhub metrics</p>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom:14, padding:'12px 16px' }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <div style={{ position:'relative', flex:1 }}>
+            <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>TICKER›</span>
+            <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key==='Enter' && search()} placeholder="GME"
+              style={{ width:'100%', padding:'9px 12px 9px 64px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:14, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }} />
+          </div>
+          <button onClick={search} disabled={loading}
+            style={{ padding:'9px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)', opacity:loading?0.7:1 }}>
+            {loading ? 'LOADING…' : 'SEARCH'}
+          </button>
+        </div>
+      </div>
+
+      {data && (
+        <div>
+          {squeeze && (
+            <div className="card" style={{ marginBottom:12, borderLeft:'3px solid #f59e0b', padding:'10px 16px', display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ fontSize:16 }}>⚠</span>
+              <span style={{ fontSize:13, color:'#f59e0b', fontWeight:700 }}>High Short Interest — Squeeze Watch</span>
+              <span style={{ fontSize:12, color:'var(--fg3)' }}>{shortPct?.toFixed(1)}% of float short</span>
+            </div>
+          )}
+
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:10, marginBottom:14 }}>
+            {[
+              { label:'SHORT % FLOAT', value: data.shortInterestPct != null ? `${data.shortInterestPct.toFixed(1)}%` : data.finra?.shortPct != null ? `${data.finra.shortPct}% (daily)` : '—', color: shortPct>20?'#f59e0b':shortPct>10?'#fb923c':'var(--fg)' },
+              { label:'DAYS TO COVER', value: data.shortInterestRatio != null ? `${data.shortInterestRatio.toFixed(1)}d` : '—', color:'var(--fg)' },
+              { label:'SHARES SHORT', value: data.shortInterest != null ? `${(data.shortInterest/1e6).toFixed(1)}M` : '—', color:'var(--fg2)' },
+              { label:'FLOAT', value: data.shareFloat != null ? `${(data.shareFloat/1e6).toFixed(1)}M` : '—', color:'var(--fg3)' },
+              { label:'BETA', value: data.beta != null ? data.beta.toFixed(2) : '—', color:'var(--fg2)' },
+              { label:'P/E', value: data.peRatio != null ? data.peRatio.toFixed(1) : '—', color:'var(--fg2)' },
+              { label:'52W HIGH', value: data.high52w != null ? `$${data.high52w.toFixed(2)}` : '—', color:'var(--green)' },
+              { label:'52W LOW', value: data.low52w != null ? `$${data.low52w.toFixed(2)}` : '—', color:'var(--red-loss)' },
+            ].map(s => (
+              <div key={s.label} className="card">
+                <div style={{ fontSize:9, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:6 }}>{s.label}</div>
+                <div style={{ fontSize:20, fontWeight:800, fontFamily:'var(--font-mono)', color: s.color }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Short interest bar */}
+          {shortPct != null && (
+            <div className="card" style={{ marginBottom:12 }}>
+              <div style={{ fontSize:11, color:'var(--fg3)', marginBottom:8, fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Short Interest Level</div>
+              <div style={{ height:12, background:'var(--surf)', borderRadius:6, overflow:'hidden', marginBottom:6 }}>
+                <div style={{ height:'100%', width:`${Math.min(100, shortPct * 2)}%`, borderRadius:6, transition:'width 0.5s',
+                  background: shortPct>20?'#f59e0b':shortPct>10?'#fb923c':'var(--red)' }} />
+              </div>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>
+                <span>0%</span><span style={{ color:'#fb923c' }}>10% elevated</span><span style={{ color:'#f59e0b' }}>20% squeeze watch</span><span>50%+</span>
+              </div>
+            </div>
+          )}
+
+          {data.finra && (
+            <div className="card">
+              <div style={{ fontSize:11, color:'var(--fg3)', marginBottom:8, fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em' }}>FINRA Daily Short Volume · {data.finra.date}</div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12 }}>
+                {[
+                  { label:'Short Volume', value: (data.finra.shortVol||0).toLocaleString() },
+                  { label:'Total Volume', value: (data.finra.totalVol||0).toLocaleString() },
+                  { label:'Short %', value: data.finra.shortPct != null ? `${data.finra.shortPct}%` : '—' },
+                ].map(s => (
+                  <div key={s.label}>
+                    <div style={{ fontSize:10, color:'var(--fg3)', marginBottom:2 }}>{s.label}</div>
+                    <div style={{ fontSize:15, fontWeight:700, fontFamily:'var(--font-mono)' }}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop:8, fontSize:10, color:'var(--fg3)' }}>FINRA daily short sale volume — represents same-day short selling, not total short interest.</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!data && !loading && (
+        <div className="card" style={{ textAlign:'center', padding:'40px 20px', color:'var(--fg3)' }}>
+          <div style={{ fontFamily:'var(--font-mono)', fontSize:28, marginBottom:12, color:'var(--bdr)' }}>SHORT</div>
+          <div style={{ fontSize:13, marginBottom:6 }}>Enter a ticker to see short interest data</div>
+          <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Float · days to cover · squeeze risk · FINRA daily volume</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── VALUATION WORKBENCH ──────────────────────────────────────────────────────
+
+function ValuationPage() {
+  const [ticker,  setTicker]  = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+  const [inputs,  setInputs]  = React.useState({
+    revenue: 1000, revenueGrowth: 15, ebitdaMargin: 20, capexPct: 5, daPct: 5,
+    taxRate: 21, wacc: 10, terminalGrowth: 2.5, netDebt: 0, shares: 100,
+  });
+  const [dcf,     setDcf]     = React.useState(null);
+  const [comps,   setComps]   = React.useState(null);
+
+  function inp(k, v) { setInputs(p => ({ ...p, [k]: parseFloat(v)||0 })); }
+
+  function fetchFundamentals() {
+    if (!ticker.trim()) return;
+    setLoading(true);
+    fetch(`${API_URL}/stocks/${ticker.trim().toUpperCase()}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.price) setInputs(p => ({ ...p, shares: p.shares }));
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }
+
+  // DCF calculation
+  React.useEffect(() => {
+    const { revenue, revenueGrowth, ebitdaMargin, capexPct, daPct, taxRate, wacc, terminalGrowth, netDebt, shares } = inputs;
+    const g = revenueGrowth / 100;
+    const w = wacc / 100;
+    const tg = terminalGrowth / 100;
+    let pv = 0, rev = revenue;
+    for (let yr = 1; yr <= 5; yr++) {
+      rev *= (1 + g);
+      const ebitda = rev * (ebitdaMargin / 100);
+      const ebit   = ebitda - rev * (daPct / 100);
+      const nopat  = ebit * (1 - taxRate / 100);
+      const fcf    = nopat + rev * (daPct / 100) - rev * (capexPct / 100);
+      pv += fcf / Math.pow(1 + w, yr);
+    }
+    const termFCF = rev * (ebitdaMargin / 100) * (1 - taxRate / 100) * (1 + tg);
+    const tv = termFCF / (w - tg);
+    const pvTV = tv / Math.pow(1 + w, 5);
+    const ev = pv + pvTV;
+    const equity = ev - netDebt;
+    const priceTarget = shares > 0 ? equity / shares : 0;
+    setDcf({ pv5yr: pv, pvTerminal: pvTV, ev, equity, priceTarget, tv });
+  }, [inputs]);
+
+  const sensRows   = [-2, -1, 0, 1, 2];
+  const sensCols   = [-2, -1, 0, 1, 2];
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Valuation Workbench</h1>
+          <p className="page-sub">DCF model · sensitivity analysis · live price target</p>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+        {/* Left: inputs */}
+        <div>
+          <div className="card" style={{ marginBottom:12 }}>
+            <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>Ticker (optional)</div>
+            <div style={{ display:'flex', gap:8 }}>
+              <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key==='Enter' && fetchFundamentals()}
+                placeholder="NVDA" style={{ flex:1, padding:'8px 10px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }} />
+              <button onClick={fetchFundamentals} disabled={loading}
+                style={{ padding:'8px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, cursor:'pointer', color:'var(--fg)' }}>Load</button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>DCF Assumptions</div>
+            {[
+              ['revenue',      'Revenue LTM ($M)',       ''],
+              ['revenueGrowth','Revenue Growth (%)',     '%'],
+              ['ebitdaMargin', 'EBITDA Margin (%)',      '%'],
+              ['capexPct',     'CapEx (% of Rev)',       '%'],
+              ['daPct',        'D&A (% of Rev)',         '%'],
+              ['taxRate',      'Tax Rate (%)',            '%'],
+              ['wacc',         'WACC (%)',               '%'],
+              ['terminalGrowth','Terminal Growth (%)',   '%'],
+              ['netDebt',      'Net Debt ($M)',          '$M'],
+              ['shares',       'Diluted Shares (M)',     'M'],
+            ].map(([k, label, unit]) => (
+              <div key={k} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                <label style={{ flex:1, fontSize:12, color:'var(--fg2)' }}>{label}</label>
+                <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <input type="number" value={inputs[k]} onChange={e => inp(k, e.target.value)} step="0.5"
+                    style={{ width:90, padding:'5px 8px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg)', textAlign:'right' }} />
+                  <span style={{ fontSize:11, color:'var(--fg3)', width:20 }}>{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: outputs */}
+        <div>
+          {dcf && (
+            <>
+              <div className="card" style={{ marginBottom:12, textAlign:'center' }}>
+                <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>Implied Price Target</div>
+                <div style={{ fontSize:48, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--green)', marginBottom:4 }}>
+                  ${dcf.priceTarget > 0 ? dcf.priceTarget.toFixed(2) : '—'}
+                </div>
+                <div style={{ fontSize:11, color:'var(--fg3)' }}>5-year DCF · {inputs.wacc}% WACC · {inputs.terminalGrowth}% terminal growth</div>
+              </div>
+
+              <div className="card" style={{ marginBottom:12 }}>
+                <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:10 }}>Bridge</div>
+                {[
+                  { label:'5-yr FCF PV',   value:`$${dcf.pv5yr.toFixed(0)}M` },
+                  { label:'Terminal Value PV', value:`$${dcf.pvTerminal.toFixed(0)}M`, sub: `(${(dcf.pvTerminal/dcf.ev*100).toFixed(0)}% of EV)` },
+                  { label:'Enterprise Value', value:`$${dcf.ev.toFixed(0)}M`, bold:true },
+                  { label:'Less: Net Debt', value:`($${inputs.netDebt.toFixed(0)}M)` },
+                  { label:'Equity Value',  value:`$${dcf.equity.toFixed(0)}M`, bold:true, color:'var(--green)' },
+                ].map((r,i) => (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom: r.bold?'1px solid var(--bdr)':'none' }}>
+                    <span style={{ flex:1, fontSize:12, color:'var(--fg2)', fontWeight: r.bold?700:400 }}>{r.label}</span>
+                    {r.sub && <span style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{r.sub}</span>}
+                    <span style={{ fontSize:13, fontFamily:'var(--font-mono)', fontWeight: r.bold?800:600, color: r.color||'var(--fg)' }}>{r.value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Sensitivity table */}
+              <div className="card">
+                <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:10 }}>
+                  Sensitivity: WACC (rows) vs Terminal Growth (cols) → Price Target
+                </div>
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontFamily:'var(--font-mono)' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ padding:'4px 8px', fontSize:9, color:'var(--fg3)', textAlign:'center' }}>WACC\TG</th>
+                        {sensCols.map(c => (
+                          <th key={c} style={{ padding:'4px 8px', fontSize:9, color: c===0?'var(--fg)':'var(--fg3)', textAlign:'center' }}>
+                            {(inputs.terminalGrowth + c * 0.5).toFixed(1)}%
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sensRows.map(r => {
+                        const waccAdj = inputs.wacc + r * 0.5;
+                        return (
+                          <tr key={r}>
+                            <td style={{ padding:'4px 8px', fontSize:9, color: r===0?'var(--fg)':'var(--fg3)', textAlign:'center', fontWeight: r===0?700:400 }}>
+                              {waccAdj.toFixed(1)}%
+                            </td>
+                            {sensCols.map(c => {
+                              const tgAdj = inputs.terminalGrowth + c * 0.5;
+                              const w2 = waccAdj/100, tg2 = tgAdj/100;
+                              if (w2 <= tg2) return <td key={c} style={{ padding:'4px 8px', fontSize:10, textAlign:'center', color:'var(--fg3)' }}>—</td>;
+                              let pv2=0, rev2=inputs.revenue;
+                              const g2=inputs.revenueGrowth/100;
+                              for(let yr=1;yr<=5;yr++){rev2*=(1+g2);const fcf=(rev2*(inputs.ebitdaMargin/100))*(1-inputs.taxRate/100)+rev2*(inputs.daPct/100)-rev2*(inputs.capexPct/100);pv2+=fcf/Math.pow(1+w2,yr);}
+                              const tv2=rev2*(inputs.ebitdaMargin/100)*(1-inputs.taxRate/100)*(1+tg2)/(w2-tg2);
+                              const pt2=(pv2+tv2/Math.pow(1+w2,5)-inputs.netDebt)/(inputs.shares||1);
+                              const isBase = r===0 && c===0;
+                              return (
+                                <td key={c} style={{ padding:'4px 8px', fontSize:10, textAlign:'center', fontWeight: isBase?800:400,
+                                  background: isBase?'rgba(239,68,68,0.15)':'transparent',
+                                  color: pt2>dcf.priceTarget*1.1?'var(--green)':pt2<dcf.priceTarget*0.9?'var(--red-loss)':'var(--fg)' }}>
+                                  ${pt2.toFixed(0)}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LP RELATIONS TRACKER ─────────────────────────────────────────────────────
+
+function LPPage() {
+  const [lps,      setLps]      = React.useState([]);
+  const [selected, setSelected] = React.useState(null);
+  const [showForm, setShowForm] = React.useState(false);
+  const [showTx,   setShowTx]   = React.useState(null); // 'call' | 'dist'
+  const [form,     setForm]     = React.useState({ name:'', type:'family_office', fund:'', commitment:0, vintage:new Date().getFullYear(), contact:'', email:'', notes:'' });
+  const [txForm,   setTxForm]   = React.useState({ date: new Date().toISOString().slice(0,10), amount:0, notes:'' });
+  const [saving,   setSaving]   = React.useState(false);
+
+  function load() {
+    fetch(`${API_URL}/lps`).then(r => r.json()).then(d => setLps(Array.isArray(d)?d:[])).catch(() => {});
+  }
+  React.useEffect(load, []);
+
+  async function saveLP(e) {
+    e.preventDefault(); setSaving(true);
+    await fetch(`${API_URL}/lps`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) }).catch(() => {});
+    setSaving(false); setShowForm(false); load();
+  }
+
+  async function saveTx(e) {
+    e.preventDefault(); setSaving(true);
+    const endpoint = showTx === 'call' ? 'capitalcall' : 'distribution';
+    await fetch(`${API_URL}/lps/${selected._id}/${endpoint}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(txForm) }).catch(() => {});
+    setSaving(false); setShowTx(null); load();
+    const updated = await fetch(`${API_URL}/lps`).then(r=>r.json()).catch(()=>[]);
+    const upd = updated.find(l => l._id === selected._id);
+    if (upd) setSelected(upd);
+  }
+
+  async function deleteLp(id) {
+    if (!confirm('Delete this LP?')) return;
+    await fetch(`${API_URL}/lps/${id}`, { method:'DELETE' }).catch(() => {});
+    setSelected(null); load();
+  }
+
+  const totalCommitment = lps.reduce((s, l) => s + (l.commitment||0), 0);
+  const totalCalled     = lps.reduce((s, l) => s + (l.called||0), 0);
+  const totalDistrib    = lps.reduce((s, l) => s + (l.distributed||0), 0);
+  const TYPE_BADGE = { pension:'#3b82f6', endowment:'#8b5cf6', family_office:'#10b981', fof:'#06b6d4', sovereign_wealth:'#f59e0b', insurance:'#64748b', corporate:'#f97316', hnwi:'#ec4899', other:'#6b7280' };
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">LP Relations</h1>
+          <p className="page-sub">Capital accounts · calls · distributions · IRR / MOIC</p>
+        </div>
+        <button onClick={() => setShowForm(true)}
+          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          + Add LP
+        </button>
+      </div>
+
+      {/* Summary */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
+        {[
+          { label:'TOTAL COMMITMENT', value:`$${(totalCommitment/1000).toFixed(1)}M` },
+          { label:'TOTAL CALLED',     value:`$${(totalCalled/1000).toFixed(1)}M`, sub:`${totalCommitment>0?(totalCalled/totalCommitment*100).toFixed(0):0}%` },
+          { label:'TOTAL DISTRIBUTED',value:`$${(totalDistrib/1000).toFixed(1)}M`, color:'var(--green)' },
+        ].map(s => (
+          <div key={s.label} className="card">
+            <div style={{ fontSize:9, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>{s.label}</div>
+            <div style={{ fontSize:22, fontWeight:800, fontFamily:'var(--font-mono)', color:s.color||'var(--fg)' }}>{s.value}</div>
+            {s.sub && <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{s.sub} called</div>}
+          </div>
+        ))}
+      </div>
+
+      {/* LP list */}
+      <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 1fr' : '1fr', gap:14 }}>
+        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+          {lps.length === 0 ? (
+            <div className="card" style={{ textAlign:'center', padding:30, color:'var(--fg3)' }}>No LPs yet — add your first limited partner</div>
+          ) : lps.map(lp => {
+            const moic = lp.called > 0 ? ((lp.distributed + lp.nav) / lp.called) : null;
+            return (
+              <div key={lp._id} className="card" style={{ cursor:'pointer', borderColor: selected?._id===lp._id?'var(--red)':'var(--bdr)' }}
+                onClick={() => setSelected(lp)}>
+                <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                      <span style={{ fontWeight:700, fontSize:14 }}>{lp.name}</span>
+                      <span style={{ fontSize:9, fontFamily:'var(--font-mono)', padding:'1px 6px', borderRadius:3, background:`${TYPE_BADGE[lp.type]||'#6b7280'}22`, color:TYPE_BADGE[lp.type]||'var(--fg3)', fontWeight:700 }}>
+                        {(lp.type||'').replace('_',' ').toUpperCase()}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                      {lp.fund || 'No fund'} · Vintage {lp.vintage || '—'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    <div style={{ fontSize:13, fontWeight:700, fontFamily:'var(--font-mono)' }}>${((lp.commitment||0)/1000).toFixed(1)}M</div>
+                    <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                      {moic != null ? `${moic.toFixed(2)}x MOIC` : 'N/A'}
+                      {lp.irr != null ? ` · ${lp.irr.toFixed(1)}% IRR` : ''}
+                    </div>
+                  </div>
+                </div>
+                {/* Called / distributed bar */}
+                {lp.commitment > 0 && (
+                  <div style={{ marginTop:8 }}>
+                    <div style={{ height:4, background:'var(--surf)', borderRadius:2, overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:`${Math.min(100, lp.called/lp.commitment*100)}%`, background:'var(--red)', borderRadius:2 }} />
+                    </div>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginTop:3, fontSize:9, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>
+                      <span>Called ${((lp.called||0)/1000).toFixed(1)}M</span>
+                      <span>Distributed ${((lp.distributed||0)/1000).toFixed(1)}M</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Detail panel */}
+        {selected && (
+          <div className="card">
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+              <h3 style={{ margin:0, fontSize:15, flex:1 }}>{selected.name}</h3>
+              <button onClick={() => { setShowTx('call'); setTxForm({ date: new Date().toISOString().slice(0,10), amount:0, notes:'' }); }}
+                style={{ padding:'5px 10px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600 }}>+ Call</button>
+              <button onClick={() => { setShowTx('dist'); setTxForm({ date: new Date().toISOString().slice(0,10), amount:0, notes:'' }); }}
+                style={{ padding:'5px 10px', background:'rgba(34,197,94,0.15)', color:'var(--green)', border:'1px solid var(--green)', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600 }}>+ Dist</button>
+              <button onClick={() => deleteLp(selected._id)}
+                style={{ padding:'5px 8px', background:'none', border:'1px solid var(--bdr)', borderRadius:6, fontSize:11, cursor:'pointer', color:'var(--fg3)' }}>Delete</button>
+              <button onClick={() => setSelected(null)} style={{ background:'none', border:'none', fontSize:18, cursor:'pointer', color:'var(--fg3)' }}>×</button>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:14 }}>
+              {[
+                ['Commitment', `$${((selected.commitment||0)/1000).toFixed(1)}M`],
+                ['Called',     `$${((selected.called||0)/1000).toFixed(1)}M`],
+                ['Distributed',`$${((selected.distributed||0)/1000).toFixed(1)}M`],
+                ['NAV',        `$${((selected.nav||0)/1000).toFixed(1)}M`],
+                ['IRR',        selected.irr != null ? `${selected.irr.toFixed(1)}%` : '—'],
+                ['MOIC',       selected.called > 0 ? `${((selected.distributed+selected.nav)/selected.called).toFixed(2)}x` : '—'],
+              ].map(([k,v]) => (
+                <div key={k}>
+                  <div style={{ fontSize:10, color:'var(--fg3)', marginBottom:2 }}>{k}</div>
+                  <div style={{ fontSize:15, fontWeight:700, fontFamily:'var(--font-mono)' }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {selected.contact && <div style={{ fontSize:12, color:'var(--fg2)', marginBottom:4 }}>Contact: {selected.contact}</div>}
+            {selected.email && <div style={{ fontSize:12, color:'var(--fg2)', marginBottom:8 }}><a href={`mailto:${selected.email}`} style={{ color:'var(--red)' }}>{selected.email}</a></div>}
+            {selected.notes && <div style={{ fontSize:12, color:'var(--fg3)', lineHeight:1.5 }}>{selected.notes}</div>}
+
+            {/* Capital call history */}
+            {selected.capitalCalls?.length > 0 && (
+              <div style={{ marginTop:14 }}>
+                <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', marginBottom:6 }}>Capital Calls</div>
+                {selected.capitalCalls.slice(-5).reverse().map((c, i) => (
+                  <div key={i} style={{ display:'flex', gap:8, fontSize:12, padding:'4px 0', borderBottom:'1px solid var(--bdr)' }}>
+                    <span style={{ color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{c.date?.slice?.(0,10)||'—'}</span>
+                    <span style={{ flex:1 }}>{c.notes||'Capital call'}</span>
+                    <span style={{ fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--red-loss)' }}>${((c.amount||0)/1000).toFixed(2)}M</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {selected.distributions?.length > 0 && (
+              <div style={{ marginTop:14 }}>
+                <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', marginBottom:6 }}>Distributions</div>
+                {selected.distributions.slice(-5).reverse().map((d, i) => (
+                  <div key={i} style={{ display:'flex', gap:8, fontSize:12, padding:'4px 0', borderBottom:'1px solid var(--bdr)' }}>
+                    <span style={{ color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{d.date?.slice?.(0,10)||'—'}</span>
+                    <span style={{ flex:1 }}>{d.notes||'Distribution'}</span>
+                    <span style={{ fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--green)' }}>${((d.amount||0)/1000).toFixed(2)}M</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Add LP modal */}
+      {showForm && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShowForm(false)}>
+          <form onSubmit={saveLP} onClick={e => e.stopPropagation()}
+            style={{ background:'var(--bg)', borderRadius:16, padding:24, width:'100%', maxWidth:440, display:'flex', flexDirection:'column', gap:10 }}>
+            <h2 style={{ margin:0, fontSize:16, fontWeight:800 }}>Add Limited Partner</h2>
+            {[['name','Name','Acme Pension Fund'],['fund','Fund','Fund III'],['contact','Contact Name',''],['email','Email','']].map(([k,l,ph]) => (
+              <div key={k}>
+                <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>{l}</label>
+                <input value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} required={k==='name'}
+                  style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+              </div>
+            ))}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+              {[['commitment','Commitment ($k)'],['vintage','Vintage Year']].map(([k,l]) => (
+                <div key={k}>
+                  <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>{l}</label>
+                  <input type="number" value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))}
+                    style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, color:'var(--fg)', boxSizing:'border-box' }} />
+                </div>
+              ))}
+              <div>
+                <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>Type</label>
+                <select value={form.type} onChange={e => setForm(f=>({...f,type:e.target.value}))}
+                  style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:11, color:'var(--fg)' }}>
+                  {['pension','endowment','family_office','fof','sovereign_wealth','insurance','corporate','hnwi','other'].map(t => (
+                    <option key={t} value={t}>{t.replace('_',' ')}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, marginTop:6 }}>
+              <button type="button" onClick={() => setShowForm(false)}
+                style={{ flex:1, padding:'10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, cursor:'pointer', color:'var(--fg)' }}>Cancel</button>
+              <button type="submit" disabled={saving}
+                style={{ flex:1, padding:'10px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+                {saving ? 'Saving…' : 'Add LP'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Capital call / distribution modal */}
+      {showTx && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShowTx(null)}>
+          <form onSubmit={saveTx} onClick={e => e.stopPropagation()}
+            style={{ background:'var(--bg)', borderRadius:16, padding:24, width:'100%', maxWidth:360, display:'flex', flexDirection:'column', gap:10 }}>
+            <h2 style={{ margin:0, fontSize:15, fontWeight:800 }}>{showTx==='call' ? 'Capital Call' : 'Distribution'} — {selected?.name}</h2>
+            <div>
+              <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>Date</label>
+              <input type="date" value={txForm.date} onChange={e => setTxForm(f=>({...f,date:e.target.value}))} required
+                style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>Amount ($k)</label>
+              <input type="number" value={txForm.amount} onChange={e => setTxForm(f=>({...f,amount:parseFloat(e.target.value)||0}))} required
+                style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>Notes</label>
+              <input value={txForm.notes} onChange={e => setTxForm(f=>({...f,notes:e.target.value}))}
+                style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button type="button" onClick={() => setShowTx(null)}
+                style={{ flex:1, padding:'10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, cursor:'pointer', color:'var(--fg)' }}>Cancel</button>
+              <button type="submit" disabled={saving}
+                style={{ flex:1, padding:'10px', background: showTx==='call'?'var(--red)':'var(--green)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+                {saving ? 'Saving…' : 'Log'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── DUE DILIGENCE WORKSPACE ──────────────────────────────────────────────────
+
+function DiligencePage() {
+  const [dds,      setDds]      = React.useState([]);
+  const [selected, setSelected] = React.useState(null);
+  const [showNew,  setShowNew]  = React.useState(false);
+  const [form,     setForm]     = React.useState({ dealName:'', ticker:'', lead:'', notes:'' });
+  const [aiSum,    setAiSum]    = React.useState('');
+  const [aiLoad,   setAiLoad]   = React.useState(false);
+  const [saving,   setSaving]   = React.useState(false);
+  const [expandedSection, setExpandedSection] = React.useState(null);
+
+  function load() {
+    fetch(`${API_URL}/diligence`).then(r=>r.json()).then(d=>setDds(Array.isArray(d)?d:[])).catch(()=>{});
+  }
+  React.useEffect(load, []);
+
+  async function createDD(e) {
+    e.preventDefault(); setSaving(true);
+    const dd = await fetch(`${API_URL}/diligence`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) }).then(r=>r.json()).catch(()=>null);
+    setSaving(false); setShowNew(false);
+    if (dd?._id) { setSelected(dd); load(); }
+  }
+
+  async function toggleItem(sectionTitle, itemId, checked) {
+    if (!selected) return;
+    const updated = await fetch(`${API_URL}/diligence/${selected._id}/item`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ sectionTitle, itemId, checked }),
+    }).then(r=>r.json()).catch(()=>null);
+    if (updated?._id) { setSelected(updated); load(); }
+  }
+
+  async function runAISummary() {
+    setAiLoad(true);
+    const d = await fetch(`${API_URL}/diligence/${selected._id}/ai-summary`, { method:'POST' }).then(r=>r.json()).catch(()=>({}));
+    setAiSum(d.summary || ''); setAiLoad(false);
+    if (d.summary) { const u = await fetch(`${API_URL}/diligence`).then(r=>r.json()).catch(()=>[]); setDds(u); }
+  }
+
+  async function deleteDD(id) {
+    if (!confirm('Delete this DD workspace?')) return;
+    await fetch(`${API_URL}/diligence/${id}`, { method:'DELETE' }).catch(()=>{});
+    setSelected(null); load();
+  }
+
+  const PRIORITY_COLOR = { critical:'#ef4444', high:'#f59e0b', medium:'#3b82f6', low:'var(--fg3)' };
+  const STATUS_COLOR   = { active:'var(--green)', paused:'#f59e0b', approved:'#3b82f6', passed:'var(--fg3)', completed:'var(--green)' };
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Due Diligence</h1>
+          <p className="page-sub">Structured DD checklists · AI summary · deal workspace</p>
+        </div>
+        <button onClick={() => setShowNew(true)}
+          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          + New DD
+        </button>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns: selected ? '280px 1fr' : '1fr', gap:14 }}>
+        {/* List */}
+        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+          {dds.length === 0 ? (
+            <div className="card" style={{ textAlign:'center', padding:30, color:'var(--fg3)' }}>
+              <div style={{ fontSize:24, marginBottom:8 }}>📋</div>
+              <div>No DD workspaces yet</div>
+            </div>
+          ) : dds.map(dd => (
+            <div key={dd._id} className="card" style={{ cursor:'pointer', padding:'10px 14px', borderColor: selected?._id===dd._id?'var(--red)':'var(--bdr)' }}
+              onClick={() => { setSelected(dd); setAiSum(dd.aiSummary||''); setExpandedSection(null); }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+                <span style={{ fontWeight:700, fontSize:13, flex:1 }}>{dd.dealName}</span>
+                {dd.ticker && <span style={{ fontSize:10, fontFamily:'var(--font-mono)', color:'var(--red)', fontWeight:800 }}>{dd.ticker}</span>}
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ flex:1, height:4, background:'var(--surf)', borderRadius:2, overflow:'hidden' }}>
+                  <div style={{ height:'100%', width:`${dd.score||0}%`, background: dd.score>70?'var(--green)':dd.score>40?'#f59e0b':'var(--red)', borderRadius:2 }} />
+                </div>
+                <span style={{ fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)', minWidth:32 }}>{dd.score||0}%</span>
+              </div>
+              <div style={{ fontSize:10, color:'var(--fg3)', marginTop:4 }}>
+                {dd.lead && `Lead: ${dd.lead} · `}
+                <span style={{ color: STATUS_COLOR[dd.status]||'var(--fg3)' }}>{dd.status}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Checklist detail */}
+        {selected && (
+          <div>
+            {/* Header */}
+            <div className="card" style={{ marginBottom:10 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                <h3 style={{ margin:0, fontSize:15, flex:1 }}>{selected.dealName}{selected.ticker ? ` — ${selected.ticker}` : ''}</h3>
+                <button onClick={runAISummary} disabled={aiLoad}
+                  style={{ padding:'5px 12px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                  {aiLoad ? '✦ Analyzing…' : '✦ AI Summary'}
+                </button>
+                <button onClick={() => deleteDD(selected._id)}
+                  style={{ padding:'5px 8px', background:'none', border:'1px solid var(--bdr)', borderRadius:6, fontSize:11, cursor:'pointer', color:'var(--fg3)' }}>Delete</button>
+                <button onClick={() => setSelected(null)} style={{ background:'none', border:'none', fontSize:18, cursor:'pointer', color:'var(--fg3)' }}>×</button>
+              </div>
+              {/* Progress bar */}
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom: aiSum?8:0 }}>
+                <div style={{ flex:1, height:6, background:'var(--surf)', borderRadius:3, overflow:'hidden' }}>
+                  <div style={{ height:'100%', width:`${selected.score||0}%`, background: selected.score>70?'var(--green)':selected.score>40?'#f59e0b':'var(--red)', borderRadius:3, transition:'width 0.3s' }} />
+                </div>
+                <span style={{ fontSize:12, fontFamily:'var(--font-mono)', fontWeight:700, minWidth:35 }}>{selected.score||0}%</span>
+              </div>
+              {aiSum && (
+                <div style={{ padding:'10px 12px', background:'var(--surf)', borderRadius:8, fontSize:12, color:'var(--fg2)', lineHeight:1.6, borderLeft:'2px solid var(--red)' }}>
+                  <strong style={{ color:'var(--red)', fontSize:10, fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em' }}>✦ AI Assessment · </strong>
+                  {aiSum}
+                </div>
+              )}
+            </div>
+
+            {/* Sections */}
+            {(selected.sections||[]).map((section, si) => {
+              const done    = section.items.filter(i => i.checked).length;
+              const flagged = section.items.filter(i => i.flagged).length;
+              const isOpen  = expandedSection === section.title || expandedSection === null;
+              return (
+                <div key={si} className="card" style={{ marginBottom:8, padding:0, overflow:'hidden' }}>
+                  <div style={{ padding:'10px 14px', display:'flex', alignItems:'center', gap:8, cursor:'pointer', background:'var(--surf)' }}
+                    onClick={() => setExpandedSection(isOpen && expandedSection===section.title ? null : section.title)}>
+                    <span style={{ fontWeight:700, fontSize:13, flex:1 }}>{section.title}</span>
+                    {flagged > 0 && <span style={{ fontSize:10, color:'#ef4444', fontFamily:'var(--font-mono)' }}>⚑ {flagged}</span>}
+                    <span style={{ fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{done}/{section.items.length}</span>
+                    <div style={{ width:50, height:4, background:'var(--bdr)', borderRadius:2, overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:`${section.items.length>0?done/section.items.length*100:0}%`, background: done===section.items.length?'var(--green)':'var(--red)', borderRadius:2 }} />
+                    </div>
+                    <span style={{ color:'var(--fg3)', fontSize:11 }}>{isOpen && expandedSection===section.title ? '▲' : '▼'}</span>
+                  </div>
+                  {(isOpen || expandedSection === null) && (
+                    <div style={{ padding:'8px 0' }}>
+                      {section.items.map((item, ii) => (
+                        <div key={ii} style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'7px 14px',
+                          background: item.flagged ? 'rgba(239,68,68,0.04)' : 'transparent',
+                          borderBottom: ii<section.items.length-1?'1px solid var(--bdr)':'none' }}>
+                          <input type="checkbox" checked={item.checked} onChange={e => toggleItem(section.title, item.id, e.target.checked)}
+                            style={{ marginTop:2, accentColor:'var(--red)', cursor:'pointer' }} />
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:12, color: item.checked?'var(--fg3)':'var(--fg)', textDecoration: item.checked?'line-through':'none' }}>{item.label}</div>
+                            {item.notes && <div style={{ fontSize:11, color:'var(--fg3)', marginTop:2 }}>{item.notes}</div>}
+                          </div>
+                          <span style={{ fontSize:9, padding:'1px 5px', borderRadius:3, fontFamily:'var(--font-mono)', fontWeight:700,
+                            background:`${PRIORITY_COLOR[item.priority]||'var(--fg3)'}22`,
+                            color: PRIORITY_COLOR[item.priority]||'var(--fg3)' }}>
+                            {item.priority}
+                          </span>
+                          {item.flagged && <span style={{ color:'#ef4444', fontSize:12 }}>⚑</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* New DD modal */}
+      {showNew && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setShowNew(false)}>
+          <form onSubmit={createDD} onClick={e => e.stopPropagation()}
+            style={{ background:'var(--bg)', borderRadius:16, padding:24, width:'100%', maxWidth:400, display:'flex', flexDirection:'column', gap:10 }}>
+            <h2 style={{ margin:0, fontSize:16, fontWeight:800 }}>New DD Workspace</h2>
+            {[['dealName','Deal Name','Acme Corp','required'],['ticker','Ticker (optional)','ACME',''],['lead','Lead Analyst','','']].map(([k,l,ph,req]) => (
+              <div key={k}>
+                <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:3 }}>{l}</label>
+                <input value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} required={req==='required'}
+                  style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:8, marginTop:6 }}>
+              <button type="button" onClick={() => setShowNew(false)}
+                style={{ flex:1, padding:'10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, cursor:'pointer', color:'var(--fg)' }}>Cancel</button>
+              <button type="submit" disabled={saving}
+                style={{ flex:1, padding:'10px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+                {saving ? 'Creating…' : 'Create Workspace'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CONVICTION SCORE DASHBOARD ───────────────────────────────────────────────
+
+function ConvictionPage() {
+  const [ticker,   setTicker]   = React.useState('');
+  const [loading,  setLoading]  = React.useState(false);
+  const [signals,  setSignals]  = React.useState([]);
+  const [score,    setScore]    = React.useState(null);
+  const [aiResult, setAiResult] = React.useState(null);
+  const [aiLoad,   setAiLoad]   = React.useState(false);
+  const [watchlist,setWatchlist]= React.useState([]);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/watchlist`).then(r=>r.json()).then(d=>setWatchlist(Array.isArray(d)?d:[])).catch(()=>{});
+  }, []);
+
+  async function analyze() {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return;
+    setLoading(true); setSignals([]); setScore(null); setAiResult(null);
+
+    const gathered = [];
+    const results = await Promise.allSettled([
+      // 1. Watchlist / thesis
+      fetch(`${API_URL}/watchlist/${t}`).then(r=>r.json()).catch(()=>null),
+      // 2. Sentiment
+      fetch(`${API_URL}/sentiment/analyze/${t}`, { method:'POST', headers:{'Content-Type':'application/json'} }).then(r=>r.json()).catch(()=>null),
+      // 3. Short interest
+      fetch(`${API_URL}/short/${t}`).then(r=>r.json()).catch(()=>null),
+      // 4. Congressional trades
+      fetch(`${API_URL}/congressional?ticker=${t}&days=90`).then(r=>r.json()).catch(()=>null),
+      // 5. Options flow
+      fetch(`${API_URL}/options/${t}`).then(r=>r.json()).catch(()=>null),
+      // 6. Insider Form 4
+      fetch(`${API_URL}/insider/form4/${t}`).then(r=>r.json()).catch(()=>null),
+      // 7. Catalysts upcoming
+      fetch(`${API_URL}/catalysts?ticker=${t}&from=${new Date().toISOString().slice(0,10)}`).then(r=>r.json()).catch(()=>[]),
+    ]);
+
+    const [wl, sent, shi, cong, opts, ins, cats] = results.map(r => r.status==='fulfilled' ? r.value : null);
+
+    let total = 50; // base
+
+    // Thesis status
+    if (wl && !wl.error) {
+      const ts = wl.thesisStatus;
+      const delta = ts==='valid'?+15 : ts==='weakening'?-10 : ts==='invalidated'?-25 : 0;
+      total += delta;
+      if (ts) gathered.push({ label:'Investment Thesis', value: ts.charAt(0).toUpperCase()+ts.slice(1), direction: ts==='valid'?'bullish':ts==='invalidated'?'bearish':'neutral', delta, source:'watchlist' });
+      if (wl.conviction) {
+        const cd = (wl.conviction - 5) * 2;
+        total += cd;
+        gathered.push({ label:'Conviction Rating', value: `${wl.conviction}/10`, direction: wl.conviction>=7?'bullish':wl.conviction<=3?'bearish':'neutral', delta: cd, source:'watchlist' });
+      }
+    }
+
+    // Sentiment
+    if (sent && !sent.error && sent.score != null) {
+      const delta = sent.score > 60 ? +10 : sent.score < 40 ? -10 : 0;
+      total += delta;
+      gathered.push({ label:'News Sentiment', value: `${sent.score?.toFixed(0)}% positive`, direction: sent.score>60?'bullish':sent.score<40?'bearish':'neutral', delta, source:'AI' });
+    }
+
+    // Short interest
+    if (shi && !shi.error) {
+      const sp = shi.shortInterestPct ?? shi.finra?.shortPct;
+      if (sp != null) {
+        const delta = sp > 20 ? -10 : sp > 10 ? -5 : sp < 3 ? +5 : 0;
+        total += delta;
+        gathered.push({ label:'Short Interest', value: `${sp.toFixed(1)}% of float`, direction: sp>20?'bearish':sp>10?'neutral':'bullish', delta, source:'FINRA/Finnhub' });
+      }
+    }
+
+    // Congressional trading
+    if (cong && Array.isArray(cong.trades) && cong.trades.length > 0) {
+      const buys  = cong.trades.filter(t => t.isBuy).length;
+      const sells = cong.trades.filter(t => !t.isBuy).length;
+      const delta = buys > sells ? +8 : buys < sells ? -8 : 0;
+      total += delta;
+      gathered.push({ label:'Congressional Trading', value: `${buys} buys / ${sells} sells`, direction: buys>sells?'bullish':buys<sells?'bearish':'neutral', delta, source:'STOCK Act' });
+    }
+
+    // Options flow
+    if (opts && !opts.error && opts.putCallRatio != null) {
+      const pcr = opts.putCallRatio;
+      const delta = pcr < 0.7 ? +8 : pcr > 1.2 ? -8 : 0;
+      total += delta;
+      gathered.push({ label:'Options Flow (P/C)', value: `${pcr.toFixed(2)} — ${opts.sentiment}`, direction: opts.sentiment==='bullish'?'bullish':opts.sentiment==='bearish'?'bearish':'neutral', delta, source:'Yahoo Finance' });
+    }
+
+    // Insider Form 4
+    if (ins && !ins.error && ins.filings?.length > 0) {
+      gathered.push({ label:'Insider Transactions', value: `${ins.filings.length} filings (90d)`, direction: 'neutral', delta: +3, source:'SEC EDGAR' });
+      total += 3;
+    }
+
+    // Upcoming catalysts
+    if (Array.isArray(cats) && cats.length > 0) {
+      const high = cats.filter(c => c.impact === 'high').length;
+      gathered.push({ label:'Upcoming Catalysts', value: `${cats.length} events (${high} high impact)`, direction: 'bullish', delta: +5, source:'Calendar' });
+      total += 5;
+    }
+
+    total = Math.min(100, Math.max(0, Math.round(total)));
+    setSignals(gathered);
+    setScore(total);
+    setLoading(false);
+  }
+
+  async function runAI() {
+    setAiLoad(true);
+    const payload = signals.map(s => ({ label: s.label, value: s.value, direction: s.direction }));
+    const r = await fetch(`${API_URL}/sentiment/regime`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ticker, signals: payload, score }),
+    }).catch(()=>null);
+    // Fallback: use macro regime endpoint with custom prompt
+    const res = await fetch(`${API_URL}/macro/regime`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ indicators: signals.map(s => ({ label: s.label, value: s.value, unit:'' })) }),
+    }).then(r2=>r2.json()).catch(()=>null);
+    setAiResult(res);
+    setAiLoad(false);
+  }
+
+  const SCORE_COLOR = score == null ? 'var(--fg3)' : score >= 70 ? 'var(--green)' : score >= 40 ? '#f59e0b' : 'var(--red-loss)';
+  const RATING      = score == null ? '—' : score >= 80 ? 'STRONG BUY' : score >= 65 ? 'BUY' : score >= 45 ? 'NEUTRAL' : score >= 30 ? 'SELL' : 'STRONG SELL';
+  const DIR_COLOR   = { bullish:'var(--green)', bearish:'var(--red-loss)', neutral:'#f59e0b' };
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Conviction Score</h1>
+          <p className="page-sub">Aggregate all signals → AI investment score · thesis · short · options · congress · insider</p>
+        </div>
+      </div>
+
+      {/* Search + watchlist quick-picks */}
+      <div className="card" style={{ marginBottom:14, padding:'12px 16px' }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+          <div style={{ position:'relative', flex:1 }}>
+            <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>TICKER›</span>
+            <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key==='Enter' && analyze()} placeholder="NVDA"
+              style={{ width:'100%', padding:'9px 12px 9px 64px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:14, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }} />
+          </div>
+          <button onClick={analyze} disabled={loading}
+            style={{ padding:'9px 24px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', opacity:loading?0.7:1 }}>
+            {loading ? 'ANALYZING…' : 'ANALYZE'}
+          </button>
+        </div>
+        {watchlist.length > 0 && (
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            {watchlist.slice(0,12).map(w => (
+              <button key={w.symbol} onClick={() => { setTicker(w.symbol); }}
+                style={{ padding:'3px 8px', fontSize:10, fontFamily:'var(--font-mono)', fontWeight:700, border:'1px solid var(--bdr)', borderRadius:4, cursor:'pointer', background:'transparent', color:'var(--fg3)' }}>
+                {w.symbol}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {loading && (
+        <div className="card" style={{ textAlign:'center', padding:30, color:'var(--fg3)' }}>
+          <div style={{ fontSize:13, marginBottom:8 }}>Fetching all signals for <strong>{ticker}</strong>…</div>
+          <div style={{ fontSize:11, fontFamily:'var(--font-mono)' }}>thesis · sentiment · short interest · congressional · options · insider · catalysts</div>
+        </div>
+      )}
+
+      {score !== null && !loading && (
+        <div>
+          {/* Score hero */}
+          <div style={{ display:'grid', gridTemplateColumns:'auto 1fr', gap:14, marginBottom:14 }}>
+            <div className="card" style={{ textAlign:'center', minWidth:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+              <div style={{ fontSize:72, fontWeight:900, fontFamily:'var(--font-mono)', color: SCORE_COLOR, lineHeight:1 }}>{score}</div>
+              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', marginBottom:8 }}>/ 100</div>
+              <div style={{ fontSize:14, fontWeight:800, letterSpacing:'0.1em', color: SCORE_COLOR }}>{RATING}</div>
+              <div style={{ marginTop:10, width:'80%', height:6, background:'var(--surf)', borderRadius:3, overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${score}%`, background: SCORE_COLOR, borderRadius:3, transition:'width 0.5s' }} />
+              </div>
+              <div style={{ marginTop:8, fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg)', fontWeight:700 }}>{ticker}</div>
+            </div>
+
+            <div className="card">
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', flex:1 }}>Signal Breakdown</span>
+                <button onClick={runAI} disabled={aiLoad}
+                  style={{ padding:'5px 12px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                  {aiLoad ? '✦ Thinking…' : '✦ AI Narrative'}
+                </button>
+              </div>
+              {signals.map((sig, i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none' }}>
+                  <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: DIR_COLOR[sig.direction]||'var(--fg3)' }} />
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:12, fontWeight:600 }}>{sig.label}</div>
+                    <div style={{ fontSize:11, color:'var(--fg3)' }}>{sig.value} · <span style={{ fontFamily:'var(--font-mono)', fontSize:10 }}>{sig.source}</span></div>
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    <span style={{ fontSize:11, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
+                      {sig.direction.toUpperCase()}
+                    </span>
+                    <div style={{ fontSize:10, fontFamily:'var(--font-mono)', color: sig.delta>0?'var(--green)':sig.delta<0?'var(--red-loss)':'var(--fg3)' }}>
+                      {sig.delta>0?'+':''}{sig.delta}pts
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {signals.length === 0 && (
+                <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:16 }}>No signals gathered — check your API connections</div>
+              )}
+            </div>
+          </div>
+
+          {/* AI Narrative */}
+          {aiResult && (
+            <div className="card" style={{ borderLeft:'3px solid var(--red)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                <span style={{ fontSize:11, color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em' }}>✦ AI Assessment</span>
+                {aiResult.regime && (
+                  <span style={{ fontSize:10, padding:'2px 8px', borderRadius:4, background:'rgba(239,68,68,0.12)', color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                    {aiResult.regime.toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <p style={{ margin:0, fontSize:13, color:'var(--fg2)', lineHeight:1.7 }}>{aiResult.summary}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {score === null && !loading && (
+        <div className="card" style={{ textAlign:'center', padding:'48px 20px', color:'var(--fg3)' }}>
+          <div style={{ fontSize:64, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--bdr)', marginBottom:12 }}>∑</div>
+          <div style={{ fontSize:14, marginBottom:6, color:'var(--fg2)' }}>Enter a ticker to compute conviction score</div>
+          <div style={{ fontSize:11, fontFamily:'var(--font-mono)', lineHeight:1.8 }}>
+            Aggregates: thesis status · news sentiment · short interest<br/>
+            congressional trades · options flow · insider filings · catalysts
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
   AssistantPage, NotesPage, DealsPage, MeetingsPage, BriefingPage,
   JournalPage, SentimentPage, ScenarioPage,
   MacroPage, WatchlistIntelPage, InsiderPage, AttributionPage, ResearchPage,
+  CalendarPage, CongressPage, OptionsPage, ShortPage, ValuationPage, LPPage, DiligencePage, ConvictionPage,
 });

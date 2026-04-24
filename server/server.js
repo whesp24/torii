@@ -37,6 +37,12 @@ import sentimentRoutes from './routes/sentiment.js';
 import macroRoutes from './routes/macro.js';
 import insiderRoutes from './routes/insider.js';
 import researchRoutes from './routes/research.js';
+import catalystRoutes from './routes/catalysts.js';
+import congressRoutes from './routes/congressional.js';
+import optionsRoutes from './routes/options.js';
+import shortRoutes from './routes/shortinterest.js';
+import lpRoutes from './routes/lps.js';
+import diligenceRoutes from './routes/diligence.js';
 
 dotenv.config();
 
@@ -78,6 +84,12 @@ app.use('/api/sentiment', sentimentRoutes);
 app.use('/api/macro', macroRoutes);
 app.use('/api/insider', insiderRoutes);
 app.use('/api/research', researchRoutes);
+app.use('/api/catalysts', catalystRoutes);
+app.use('/api/congressional', congressRoutes);
+app.use('/api/options', optionsRoutes);
+app.use('/api/short', shortRoutes);
+app.use('/api/lps', lpRoutes);
+app.use('/api/diligence', diligenceRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

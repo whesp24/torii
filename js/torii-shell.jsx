@@ -3,37 +3,44 @@
 const SHELL_API = 'https://torii-backend.onrender.com/api';
 
 const NAV = [
-  { id:'overview',   label:'Markets',   icon:'markets'   },
-  { id:'briefing',   label:'Briefing',  icon:'briefing'  },
-  { id:'portfolio',  label:'Portfolio', icon:'portfolio' },
-  { id:'japan',      label:'Japan',     icon:'japan'     },
-  { id:'news',       label:'News',      icon:'news'      },
-  { id:'voices',     label:'Voices',    icon:'voices'    },
-  { id:'network',    label:'Network',   icon:'network'   },
-  { id:'watchlist',  label:'Watchlist', icon:'watchlist' },
-  { id:'alerts',     label:'Alerts',    icon:'alerts'    },
-  { id:'earnings',   label:'Earnings',  icon:'earnings'  },
-  { id:'ecocal',     label:'Calendar',  icon:'calendar'  },
-  { id:'tools',      label:'Tools',     icon:'tools'     },
-  { id:'analytics',  label:'Analytics', icon:'analytics' },
-  { id:'push',       label:'Notify',    icon:'push'      },
-  { id:'assistant',  label:'AI',        icon:'assistant' },
-  { id:'notes',      label:'Notes',     icon:'notes'     },
-  { id:'deals',      label:'Deals',     icon:'deals'     },
-  { id:'meetings',   label:'Meetings',  icon:'meetings'  },
-  { id:'journal',    label:'Journal',   icon:'journal'   },
-  { id:'sentiment',  label:'Sentiment', icon:'sentiment' },
-  { id:'scenario',   label:'Scenario',  icon:'scenario'  },
-  { id:'macro',      label:'Macro',     icon:'macro'     },
-  { id:'watchintel', label:'WL Intel',  icon:'watchintel'},
-  { id:'insider',    label:'Insider',   icon:'insider'   },
+  { id:'overview',   label:'Markets',    icon:'markets'    },
+  { id:'briefing',   label:'Briefing',   icon:'briefing'   },
+  { id:'portfolio',  label:'Portfolio',  icon:'portfolio'  },
+  { id:'japan',      label:'Japan',      icon:'japan'      },
+  { id:'news',       label:'News',       icon:'news'       },
+  { id:'voices',     label:'Voices',     icon:'voices'     },
+  { id:'network',    label:'Network',    icon:'network'    },
+  { id:'watchlist',  label:'Watchlist',  icon:'watchlist'  },
+  { id:'alerts',     label:'Alerts',     icon:'alerts'     },
+  { id:'calendar',   label:'Calendar',   icon:'calendar'   },
+  { id:'earnings',   label:'Earnings',   icon:'earnings'   },
+  { id:'tools',      label:'Tools',      icon:'tools'      },
+  { id:'analytics',  label:'Analytics',  icon:'analytics'  },
+  { id:'push',       label:'Notify',     icon:'push'       },
+  { id:'assistant',  label:'AI',         icon:'assistant'  },
+  { id:'notes',      label:'Notes',      icon:'notes'      },
+  { id:'deals',      label:'Deals',      icon:'deals'      },
+  { id:'meetings',   label:'Meetings',   icon:'meetings'   },
+  { id:'journal',    label:'Journal',    icon:'journal'    },
+  { id:'sentiment',  label:'Sentiment',  icon:'sentiment'  },
+  { id:'scenario',   label:'Scenario',   icon:'scenario'   },
+  { id:'macro',      label:'Macro',      icon:'macro'      },
+  { id:'watchintel', label:'WL Intel',   icon:'watchintel' },
+  { id:'insider',    label:'Insider',    icon:'insider'    },
   { id:'attribution',label:'Attribution',icon:'attribution'},
-  { id:'research',   label:'Research',  icon:'research'  },
+  { id:'research',   label:'Research',   icon:'research'   },
+  { id:'congress',   label:'Congress',   icon:'congress'   },
+  { id:'options',    label:'Options',    icon:'options'    },
+  { id:'short',      label:'Short Int',  icon:'short'      },
+  { id:'valuation',  label:'Valuation',  icon:'valuation'  },
+  { id:'lp',         label:'LP Portal',  icon:'lp'         },
+  { id:'diligence',  label:'Diligence',  icon:'diligence'  },
+  { id:'conviction', label:'Conviction', icon:'conviction' },
 ];
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','earnings','ecocal','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','watchintel','insider','attribution','research'];
+const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','calendar','earnings','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','watchintel','insider','attribution','research','congress','options','short','valuation','lp','diligence','conviction'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -66,6 +73,13 @@ function NavIcon({ id, active }) {
   if (id==='insider')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
   if (id==='attribution') return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>;
   if (id==='research')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>;
+  if (id==='congress')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 22V10"/><path d="M21 22V10"/><path d="M12 22V10"/><path d="M2 10h20"/><path d="M12 4L2 10h20L12 4z"/><path d="M6 10v12"/><path d="M18 10v12"/></svg>;
+  if (id==='options')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>;
+  if (id==='short')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>;
+  if (id==='valuation')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 1 0 0 7h5a3.5 3.5 0 1 1 0 7H6"/></svg>;
+  if (id==='lp')          return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>;
+  if (id==='diligence')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>;
+  if (id==='conviction')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>;
   return null;
 }
 
@@ -724,15 +738,16 @@ function App() {
         {page==='network'    && <NetworkingPage />}
         {page==='watchlist'  && <WatchlistPage />}
         {page==='alerts'     && <AlertsPanel />}
-        {page==='earnings'   && <EarningsPage defaultTab="earnings" />}
-        {page==='ecocal'     && <EarningsPage defaultTab="ecocal" />}
-        {page==='tools'      && <ToolsPage />}
-        {page==='analytics'  && <AnalyticsPage />}
-        {page==='push'       && <PushSettingsPage />}
-        {page==='assistant'  && <AssistantPage />}
-        {page==='notes'      && <NotesPage />}
-        {page==='deals'      && <DealsPage />}
-        {page==='meetings'   && <MeetingsPage />}
+        {page==='calendar'    && <CalendarPage />}
+        {page==='earnings'    && <EarningsPage defaultTab="earnings" />}
+        {page==='ecocal'      && <EarningsPage defaultTab="ecocal" />}
+        {page==='tools'       && <ToolsPage />}
+        {page==='analytics'   && <AnalyticsPage />}
+        {page==='push'        && <PushSettingsPage />}
+        {page==='assistant'   && <AssistantPage />}
+        {page==='notes'       && <NotesPage />}
+        {page==='deals'       && <DealsPage />}
+        {page==='meetings'    && <MeetingsPage />}
         {page==='journal'     && <JournalPage />}
         {page==='sentiment'   && <SentimentPage />}
         {page==='scenario'    && <ScenarioPage />}
@@ -741,6 +756,13 @@ function App() {
         {page==='insider'     && <InsiderPage />}
         {page==='attribution' && <AttributionPage />}
         {page==='research'    && <ResearchPage />}
+        {page==='congress'    && <CongressPage />}
+        {page==='options'     && <OptionsPage />}
+        {page==='short'       && <ShortPage />}
+        {page==='valuation'   && <ValuationPage />}
+        {page==='lp'          && <LPPage />}
+        {page==='diligence'   && <DiligencePage />}
+        {page==='conviction'  && <ConvictionPage />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 
