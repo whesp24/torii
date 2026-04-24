@@ -1,6 +1,7 @@
 import express from 'express';
 import Stock from '../models/Stock.js';
 import { fetchLiveQuote, fetchFinnhubChart, fetchYahooChart } from '../services/stockService.js';
+import yahooFinance from 'yahoo-finance2';
 
 const router = express.Router();
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
@@ -75,93 +76,92 @@ router.get('/fundamentals/:symbol', async (req, res) => {
 // Works for small caps and micro-caps that Finnhub doesn't cover
 // Must be before /:symbol wildcard
 router.get('/yahoo-summary/:symbol', async (req, res) => {
-  const symbol = req.params.symbol.toUpperCase();
+  const sym = req.params.symbol.toUpperCase();
   try {
-    const YF_HEADERS = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/json',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': 'https://finance.yahoo.com/',
-    };
-    const modules = encodeURIComponent('summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory,institutionOwnership');
-    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
-    const r = await fetch(url, { headers: YF_HEADERS });
-    if (!r.ok) return res.status(404).json({ error: `Yahoo Finance ${r.status}` });
-    const data = await r.json();
-    const result = data?.quoteSummary?.result?.[0];
-    if (!result) return res.status(404).json({ error: 'No data' });
+    const modules = [
+      'price', 'summaryDetail', 'financialData', 'defaultKeyStatistics',
+      'recommendationTrend', 'upgradeDowngradeHistory', 'institutionOwnership',
+      'calendarEvents', 'earnings', 'insiderTransactions',
+    ];
+    const r = await yahooFinance.quoteSummary(sym, { modules }, { validateResult: false });
+    if (!r) return res.status(404).json({ error: 'No data found' });
 
-    const price = result.price                || {};
-    const sumD  = result.summaryDetail        || {};
-    const finD  = result.financialData        || {};
-    const defKS = result.defaultKeyStatistics || {};
-    const cal   = result.calendarEvents       || {};
+    const price     = r.price               || {};
+    const sumD      = r.summaryDetail       || {};
+    const finD      = r.financialData       || {};
+    const defKS     = r.defaultKeyStatistics || {};
+    const cal       = r.calendarEvents      || {};
+    const earn      = r.earnings            || {};
+    const recTrend  = r.recommendationTrend?.trend || [];
+    const upgHist   = r.upgradeDowngradeHistory?.history || [];
+    const instOwn   = r.institutionOwnership?.ownershipList || [];
+    const insiderTx = r.insiderTransactions?.transactions || [];
 
-    const currentPrice  = price.regularMarketPrice?.raw ?? sumD.previousClose?.raw ?? null;
-    const prevClose     = price.regularMarketPreviousClose?.raw ?? sumD.previousClose?.raw ?? null;
-    const changePercent = currentPrice && prevClose && prevClose > 0
-      ? ((currentPrice - prevClose) / prevClose) * 100 : null;
-
-    // Next earnings date
-    const earningsDates = cal.earnings?.earningsDate || [];
     const now = Date.now();
-    const nextEarningsTs = earningsDates
-      .map(d => d?.raw ? d.raw * 1000 : null)
-      .filter(ts => ts && ts > now)
-      .sort((a, b) => a - b)[0] || null;
-    const daysToEarnings = nextEarningsTs
-      ? Math.round((nextEarningsTs - now) / 86400000)
-      : null;
-
-    // Analyst trend breakdown + recent upgrades/downgrades
-    const recTrend = result.recommendationTrend?.trend || [];
     const latestTrend = recTrend[0] || {};
-    const upgrades = result.upgradeDowngradeHistory?.history || [];
-    const upgrades30d = upgrades.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
-    const instOwnership = result.institutionOwnership?.ownershipList || [];
+    const upgrades30d = upgHist.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
+
+    const earningsDates = cal.earnings?.earningsDate || [];
+    const futureTs = earningsDates.map(d => d instanceof Date ? d.getTime() : null).filter(ts => ts && ts > now);
+    const nextEarningsTs = futureTs.sort((a, b) => a - b)[0] || null;
+    const daysToEarnings = nextEarningsTs ? Math.round((nextEarningsTs - now) / 86400000) : null;
+
+    const shortPctRaw = sumD.shortPercentOfFloat ?? defKS.shortPercentOfFloat ?? null;
+
+    const epsHistory = (earn.earningsHistory?.history || []).slice(-4).map(q => ({
+      epsActual: q.epsActual ?? null,
+      epsEstimate: q.epsEstimate ?? null,
+      surprise: q.surprisePercent ?? null,
+      date: q.quarter instanceof Date ? q.quarter.toISOString().slice(0, 7) : null,
+    })).filter(q => q.epsActual != null);
 
     res.json({
-      symbol,
-      name:          price.shortName || price.longName || symbol,
-      currentPrice,
-      changePercent,
-      high52:        sumD.fiftyTwoWeekHigh?.raw    ?? defKS.fiftyTwoWeekHigh?.raw    ?? null,
-      low52:         sumD.fiftyTwoWeekLow?.raw     ?? defKS.fiftyTwoWeekLow?.raw     ?? null,
-      targetMean:    finD.targetMeanPrice?.raw     ?? null,
-      targetHigh:    finD.targetHighPrice?.raw     ?? null,
-      targetLow:     finD.targetLowPrice?.raw      ?? null,
-      numAnalysts:   finD.numberOfAnalystOpinions?.raw ?? 0,
-      shortPct:      defKS.shortPercentOfFloat?.raw != null
-        ? defKS.shortPercentOfFloat.raw * 100 : null,
-      shortRatio:    defKS.shortRatio?.raw         ?? null,
-      recMean:       finD.recommendationMean?.raw  ?? null,
-      recKey:        finD.recommendationKey        ?? null,
-      marketCap:     price.marketCap?.raw          ?? null,
-      beta:          defKS.beta?.raw               ?? null,
-      // Valuation
-      peRatio:       sumD.trailingPE?.raw          ?? defKS.trailingPE?.raw    ?? null,
-      fwdPE:         sumD.forwardPE?.raw           ?? null,
-      revenueGrowth: finD.revenueGrowth?.raw      != null ? finD.revenueGrowth.raw * 100 : null,
-      grossMargins:  finD.grossMargins?.raw        != null ? finD.grossMargins.raw * 100  : null,
-      operatingMargins: finD.operatingMargins?.raw != null ? finD.operatingMargins.raw * 100 : null,
-      returnOnEquity: finD.returnOnEquity?.raw     != null ? finD.returnOnEquity.raw * 100  : null,
-      daysToEarnings,
-      nextEarningsTs,
-      // Analyst trend breakdown (strongBuy/buy/hold/sell counts)
-      analystBuy:    (latestTrend.strongBuy || 0) + (latestTrend.buy || 0),
-      analystHold:   latestTrend.hold || 0,
-      analystSell:   (latestTrend.sell || 0) + (latestTrend.strongSell || 0),
-      // Recent upgrades/downgrades (last 30 days)
-      recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.newGrade || '')).length,
-      recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.newGrade || '')).length,
-      recentActions: upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, from: u.fromGrade, to: u.toGrade })),
-      // Institutional ownership
-      instPctHeld:   defKS.heldPercentInstitutions?.raw != null ? defKS.heldPercentInstitutions.raw * 100 : null,
-      insiderPctHeld: defKS.heldPercentInsiders?.raw    != null ? defKS.heldPercentInsiders.raw * 100    : null,
-      instOwners:    instOwnership.slice(0, 5).map(o => ({
-        name: o.organization,
-        pct:  o.pctHeld?.raw != null ? parseFloat((o.pctHeld.raw * 100).toFixed(2)) : null,
+      symbol: sym,
+      name: price.shortName || price.longName || sym,
+      currentPrice: price.regularMarketPrice ?? null,
+      changePercent: price.regularMarketChangePercent != null ? price.regularMarketChangePercent * 100 : null,
+      marketCap: price.marketCap ?? null,
+      high52: sumD.fiftyTwoWeekHigh ?? null,
+      low52:  sumD.fiftyTwoWeekLow  ?? null,
+      beta:   defKS.beta ?? null,
+      // Analyst
+      targetMean:  finD.targetMeanPrice  ?? null,
+      targetHigh:  finD.targetHighPrice  ?? null,
+      targetLow:   finD.targetLowPrice   ?? null,
+      numAnalysts: finD.numberOfAnalystOpinions ?? 0,
+      recMean: finD.recommendationMean ?? null,
+      recKey:  finD.recommendationKey  ?? null,
+      analystBuy:  (latestTrend.strongBuy || 0) + (latestTrend.buy  || 0),
+      analystHold:  latestTrend.hold || 0,
+      analystSell: (latestTrend.sell  || 0) + (latestTrend.strongSell || 0),
+      recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.toGrade   || u.newGrade || '')).length,
+      recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.toGrade || u.newGrade || '')).length,
+      recentActions: upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, to: u.toGrade || u.newGrade })),
+      // Short interest
+      shortPct:   shortPctRaw != null ? shortPctRaw * 100 : null,
+      shortRatio: sumD.shortRatio ?? defKS.shortRatio ?? null,
+      // Fundamentals
+      peRatio:          sumD.trailingPE ?? defKS.trailingPE ?? null,
+      fwdPE:            sumD.forwardPE  ?? null,
+      revenueGrowth:    finD.revenueGrowth   != null ? finD.revenueGrowth   * 100 : null,
+      grossMargins:     finD.grossMargins     != null ? finD.grossMargins     * 100 : null,
+      operatingMargins: finD.operatingMargins != null ? finD.operatingMargins * 100 : null,
+      returnOnEquity:   finD.returnOnEquity   != null ? finD.returnOnEquity   * 100 : null,
+      // Institutional / insider
+      instPctHeld:    defKS.heldPercentInstitutions != null ? defKS.heldPercentInstitutions * 100 : null,
+      insiderPctHeld: defKS.heldPercentInsiders     != null ? defKS.heldPercentInsiders     * 100 : null,
+      instOwners: instOwn.slice(0, 5).map(o => ({ name: o.organization, pct: o.pctHeld != null ? o.pctHeld * 100 : null })),
+      insiderBuys:  insiderTx.filter(tx => /purchase|buy/i.test(tx.transactionDescription || '')).length,
+      insiderSells: insiderTx.filter(tx => /sale|sell/i.test(tx.transactionDescription    || '')).length,
+      recentInsiderTx: insiderTx.slice(0, 5).map(tx => ({
+        name: tx.filerName, role: tx.filerRelation,
+        type: tx.transactionDescription,
+        shares: tx.shares, value: tx.value,
+        date: tx.startDate instanceof Date ? tx.startDate.toISOString().slice(0, 10) : null,
       })),
+      // Earnings
+      daysToEarnings, nextEarningsTs,
+      epsHistory,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -350,73 +350,77 @@ router.get('/social/:symbol', async (req, res) => {
 
 // Technical analysis — RSI, moving averages, momentum (from Yahoo 1y chart)
 router.get('/technicals/:symbol', async (req, res) => {
-  const symbol = req.params.symbol.toUpperCase();
+  const sym = req.params.symbol.toUpperCase();
   try {
-    const YF_HEADERS_LOCAL = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      'Accept': 'application/json',
-      'Referer': 'https://finance.yahoo.com/',
-    };
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
-    const r = await fetch(url, { headers: YF_HEADERS_LOCAL, signal: AbortSignal.timeout(12000) });
-    if (!r.ok) return res.status(r.status).json({ error: `Yahoo chart ${r.status}` });
-    const data = await r.json();
-    const result = data?.chart?.result?.[0];
-    if (!result) return res.status(404).json({ error: 'No chart data' });
+    let closes = null;
 
-    const closes = result.indicators?.quote?.[0]?.close || [];
-    const valid  = closes.filter(c => c != null && c > 0);
-    if (valid.length < 20) return res.status(404).json({ error: 'Insufficient price history' });
+    // Primary: yahoo-finance2 (handles auth)
+    try {
+      const oneYearAgo = new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10);
+      const chart = await yahooFinance.chart(sym, {
+        period1: oneYearAgo, period2: new Date(), interval: '1d',
+      }, { validateResult: false });
+      const raw = (chart?.quotes || []).map(q => q.close).filter(c => c != null && c > 0);
+      if (raw.length >= 20) closes = raw;
+    } catch (_) {}
 
-    const current = valid[valid.length - 1];
-    const len = valid.length;
+    if (!closes) return res.status(404).json({ error: 'No price data' });
+
+    const current = closes[closes.length - 1];
+    const len = closes.length;
 
     // RSI-14
-    const rsi14Window = valid.slice(-15);
-    const changes = rsi14Window.map((v, i) => i === 0 ? 0 : v - rsi14Window[i-1]).slice(1);
-    const gains  = changes.map(d => d > 0 ? d : 0);
-    const losses = changes.map(d => d < 0 ? -d : 0);
-    const avgGain = gains.reduce((a,b)=>a+b,0) / 14;
-    const avgLoss = losses.reduce((a,b)=>a+b,0) / 14;
-    const rsi = avgLoss === 0 ? 100 : parseFloat((100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
+    function computeRSI(prices, period = 14) {
+      if (prices.length < period + 1) return null;
+      const recent = prices.slice(-(period + 1));
+      const changes = recent.map((v, i) => i === 0 ? 0 : v - recent[i-1]).slice(1);
+      const gains  = changes.map(d => d > 0 ? d : 0);
+      const losses = changes.map(d => d < 0 ? -d : 0);
+      const avgGain = gains.reduce((a,b)  => a+b, 0) / period;
+      const avgLoss = losses.reduce((a,b) => a+b, 0) / period;
+      if (avgLoss === 0) return 100;
+      return parseFloat((100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
+    }
+    function ma(arr, n) {
+      const s = arr.slice(-n);
+      return s.length ? parseFloat((s.reduce((a,b)=>a+b,0)/s.length).toFixed(2)) : null;
+    }
 
-    // Moving averages
-    const ma20Arr  = valid.slice(-20);
-    const ma50Arr  = valid.slice(-50);
-    const ma200Arr = len >= 200 ? valid.slice(-200) : null;
-    const ma20  = parseFloat((ma20Arr.reduce((a,b)=>a+b,0)  / ma20Arr.length).toFixed(2));
-    const ma50  = parseFloat((ma50Arr.reduce((a,b)=>a+b,0)  / ma50Arr.length).toFixed(2));
-    const ma200 = ma200Arr ? parseFloat((ma200Arr.reduce((a,b)=>a+b,0) / ma200Arr.length).toFixed(2)) : null;
+    const rsi   = computeRSI(closes);
+    const ma20  = ma(closes, 20);
+    const ma50  = ma(closes, 50);
+    const ma200 = len >= 200 ? ma(closes, 200) : null;
 
-    // Multi-period returns
-    const idx1mo  = Math.max(0, len - 22);
-    const idx3mo  = Math.max(0, len - 66);
-    const idx6mo  = Math.max(0, len - 132);
-    const ret1mo  = parseFloat(((current - valid[idx1mo])  / valid[idx1mo]  * 100).toFixed(2));
-    const ret3mo  = parseFloat(((current - valid[idx3mo])  / valid[idx3mo]  * 100).toFixed(2));
-    const ret6mo  = len >= 66  ? parseFloat(((current - valid[idx6mo])  / valid[idx6mo]  * 100).toFixed(2)) : null;
-    const ret12mo = parseFloat(((current - valid[0]) / valid[0] * 100).toFixed(2));
+    // Returns
+    const ret1mo  = len >= 22  ? ((current - closes[len-22])  / closes[len-22])  * 100 : null;
+    const ret3mo  = len >= 66  ? ((current - closes[len-66])  / closes[len-66])  * 100 : null;
+    const ret6mo  = len >= 132 ? ((current - closes[len-132]) / closes[len-132]) * 100 : null;
+    const ret12mo = len >= 250 ? ((current - closes[0])       / closes[0])       * 100 : null;
 
-    // Bollinger Bands (20-day)
-    const bbMean = ma20;
-    const variance = ma20Arr.reduce((s, v) => s + (v - bbMean) ** 2, 0) / ma20Arr.length;
-    const stdDev = Math.sqrt(variance);
-    const bbUpper = parseFloat((bbMean + 2 * stdDev).toFixed(2));
-    const bbLower = parseFloat((bbMean - 2 * stdDev).toFixed(2));
-    const bbPosition = parseFloat(((current - bbLower) / (bbUpper - bbLower) * 100).toFixed(1));
+    // Bollinger Bands (20-day, 2 std dev)
+    const bb20 = closes.slice(-20);
+    const bbMean = bb20.reduce((a,b)=>a+b,0)/20;
+    const bbStd  = Math.sqrt(bb20.reduce((s,v)=>s+(v-bbMean)**2,0)/20);
+    const bbUpper = bbMean + 2 * bbStd;
+    const bbLower = bbMean - 2 * bbStd;
+    const bbPosition = bbStd > 0 ? ((current - bbLower) / (bbUpper - bbLower)) * 100 : 50;
+    const bollingerInterpret = bbPosition > 80 ? 'overbought' : bbPosition < 20 ? 'oversold' : 'neutral';
 
     res.json({
-      symbol, current, dataPoints: valid.length,
+      symbol: sym, dataPoints: len, current,
       rsi,
       ma20, ma50, ma200,
-      aboveMa20: current > ma20,
-      aboveMa50: current > ma50,
+      aboveMa20:  ma20  != null && current > ma20,
+      aboveMa50:  ma50  != null && current > ma50,
       aboveMa200: ma200 != null && current > ma200,
-      ret1mo, ret3mo, ret6mo, ret12mo,
-      bollingerUpper: bbUpper,
-      bollingerLower: bbLower,
-      bollingerPosition: bbPosition,
-      bollingerInterpret: bbPosition > 80 ? 'overbought' : bbPosition < 20 ? 'oversold' : 'neutral',
+      ret1mo:  ret1mo  != null ? parseFloat(ret1mo.toFixed(2))  : null,
+      ret3mo:  ret3mo  != null ? parseFloat(ret3mo.toFixed(2))  : null,
+      ret6mo:  ret6mo  != null ? parseFloat(ret6mo.toFixed(2))  : null,
+      ret12mo: ret12mo != null ? parseFloat(ret12mo.toFixed(2)) : null,
+      bbUpper: parseFloat(bbUpper.toFixed(2)),
+      bbLower: parseFloat(bbLower.toFixed(2)),
+      bbPosition: parseFloat(bbPosition.toFixed(1)),
+      bollingerInterpret,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -485,49 +489,66 @@ router.get('/av-news/:symbol', async (req, res) => {
   }
 });
 
-// Alpha Vantage EARNINGS — EPS surprise history (beat/miss, avg surprise %)
-// Free tier: counts toward 25/day limit.
+// EPS surprise history — Yahoo Finance (primary) + Alpha Vantage (fallback)
+// No rate limit on Yahoo; AV fallback for legacy compatibility
 router.get('/earnings-surprise/:symbol', async (req, res) => {
-  const symbol = req.params.symbol.toUpperCase();
-  const AV_KEY = process.env.ALPHA_VANTAGE_KEY;
-  if (!AV_KEY) return res.status(503).json({ error: 'No Alpha Vantage key configured' });
+  const sym = req.params.symbol.toUpperCase();
   try {
-    const url = `https://www.alphavantage.co/query?function=EARNINGS&symbol=${symbol}&apikey=${AV_KEY}`;
-    const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
-    if (!r.ok) return res.status(r.status).json({ error: `Alpha Vantage ${r.status}` });
-    const data = await r.json();
-    if (data['Information']) return res.status(429).json({ error: 'Alpha Vantage rate limit reached (25/day free tier)' });
-    if (data['Note']) return res.status(429).json({ error: 'Alpha Vantage rate limit (5/min)' });
+    // Primary: Yahoo Finance earnings module via yahoo-finance2 (no rate limit)
+    const r = await yahooFinance.quoteSummary(sym, { modules: ['earnings', 'earningsTrend'] }, { validateResult: false });
+    const hist = r?.earnings?.earningsHistory?.history || [];
+    if (hist.length > 0) {
+      const quarters = hist.slice(-4).map(q => ({
+        date: q.quarter instanceof Date ? q.quarter.toISOString().slice(0, 7) : null,
+        epsEstimate: q.epsEstimate ?? null,
+        epsActual:   q.epsActual   ?? null,
+        surprise:    q.surprisePercent ?? null,   // decimal
+        beat:        (q.surprisePercent ?? 0) > 0,
+      }));
+      const beats = quarters.filter(q => q.beat).length;
+      const avgSurprisePct = quarters.length > 0
+        ? quarters.reduce((s, q) => s + (q.surprise ?? 0), 0) / quarters.length * 100
+        : 0;
+      const latest = quarters[quarters.length - 1];
+      return res.json({
+        symbol: sym,
+        source: 'Yahoo Finance',
+        quarters,
+        beats,
+        total: quarters.length,
+        avgSurprisePct: parseFloat(avgSurprisePct.toFixed(2)),
+        mostRecentBeat: latest?.beat ?? null,
+        mostRecentSurprisePct: latest?.surprise != null ? parseFloat((latest.surprise * 100).toFixed(2)) : null,
+      });
+    }
 
-    const quarterly = data.quarterlyEarnings || [];
-    if (quarterly.length === 0) return res.status(404).json({ error: 'No earnings data' });
+    // Fallback: Alpha Vantage EARNINGS (25 calls/day)
+    const AV_KEY = process.env.ALPHA_VANTAGE_KEY || 'IO0Y9CY7K6K36D6Z';
+    const url = `https://www.alphavantage.co/query?function=EARNINGS&symbol=${sym}&apikey=${AV_KEY}`;
+    const data = await fetch(url).then(r => r.json()).catch(() => null);
+    if (data?.Information || data?.Note) {
+      return res.status(429).json({ error: 'Alpha Vantage rate limit — try again tomorrow' });
+    }
+    const avHist = (data?.quarterlyEarnings || []).slice(0, 4);
+    if (avHist.length === 0) return res.status(404).json({ error: 'No earnings data available' });
 
-    const recent = quarterly.slice(0, 8).map(q => ({
-      date:        q.reportedDate,
-      fiscalEnd:   q.fiscalDateEnding,
-      reported:    parseFloat(q.reportedEPS),
-      estimated:   parseFloat(q.estimatedEPS),
-      surprise:    parseFloat(q.surprise),
-      surprisePct: parseFloat(q.surprisePercentage),
-      beat:        parseFloat(q.surprise) > 0,
-    })).filter(q => !isNaN(q.reported) && !isNaN(q.estimated));
-
-    if (recent.length === 0) return res.status(404).json({ error: 'No EPS history with estimates' });
-
-    const last4   = recent.slice(0, 4);
-    const beats   = last4.filter(q => q.beat).length;
-    const avgSurp = last4.reduce((s, q) => s + (q.surprisePct || 0), 0) / last4.length;
-
+    const quarters = avHist.map(q => ({
+      date:          q.fiscalDateEnding,
+      epsEstimate:   parseFloat(q.estimatedEPS) || null,
+      epsActual:     parseFloat(q.reportedEPS)  || null,
+      surprise:      parseFloat(q.surprisePercentage) / 100 || null,
+      beat:          parseFloat(q.surprisePercentage) > 0,
+    }));
+    const beats = quarters.filter(q => q.beat).length;
+    const avgSurprisePct = quarters.reduce((s, q) => s + (q.surprise ?? 0), 0) / quarters.length * 100;
+    const latest = quarters[0];
     res.json({
-      symbol,
-      recent: last4,
-      beats,
-      misses: last4.length - beats,
-      total:  last4.length,
-      avgSurprisePct: parseFloat(avgSurp.toFixed(2)),
-      mostRecentBeat:       last4[0]?.beat,
-      mostRecentSurprisePct: last4[0]?.surprisePct,
-      mostRecentDate:       last4[0]?.date,
+      symbol: sym, source: 'Alpha Vantage',
+      quarters: quarters.reverse(),
+      beats, total: quarters.length,
+      avgSurprisePct: parseFloat(avgSurprisePct.toFixed(2)),
+      mostRecentBeat: latest?.beat ?? null,
+      mostRecentSurprisePct: latest?.surprise != null ? parseFloat((latest.surprise * 100).toFixed(2)) : null,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

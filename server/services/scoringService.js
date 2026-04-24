@@ -40,6 +40,7 @@ import Watchlist       from '../models/Watchlist.js';
 import Score           from '../models/Score.js';
 import Catalyst        from '../models/Catalyst.js';
 import ScoreSnapshot   from '../models/ScoreSnapshot.js';
+import yahooFinance from 'yahoo-finance2';
 
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
 const EDGAR_UA    = { 'User-Agent': 'Torii Investment Platform whesp24@gmail.com' };
@@ -105,93 +106,118 @@ async function safeText(url, opts = {}) {
   } catch (_) { return null; }
 }
 
-// ─── 1. Yahoo Finance quoteSummary ────────────────────────────────────────────
-// Single call gets: quote, analyst targets, short interest, 52w, earnings date
+// ─── 1. Yahoo Finance quoteSummary via yahoo-finance2 ─────────────────────────
+// Uses npm package which handles cookies/crumbs — no 429s from datacenter IPs
+// Single call gets ALL needed data: price, analyst, short interest, earnings, EPS, fundamentals
 async function fetchYahooSummary(symbol) {
-  const modules = encodeURIComponent(
-    'summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory,institutionOwnership'
-  );
-  const url  = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
-  const data = await yfFetch(url);
-  const res  = data?.quoteSummary?.result?.[0];
-  if (!res) return null;
+  try {
+    const modules = [
+      'price', 'summaryDetail', 'financialData', 'defaultKeyStatistics',
+      'recommendationTrend', 'upgradeDowngradeHistory', 'institutionOwnership',
+      'calendarEvents', 'earnings', 'insiderTransactions',
+    ];
+    const r = await yahooFinance.quoteSummary(symbol, { modules }, { validateResult: false });
+    if (!r) return null;
 
-  const price  = res.price               || {};
-  const sumD   = res.summaryDetail       || {};
-  const finD   = res.financialData       || {};
-  const defKS  = res.defaultKeyStatistics || {};
-  const cal    = res.calendarEvents      || {};
+    const price     = r.price               || {};
+    const sumD      = r.summaryDetail       || {};
+    const finD      = r.financialData       || {};
+    const defKS     = r.defaultKeyStatistics || {};
+    const cal       = r.calendarEvents      || {};
+    const earn      = r.earnings            || {};
+    const recTrend  = r.recommendationTrend?.trend || [];
+    const upgHist   = r.upgradeDowngradeHistory?.history || [];
+    const instOwn   = r.institutionOwnership?.ownershipList || [];
+    const insiderTx = r.insiderTransactions?.transactions || [];
 
-  const currentPrice  = price.regularMarketPrice?.raw ?? sumD.previousClose?.raw ?? null;
-  const prevClose     = price.regularMarketPreviousClose?.raw ?? sumD.previousClose?.raw ?? null;
-  const changePercent = price.regularMarketChangePercent?.raw != null
-    ? price.regularMarketChangePercent.raw * 100
-    : (currentPrice && prevClose && prevClose > 0
-      ? ((currentPrice - prevClose) / prevClose) * 100
-      : null);
+    const now = Date.now();
+    const currentPrice  = price.regularMarketPrice ?? sumD.previousClose ?? null;
+    const prevClose     = price.regularMarketPreviousClose ?? sumD.previousClose ?? currentPrice;
+    const changePercent = price.regularMarketChangePercent != null
+      ? price.regularMarketChangePercent * 100
+      : (currentPrice && prevClose && prevClose > 0 ? ((currentPrice - prevClose) / prevClose) * 100 : null);
 
-  // Next earnings date (array of timestamps, take the nearest future one)
-  const earningsDates = cal.earnings?.earningsDate || [];
-  const now = Date.now();
-  const nextEarningsTs = earningsDates
-    .map(d => d?.raw ? d.raw * 1000 : null)
-    .filter(ts => ts && ts > now)
-    .sort((a, b) => a - b)[0] || null;
-  const daysToEarnings = nextEarningsTs
-    ? Math.round((nextEarningsTs - now) / 86400000)
-    : null;
+    // Earnings dates — yahoo-finance2 returns Date objects directly
+    const earningsDates = cal.earnings?.earningsDate || [];
+    const futureTs = earningsDates
+      .map(d => d instanceof Date ? d.getTime() : (d?.raw ? d.raw * 1000 : null))
+      .filter(ts => ts && ts > now);
+    const nextEarningsTs = futureTs.sort((a, b) => a - b)[0] || null;
+    const daysToEarnings = nextEarningsTs ? Math.round((nextEarningsTs - now) / 86400000) : null;
 
-  // Analyst trend breakdown + recent upgrades/downgrades
-  const recTrend = res.recommendationTrend?.trend || [];
-  const latestTrend = recTrend[0] || {};
-  const upgrades = res.upgradeDowngradeHistory?.history || [];
-  const upgrades30d = upgrades.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
+    // Analyst trend
+    const latestTrend = recTrend[0] || {};
+    const upgrades30d = upgHist.filter(u =>
+      u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000
+    );
 
-  // Institutional ownership — check for increasing/decreasing positions
-  const instOwnership = res.institutionOwnership?.ownershipList || [];
-  const instPctHeld   = defKS.heldPercentInstitutions?.raw != null
-    ? defKS.heldPercentInstitutions.raw * 100 : null;
-  const insiderPctHeld = defKS.heldPercentInsiders?.raw != null
-    ? defKS.heldPercentInsiders.raw * 100 : null;
+    // EPS history from earnings module (replaces Alpha Vantage)
+    // yahoo-finance2 returns earningsHistory.history array
+    const rawEpsHist = earn.earningsHistory?.history || [];
+    const epsHistory = rawEpsHist.slice(-4).map(q => ({
+      epsActual:   q.epsActual   ?? null,
+      epsEstimate: q.epsEstimate ?? null,
+      surprise:    q.surprisePercent ?? null,   // decimal, e.g. 0.05 = 5%
+      date: q.quarter instanceof Date
+        ? q.quarter.toISOString().slice(0, 7)
+        : (q.date instanceof Date ? q.date.toISOString().slice(0, 7) : null),
+    })).filter(q => q.epsActual != null && q.epsEstimate != null);
 
-  return {
-    currentPrice, changePercent,
-    high52:       sumD.fiftyTwoWeekHigh?.raw    ?? defKS.fiftyTwoWeekHigh?.raw    ?? null,
-    low52:        sumD.fiftyTwoWeekLow?.raw     ?? defKS.fiftyTwoWeekLow?.raw     ?? null,
-    targetMean:   finD.targetMeanPrice?.raw     ?? null,
-    targetHigh:   finD.targetHighPrice?.raw     ?? null,
-    targetLow:    finD.targetLowPrice?.raw      ?? null,
-    numAnalysts:  finD.numberOfAnalystOpinions?.raw ?? 0,
-    shortPct:     defKS.shortPercentOfFloat?.raw != null
-      ? defKS.shortPercentOfFloat.raw * 100 : null,
-    shortRatio:   defKS.shortRatio?.raw         ?? null,
-    recMean:      finD.recommendationMean?.raw  ?? null,
-    recKey:       finD.recommendationKey        ?? null,
-    name:         price.shortName || price.longName || symbol,
-    marketCap:    price.marketCap?.raw          ?? null,
-    beta:         defKS.beta?.raw               ?? null,
-    // P/E and growth metrics for context
-    peRatio:      sumD.trailingPE?.raw          ?? defKS.trailingPE?.raw ?? null,
-    fwdPE:        sumD.forwardPE?.raw           ?? null,
-    revenueGrowth: finD.revenueGrowth?.raw     != null ? finD.revenueGrowth.raw * 100 : null,
-    grossMargins: finD.grossMargins?.raw        != null ? finD.grossMargins.raw * 100 : null,
-    operatingMargins: finD.operatingMargins?.raw != null ? finD.operatingMargins.raw * 100 : null,
-    returnOnEquity: finD.returnOnEquity?.raw    != null ? finD.returnOnEquity.raw * 100 : null,
-    daysToEarnings,
-    nextEarningsTs,
-    // Analyst trend breakdown (strongBuy/buy/hold/sell counts)
-    analystBuy:    (latestTrend.strongBuy || 0) + (latestTrend.buy || 0),
-    analystHold:   latestTrend.hold || 0,
-    analystSell:   (latestTrend.sell || 0) + (latestTrend.strongSell || 0),
-    // Recent upgrades/downgrades (last 30 days)
-    recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.newGrade || '')).length,
-    recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.newGrade || '')).length,
-    recentActions:    upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, to: u.newGrade })),
-    // Institutional ownership
-    instPctHeld,
-    insiderPctHeld,
-    instOwners: instOwnership.slice(0, 5).map(o => ({ name: o.organization, pct: o.pctHeld?.raw != null ? o.pctHeld.raw * 100 : null })),
-  };
+    // Insider transactions from Yahoo (backup to EDGAR)
+    const recentInsiderBuys  = insiderTx.filter(tx =>
+      /purchase|buy/i.test(tx.transactionDescription || '')
+    ).length;
+    const recentInsiderSells = insiderTx.filter(tx =>
+      /sale|sell/i.test(tx.transactionDescription || '')
+    ).length;
+
+    // Short % — yahoo-finance2 returns as decimal (0.05 = 5%)
+    const shortPctRaw = sumD.shortPercentOfFloat ?? defKS.shortPercentOfFloat ?? null;
+
+    return {
+      currentPrice, changePercent,
+      high52:      sumD.fiftyTwoWeekHigh ?? defKS.fiftyTwoWeekHigh ?? null,
+      low52:       sumD.fiftyTwoWeekLow  ?? defKS.fiftyTwoWeekLow  ?? null,
+      targetMean:  finD.targetMeanPrice  ?? null,
+      targetHigh:  finD.targetHighPrice  ?? null,
+      targetLow:   finD.targetLowPrice   ?? null,
+      numAnalysts: finD.numberOfAnalystOpinions ?? 0,
+      shortPct:    shortPctRaw != null ? shortPctRaw * 100 : null,
+      shortRatio:  sumD.shortRatio ?? defKS.shortRatio ?? null,
+      recMean:     finD.recommendationMean ?? null,
+      recKey:      finD.recommendationKey  ?? null,
+      name:        price.shortName || price.longName || symbol,
+      marketCap:   price.marketCap ?? null,
+      beta:        defKS.beta ?? null,
+      peRatio:     sumD.trailingPE  ?? defKS.trailingPE  ?? null,
+      fwdPE:       sumD.forwardPE   ?? null,
+      revenueGrowth:     finD.revenueGrowth    != null ? finD.revenueGrowth    * 100 : null,
+      grossMargins:      finD.grossMargins      != null ? finD.grossMargins      * 100 : null,
+      operatingMargins:  finD.operatingMargins  != null ? finD.operatingMargins  * 100 : null,
+      returnOnEquity:    finD.returnOnEquity    != null ? finD.returnOnEquity    * 100 : null,
+      daysToEarnings, nextEarningsTs,
+      analystBuy:  (latestTrend.strongBuy || 0) + (latestTrend.buy  || 0),
+      analystHold:  latestTrend.hold || 0,
+      analystSell: (latestTrend.sell  || 0) + (latestTrend.strongSell || 0),
+      recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.toGrade   || u.newGrade || '')).length,
+      recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.toGrade || u.newGrade || '')).length,
+      recentActions:    upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, to: u.toGrade || u.newGrade })),
+      instPctHeld:   defKS.heldPercentInstitutions != null ? defKS.heldPercentInstitutions * 100 : null,
+      insiderPctHeld: defKS.heldPercentInsiders    != null ? defKS.heldPercentInsiders     * 100 : null,
+      instOwners: instOwn.slice(0, 5).map(o => ({
+        name: o.organization,
+        pct: o.pctHeld != null ? o.pctHeld * 100 : null,
+      })),
+      // EPS history (from Yahoo earnings module — no AV key needed)
+      epsHistory,
+      // Insider net activity (from Yahoo insiderTransactions module — backup to EDGAR)
+      recentInsiderBuys,
+      recentInsiderSells,
+    };
+  } catch (err) {
+    console.warn(`yahoo-finance2 quoteSummary failed for ${symbol}: ${err.message}`);
+    return null;
+  }
 }
 
 // ─── 2. Price momentum + Technical Setup ─────────────────────────────────────
@@ -218,64 +244,78 @@ function movingAvg(prices, period) {
 }
 
 async function fetchPriceMomentum(symbol) {
-  // 1y range → enough for MA200 (200 trading days ≈ ~252 calendar days)
-  const url  = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
-  const data = await yfFetch(url);
-  const result = data?.chart?.result?.[0];
-  if (!result) return null;
+  let closes = null;
 
-  const closes = result.indicators?.quote?.[0]?.close || [];
-  const valid  = closes.filter(c => c != null && c > 0);
-  if (valid.length < 20) return null;
+  // Primary: yahoo-finance2.chart (handles auth internally)
+  try {
+    const oneYearAgo = new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10);
+    const chart = await yahooFinance.chart(symbol, {
+      period1:  oneYearAgo,
+      period2:  new Date(),
+      interval: '1d',
+    }, { validateResult: false });
+    const quotes = chart?.quotes || [];
+    const raw = quotes.map(q => q.close).filter(c => c != null && c > 0);
+    if (raw.length >= 20) closes = raw;
+  } catch (_) {}
 
-  const current = valid[valid.length - 1];
-  const len     = valid.length;
+  // Fallback: raw Yahoo Finance chart API
+  if (!closes) {
+    const url  = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
+    const data = await yfFetch(url);
+    const result = data?.chart?.result?.[0];
+    if (result) {
+      const raw = (result.indicators?.quote?.[0]?.close || []).filter(c => c != null && c > 0);
+      if (raw.length >= 20) closes = raw;
+    }
+  }
 
-  // Multi-period returns (skip most recent day for momentum — avoids 1-day reversal)
+  if (!closes || closes.length < 20) return null;
+
+  const current = closes[closes.length - 1];
+  const len     = closes.length;
+
   const idx1mo  = Math.max(0, len - 22);
   const idx3mo  = Math.max(0, len - 66);
   const idx6mo  = Math.max(0, len - 132);
   const idx12mo = 0;
-  const ret1mo  = ((current - valid[idx1mo])  / valid[idx1mo])  * 100;
-  const ret3mo  = ((current - valid[idx3mo])  / valid[idx3mo])  * 100;
-  const ret6mo  = len >= 66  ? ((current - valid[idx6mo])  / valid[idx6mo])  * 100 : null;
-  const ret12mo = len >= 200 ? ((current - valid[idx12mo]) / valid[idx12mo]) * 100 : null;
+  const ret1mo  = ((current - closes[idx1mo])  / closes[idx1mo])  * 100;
+  const ret3mo  = ((current - closes[idx3mo])  / closes[idx3mo])  * 100;
+  const ret6mo  = len >= 66  ? ((current - closes[idx6mo])  / closes[idx6mo])  * 100 : null;
+  const ret12mo = len >= 200 ? ((current - closes[idx12mo]) / closes[idx12mo]) * 100 : null;
 
-  // RSI-14 (most recent 15 closes)
-  const rsi = computeRSI(valid, 14);
+  const rsi   = computeRSI(closes, 14);
+  const ma50  = movingAvg(closes, 50);
+  const ma200 = len >= 200 ? movingAvg(closes, 200) : null;
 
-  // Moving averages
-  const ma50  = movingAvg(valid, 50);
-  const ma200 = len >= 200 ? movingAvg(valid, 200) : null;
-
-  // Golden/death cross: MA50 just crossed above/below MA200
-  const prevMa50  = len >= 51  ? movingAvg(valid.slice(0, -1), 50)  : null;
-  const prevMa200 = len >= 201 ? movingAvg(valid.slice(0, -1), 200) : null;
+  const prevMa50  = len >= 51  ? movingAvg(closes.slice(0, -1), 50)  : null;
+  const prevMa200 = len >= 201 ? movingAvg(closes.slice(0, -1), 200) : null;
   const goldenCross = prevMa50 && prevMa200 && ma200 && prevMa50 <= prevMa200 && ma50 > ma200;
   const deathCross  = prevMa50 && prevMa200 && ma200 && prevMa50 >= prevMa200 && ma50 < ma200;
 
   return {
-    ret1mo: parseFloat(ret1mo.toFixed(2)),
-    ret3mo: parseFloat(ret3mo.toFixed(2)),
-    ret6mo: ret6mo != null ? parseFloat(ret6mo.toFixed(2)) : null,
+    ret1mo:  parseFloat(ret1mo.toFixed(2)),
+    ret3mo:  parseFloat(ret3mo.toFixed(2)),
+    ret6mo:  ret6mo  != null ? parseFloat(ret6mo.toFixed(2))  : null,
     ret12mo: ret12mo != null ? parseFloat(ret12mo.toFixed(2)) : null,
     current,
     rsi,
-    ma50:  ma50  != null ? parseFloat(ma50.toFixed(2))  : null,
-    ma200: ma200 != null ? parseFloat(ma200.toFixed(2)) : null,
-    aboveMa50:   ma50  != null && current > ma50,
-    aboveMa200:  ma200 != null && current > ma200,
+    ma50:       ma50  != null ? parseFloat(ma50.toFixed(2))  : null,
+    ma200:      ma200 != null ? parseFloat(ma200.toFixed(2)) : null,
+    aboveMa50:  ma50  != null && current > ma50,
+    aboveMa200: ma200 != null && current > ma200,
     goldenCross: !!goldenCross,
     deathCross:  !!deathCross,
-    dataPoints: valid.length,
+    dataPoints:  closes.length,
   };
 }
 
 // ─── 3. Options flow — Yahoo Finance options chain → put/call ratio ───────────
 // Zhu (2012): elevated call volume predicts positive returns; high P/C = bearish
 async function fetchOptionsFlow(symbol) {
-  // Skip indices and ETFs that don't have meaningful options flow
+  // Skip true indices (no options traded on index itself), but keep ETFs like SPY/QQQ
   if (symbol.startsWith('^')) return null;
+  // Note: macro ETFs (SPY, QQQ, GLD etc.) DO have meaningful options — SPY P/C ratio is a major market signal
   const url  = `https://query2.finance.yahoo.com/v7/finance/options/${symbol}`;
   const data = await yfFetch(url);
   const chain = data?.optionChain?.result?.[0];
@@ -487,7 +527,7 @@ export async function scoreTicker(symbol, { congData } = {}) {
       Watchlist.findOne({ symbol: t }).lean().catch(() => null),
       fetchYahooSummary(t),
       fetchPriceMomentum(t),
-      isMacro ? Promise.resolve(null) : fetchOptionsFlow(t),
+      fetchOptionsFlow(t),   // ETFs like SPY/QQQ have major options signal — don't skip
       isMacro ? Promise.resolve(null) : fetchNewsSentiment(t),
       isMacro ? Promise.resolve(0)    : getInsiderCount(t),
       Catalyst.find({ ticker: t, date: { $gte: new Date().toISOString().slice(0, 10) } }).lean().catch(() => []),
@@ -669,19 +709,31 @@ export async function scoreTicker(symbol, { congData } = {}) {
     });
   }
 
-  // ── 7. Insider Activity — SEC EDGAR Form 4 ───────────────────────────────────
+  // ── 7. Insider Activity — SEC EDGAR Form 4 + Yahoo fallback ────────────────────
   // Seyhun (1986): insider purchases generate significant alpha over 1-6 months
-  if (insiderCount > 0) {
-    const delta = insiderCount >= 10 ? +8 : insiderCount >= 5 ? +5 : insiderCount >= 2 ? +3 : +1;
+  const yahooBuys  = yfSummary?.recentInsiderBuys  || 0;
+  const yahooSells = yfSummary?.recentInsiderSells || 0;
+  const totalInsiderTx = yahooBuys + yahooSells;
+
+  if (insiderCount > 0 || totalInsiderTx > 0) {
+    // Prefer EDGAR count (authoritative) but supplement with Yahoo data
+    const netBuys  = insiderCount > 0 ? insiderCount : yahooBuys;
+    const netSells = yahooSells;
+    const netActivity = netBuys - netSells;
+    const delta = netActivity > 3 ? +12 : netActivity > 1 ? +8 : netActivity === 1 ? +5 :
+                  netActivity === 0 && totalInsiderTx > 0 ? -2 :
+                  netActivity < -3 ? -12 : netActivity < -1 ? -8 : -5;
     total += delta;
+    const src = insiderCount > 0 ? 'SEC EDGAR' : 'Yahoo Finance';
     gathered.push({
       label: 'Insider Activity',
-      value: `${insiderCount} Form 4s filed (90d) — open Conviction for buy/sell detail`,
-      direction: 'bullish', delta, source: 'SEC EDGAR',
+      value: `${netBuys} buy / ${netSells} sell transactions (90d)`,
+      direction: netActivity > 0 ? 'bullish' : netActivity < 0 ? 'bearish' : 'neutral',
+      delta, source: src,
     });
   } else {
     gathered.push({
-      label: 'Insider Activity', value: 'No Form 4s in 90d',
+      label: 'Insider Activity', value: 'No insider transactions in 90d',
       direction: 'neutral', delta: 0, source: 'SEC EDGAR', noData: true,
     });
   }
@@ -741,7 +793,45 @@ export async function scoreTicker(symbol, { congData } = {}) {
     });
   }
 
-  // ── 10. Institutional Ownership — Yahoo Finance defaultKeyStatistics ─────────────
+  // ── 10. EPS Surprise — Yahoo earnings module (primary) + Alpha Vantage (fallback) ───
+  // Earnings beats/misses are strong short-term price predictors
+  const epsHist = yfSummary?.epsHistory || [];
+  if (epsHist.length >= 2) {
+    const beats = epsHist.filter(q => (q.surprise ?? 0) > 0).length;
+    const misses = epsHist.length - beats;
+    const avgSurprise = epsHist.reduce((s, q) => s + (q.surprise ?? 0), 0) / epsHist.length;
+    const latest = epsHist[epsHist.length - 1];
+    const latestBeat = latest?.surprise != null && latest.surprise > 0;
+
+    let delta = 0;
+    if (beats === epsHist.length)        delta = +10;  // 4/4 beats
+    else if (beats >= epsHist.length * 0.75) delta = +6;  // 3/4 beats
+    else if (beats >= epsHist.length * 0.5)  delta = +2;  // 2/4 beats
+    else if (misses === epsHist.length)       delta = -8;  // all misses
+    else                                      delta = -3;
+
+    // Latest quarter matters most
+    if (latestBeat && delta >= 0) delta = Math.min(delta + 3, 12);
+    if (!latestBeat && delta <= 0) delta = Math.max(delta - 2, -10);
+
+    total += delta;
+    const beatStr = `${beats}/${epsHist.length} beats`;
+    const surpStr = `avg ${avgSurprise > 0 ? '+' : ''}${(avgSurprise * 100).toFixed(1)}% surprise`;
+    const latestStr = latest?.date ? ` · latest: ${latestBeat ? 'beat' : 'miss'} (${((latest.surprise ?? 0) * 100).toFixed(1)}%)` : '';
+    gathered.push({
+      label: 'EPS Surprise',
+      value: `${beatStr} · ${surpStr}${latestStr}`,
+      direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
+      delta, source: 'Yahoo Finance',
+    });
+  } else {
+    gathered.push({
+      label: 'EPS Surprise', value: 'No earnings data available',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+    });
+  }
+
+  // ── 11. Institutional Ownership — Yahoo Finance defaultKeyStatistics ─────────────
   // High institutional ownership with stable/growing position = smart money signal
   if (!isMacro && yfSummary?.instPctHeld != null) {
     const inst    = yfSummary.instPctHeld;
