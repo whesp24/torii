@@ -15,6 +15,7 @@ import { initializeTasks } from './services/taskService.js';
 import { initializeWatchlist } from './services/watchlistService.js';
 import { checkAllAlerts } from './services/alertService.js';
 import { sendDailyDigest } from './services/emailService.js';
+import { seedUniverseIfEmpty, runUniverseScoring } from './services/universeService.js';
 import stockRoutes from './routes/stocks.js';
 import newsRoutes from './routes/news.js';
 import tweetRoutes from './routes/tweets.js';
@@ -45,6 +46,7 @@ import shortRoutes from './routes/shortinterest.js';
 import lpRoutes from './routes/lps.js';
 import diligenceRoutes from './routes/diligence.js';
 import scoresRoutes from './routes/scores.js';
+import screenerRoutes from './routes/screener.js';
 
 dotenv.config();
 
@@ -93,6 +95,7 @@ app.use('/api/short', shortRoutes);
 app.use('/api/lps', lpRoutes);
 app.use('/api/diligence', diligenceRoutes);
 app.use('/api/scores', scoresRoutes);
+app.use('/api/screener', screenerRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -107,6 +110,7 @@ app.get('*', (req, res) => {
 // Initialize data on startup — staggered to avoid Yahoo 429s on cold start
 initializeTasks().catch(err => console.error('Error initializing tasks:', err));
 initializeWatchlist().catch(err => console.error('Error initializing watchlist:', err));
+seedUniverseIfEmpty().catch(err => console.error('Error seeding universe:', err));
 
 // KPIs: cache-aware, only hits Yahoo for stale data
 setTimeout(() => {
@@ -166,6 +170,12 @@ cron.schedule('0 12 * * 1-5', () => {
 cron.schedule('0 */6 * * 1-5', () => {
   console.log('Running batch conviction scoring...');
   scoreAllWatchlist().catch(err => console.error('Scoring error:', err));
+});
+
+// Nightly universal screener scoring at 2am ET (7:00 UTC)
+cron.schedule('0 2 * * *', () => {
+  console.log('Running nightly universe screener scoring...');
+  runUniverseScoring().catch(err => console.error('Universe scoring error:', err));
 });
 
 app.listen(PORT, () => {

@@ -7475,9 +7475,299 @@ function DiligencePage() {
 // ─── CONVICTION SCORE DASHBOARD ───────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SCREENER TAB — universal stock screener with saved filters
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ScreenerTab() {
+  const [metadata, setMetadata] = React.useState({ sectors: [], exchanges: [], signalLabels: [] });
+  const [results, setResults] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [totalResults, setTotalResults] = React.useState(0);
+  const [savedScreens, setSavedScreens] = React.useState([]);
+
+  // Filter state
+  const [filters, setFilters] = React.useState({
+    sector: '', exchange: '', strategy: '', minScore: 45, maxScore: 100,
+    minMarketCap: null, maxMarketCap: null, minPE: null, maxPE: null,
+    hasEarnings: false, minRet3mo: null, maxShortPct: null,
+    signalLabel: '', signalDir: 'all'
+  });
+  const [sortBy, setSortBy] = React.useState('score');
+  const [sortDir, setSortDir] = React.useState('desc');
+  const [savingScreen, setSavingScreen] = React.useState(false);
+  const [screenName, setScreenName] = React.useState('');
+
+  // Load metadata and saved screens on mount
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const [metaRes, screensRes] = await Promise.all([
+          fetch(`${API_URL}/screener/metadata`).then(r => r.json()),
+          fetch(`${API_URL}/screener/screens`).then(r => r.json()),
+        ]);
+        setMetadata(metaRes);
+        setSavedScreens(Array.isArray(screensRes) ? screensRes : []);
+      } catch (e) { console.error(e); }
+    })();
+  }, []);
+
+  async function runSearch() {
+    setLoading(true);
+    try {
+      const searchBody = {
+        ...filters,
+        sortBy, sortDir,
+        limit: 100, offset: 0,
+      };
+      const res = await fetch(`${API_URL}/screener/search`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(searchBody)
+      }).then(r => r.json());
+      setResults(res.results || []);
+      setTotalResults(res.total || 0);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }
+
+  async function addToWatchlist(symbol) {
+    try {
+      await fetch(`${API_URL}/screener/watchlist`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol })
+      });
+      setResults(results.map(r => r.symbol === symbol ? { ...r, inWatchlist: true } : r));
+    } catch (e) { console.error(e); }
+  }
+
+  async function saveScreen() {
+    if (!screenName) return;
+    try {
+      const newScreen = await fetch(`${API_URL}/screener/screens`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: screenName, filters, sortBy, sortDir })
+      }).then(r => r.json());
+      setSavedScreens([newScreen, ...savedScreens]);
+      setScreenName('');
+    } catch (e) { console.error(e); }
+  }
+
+  async function deleteScreen(id) {
+    try {
+      await fetch(`${API_URL}/screener/screens/${id}`, { method: 'DELETE' });
+      setSavedScreens(savedScreens.filter(s => s._id !== id));
+    } catch (e) { console.error(e); }
+  }
+
+  const fmtPrice = (p) => p == null ? '—' : p >= 1000 ? `$${(p/1000).toFixed(1)}k` : `$${p.toFixed(2)}`;
+  const fmtMkt = (m) => m == null ? '—' : m > 1000 ? `$${(m/1000).toFixed(0)}B` : `$${m.toFixed(0)}M`;
+  const fmtChg = (c) => c == null ? '' : `${c > 0 ? '+' : ''}${c.toFixed(2)}%`;
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap:14, height:'100%' }}>
+      {/* Left sidebar: filters */}
+      <div style={{ overflowY:'auto', paddingRight:8 }}>
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Sector</label>
+          <select value={filters.sector} onChange={e => setFilters({...filters, sector: e.target.value})}
+            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:6, border:'1px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--fg)', fontSize:12, cursor:'pointer' }}>
+            <option value="">— All —</option>
+            {metadata.sectors.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Exchange</label>
+          <select value={filters.exchange} onChange={e => setFilters({...filters, exchange: e.target.value})}
+            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:6, border:'1px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--fg)', fontSize:12, cursor:'pointer' }}>
+            <option value="">— All —</option>
+            {metadata.exchanges.map(e => <option key={e} value={e}>{e}</option>)}
+          </select>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Strategy</label>
+          <select value={filters.strategy} onChange={e => setFilters({...filters, strategy: e.target.value})}
+            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:6, border:'1px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--fg)', fontSize:12, cursor:'pointer' }}>
+            <option value="">— All —</option>
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+            <option value="neutral">Neutral</option>
+          </select>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Score Range</label>
+          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
+            <input type="number" min={0} max={100} value={filters.minScore}
+              onChange={e => setFilters({...filters, minScore: +e.target.value})}
+              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11 }} placeholder="Min" />
+            <span style={{ color:'var(--fg3)' }}>—</span>
+            <input type="number" min={0} max={100} value={filters.maxScore}
+              onChange={e => setFilters({...filters, maxScore: +e.target.value})}
+              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11 }} placeholder="Max" />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Market Cap ($M)</label>
+          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
+            <input type="number" value={filters.minMarketCap || ''}
+              onChange={e => setFilters({...filters, minMarketCap: e.target.value ? +e.target.value : null})}
+              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11 }} placeholder="Min" />
+            <span style={{ color:'var(--fg3)' }}>—</span>
+            <input type="number" value={filters.maxMarketCap || ''}
+              onChange={e => setFilters({...filters, maxMarketCap: e.target.value ? +e.target.value : null})}
+              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11 }} placeholder="Max" />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>P/E Range</label>
+          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
+            <input type="number" value={filters.minPE || ''}
+              onChange={e => setFilters({...filters, minPE: e.target.value ? +e.target.value : null})}
+              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11 }} placeholder="Min" />
+            <span style={{ color:'var(--fg3)' }}>—</span>
+            <input type="number" value={filters.maxPE || ''}
+              onChange={e => setFilters({...filters, maxPE: e.target.value ? +e.target.value : null})}
+              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11 }} placeholder="Max" />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>3-Month Return (%)</label>
+          <input type="number" value={filters.minRet3mo || ''}
+            onChange={e => setFilters({...filters, minRet3mo: e.target.value ? +e.target.value : null})}
+            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:4, border:'1px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--fg)', fontSize:11 }} placeholder="Min return" />
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Max Short Interest (%)</label>
+          <input type="number" value={filters.maxShortPct || ''}
+            onChange={e => setFilters({...filters, maxShortPct: e.target.value ? +e.target.value : null})}
+            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:4, border:'1px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--fg)', fontSize:11 }} placeholder="Max %" />
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, cursor:'pointer' }}>
+            <input type="checkbox" checked={filters.hasEarnings}
+              onChange={e => setFilters({...filters, hasEarnings: e.target.checked})}
+              style={{ cursor:'pointer' }} />
+            <span style={{ color:'var(--fg2)' }}>Earnings in 60d</span>
+          </label>
+        </div>
+
+        <button onClick={runSearch} disabled={loading}
+          style={{ width:'100%', padding:'10px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
+            fontSize:12, fontWeight:700, cursor:loading?'not-allowed':'pointer', opacity:loading?0.7:1 }}>
+          {loading ? '🔍 Searching…' : '▶ Run Search'}
+        </button>
+
+        {/* Saved screens section */}
+        {savedScreens.length > 0 && (
+          <div style={{ marginTop:20, paddingTop:16, borderTop:'1px solid var(--bdr)' }}>
+            <div style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', marginBottom:10, letterSpacing:'0.06em' }}>Saved Screens</div>
+            {savedScreens.map(screen => (
+              <div key={screen._id} style={{ padding:8, background:'var(--bg)', borderRadius:6, marginBottom:6, fontSize:11 }}>
+                <div style={{ fontWeight:600, color:'var(--fg)', marginBottom:4 }}>{screen.name}</div>
+                <div style={{ color:'var(--fg3)', fontSize:10, marginBottom:6 }}>{screen.lastResultCount || 0} results</div>
+                <div style={{ display:'flex', gap:6 }}>
+                  <button onClick={() => { setFilters(screen.filters); setSortBy(screen.sortBy); setSortDir(screen.sortDir); }}
+                    style={{ flex:1, padding:'4px', background:'var(--bdr)', border:'none', borderRadius:4, color:'var(--fg2)',
+                      fontSize:10, cursor:'pointer' }}>Load</button>
+                  <button onClick={() => deleteScreen(screen._id)}
+                    style={{ flex:1, padding:'4px', background:'var(--red-loss)', border:'none', borderRadius:4, color:'#fff',
+                      fontSize:10, cursor:'pointer' }}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Save current filters */}
+        {!savingScreen ? (
+          <button onClick={() => setSavingScreen(true)}
+            style={{ width:'100%', marginTop:12, padding:'8px', background:'var(--bdr)', border:'none', borderRadius:6,
+              color:'var(--fg2)', fontSize:11, cursor:'pointer' }}>💾 Save Filters</button>
+        ) : (
+          <div style={{ marginTop:12, padding:8, background:'var(--bg)', borderRadius:6 }}>
+            <input type="text" value={screenName} onChange={e => setScreenName(e.target.value)}
+              placeholder="Screen name…"
+              style={{ width:'100%', padding:'6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
+                color:'var(--fg)', fontSize:11, marginBottom:6 }} />
+            <div style={{ display:'flex', gap:6 }}>
+              <button onClick={saveScreen}
+                style={{ flex:1, padding:'6px', background:'var(--green)', border:'none', borderRadius:4, color:'#fff',
+                  fontSize:10, cursor:'pointer', fontWeight:600 }}>Save</button>
+              <button onClick={() => { setSavingScreen(false); setScreenName(''); }}
+                style={{ flex:1, padding:'6px', background:'var(--bdr)', border:'none', borderRadius:4, color:'var(--fg2)',
+                  fontSize:10, cursor:'pointer' }}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right: results table */}
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        <div style={{ fontSize:13, color:'var(--fg3)', fontWeight:600 }}>
+          {totalResults} results {sortBy && `· sorted by ${sortBy}`}
+        </div>
+        <div className="card" style={{ padding:0, overflow:'hidden', flex:1, display:'flex', flexDirection:'column' }}>
+          {/* Table header */}
+          <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 100px 90px 90px 100px 60px',
+            padding:'8px 14px', borderBottom:'1px solid var(--bdr)', background:'var(--bg)', sticky:'top', top:0 }}>
+            {['Ticker', 'Name', 'Exchange', 'Score', 'P/E', 'Mkt Cap', 'Action'].map(h => (
+              <span key={h} style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{h}</span>
+            ))}
+          </div>
+
+          {loading ? (
+            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading…</div>
+          ) : results.length === 0 ? (
+            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>
+              {totalResults === 0 ? 'Click Run Search to find stocks' : 'No results match your filters'}
+            </div>
+          ) : (
+            <div style={{ overflowY:'auto', flex:1 }}>
+              {results.map(r => (
+                <div key={r.symbol} style={{ display:'grid', gridTemplateColumns:'90px 1fr 100px 90px 90px 100px 60px',
+                  padding:'9px 14px', borderBottom:'1px solid var(--bdr)', alignItems:'center', fontSize:11 }}>
+                  <div style={{ fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }}>{r.symbol}</div>
+                  <div style={{ color:'var(--fg2)', fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</div>
+                  <div style={{ fontSize:10, color:'var(--fg3)' }}>{r.exchange}</div>
+                  <div style={{ fontFamily:'var(--font-mono)', fontWeight:700, color: r.score>=70?'var(--green)':r.score>=45?'#f59e0b':'var(--red)' }}>{r.score}</div>
+                  <div style={{ fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{r.peRatio ? r.peRatio.toFixed(1) : '—'}</div>
+                  <div style={{ fontFamily:'var(--font-mono)', color:'var(--fg3)', fontSize:10 }}>{fmtMkt(r.marketCap)}</div>
+                  <button onClick={() => addToWatchlist(r.symbol)} disabled={r.inWatchlist}
+                    style={{ padding:'4px 8px', background: r.inWatchlist ? 'var(--green)' : 'var(--bdr)', border:'none',
+                      borderRadius:4, color: r.inWatchlist ? '#fff' : 'var(--fg3)', fontSize:10, cursor:r.inWatchlist?'default':'pointer',
+                      fontWeight:600 }}>
+                    {r.inWatchlist ? '★' : '+'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // OPPORTUNITY BOARD — ranked screener across all watchlist tickers
 // ─────────────────────────────────────────────────────────────────────────────
 function OpportunityBoard() {
+  const [tab, setTab] = React.useState('watchlist'); // 'watchlist' | 'screener'
   const [scores,     setScores]     = React.useState([]);
   const [loading,    setLoading]    = React.useState(true);
   const [running,    setRunning]    = React.useState(false);
@@ -7604,25 +7894,43 @@ function OpportunityBoard() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Opportunity Board</h1>
-          <p className="page-sub">All watchlist tickers scored · ranked by conviction · filter by strategy</p>
+          <p className="page-sub">{tab === 'watchlist' ? 'All watchlist tickers scored · ranked by conviction · filter by strategy' : 'Universal screener · search 400+ stocks · save filters'}</p>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          {lastRunAt && (
-            <span style={{ fontSize:11, color:'var(--fg3)' }}>
-              Last run {lastRunAt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
-            </span>
-          )}
-          <button onClick={triggerRun} disabled={running}
-            style={{ padding:'8px 18px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
-              fontSize:12, fontWeight:700, cursor:running?'not-allowed':'pointer', fontFamily:'var(--font-mono)',
-              letterSpacing:'0.06em', opacity:running?0.7:1 }}>
-            {running ? '⏳ RUNNING…' : '▶ RUN SCORES'}
-          </button>
-        </div>
+        {tab === 'watchlist' && (
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            {lastRunAt && (
+              <span style={{ fontSize:11, color:'var(--fg3)' }}>
+                Last run {lastRunAt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+              </span>
+            )}
+            <button onClick={triggerRun} disabled={running}
+              style={{ padding:'8px 18px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
+                fontSize:12, fontWeight:700, cursor:running?'not-allowed':'pointer', fontFamily:'var(--font-mono)',
+                letterSpacing:'0.06em', opacity:running?0.7:1 }}>
+              {running ? '⏳ RUNNING…' : '▶ RUN SCORES'}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Run progress bar */}
-      {running && runProgress && (
+      {/* Tab switcher */}
+      <div style={{ display:'flex', gap:8, marginBottom:14, paddingBottom:12, borderBottom:'1px solid var(--bdr)' }}>
+        {[{ key:'watchlist', label:'Watchlist' }, { key:'screener', label:'Screener' }].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            style={{ padding:'6px 14px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+              border: tab===t.key ? '1.5px solid var(--red)' : '1px solid var(--bdr)',
+              background: tab===t.key ? '#ff3b3015' : 'transparent',
+              color: tab===t.key ? 'var(--red)' : 'var(--fg2)' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content: tab-based */}
+      {tab === 'watchlist' ? (
+        <>
+        {/* Run progress bar */}
+        {running && runProgress && (
         <div className="card" style={{ marginBottom:10, padding:'10px 14px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
             <span style={{ fontSize:11, color:'var(--fg2)' }}>{runStatus}</span>
@@ -7862,6 +8170,10 @@ function OpportunityBoard() {
           </div>
         )}
       </div>
+        </>
+      ) : (
+        <ScreenerTab />
+      )}
     </div>
   );
 }
