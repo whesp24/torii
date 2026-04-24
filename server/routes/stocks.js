@@ -173,28 +173,50 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
 router.get('/momentum/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
-    const YF_HEADERS = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/json',
-      'Referer': 'https://finance.yahoo.com/',
-    };
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`;
-    const r = await fetch(url, { headers: YF_HEADERS });
-    if (!r.ok) return res.status(404).json({ error: `Yahoo chart ${r.status}` });
-    const data = await r.json();
-    const result = data?.chart?.result?.[0];
-    if (!result) return res.status(404).json({ error: 'No chart data' });
+    let closes = null;
 
-    const closes = result.indicators?.quote?.[0]?.close || [];
-    const valid  = closes.filter(c => c != null && c > 0);
-    if (valid.length < 10) return res.status(404).json({ error: 'Insufficient price history' });
+    // Primary: yahoo-finance2 (handles auth — no 429 from datacenter IPs)
+    try {
+      const oneYearAgo = new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10);
+      const chart = await yahooFinance.chart(symbol, {
+        period1: oneYearAgo, period2: new Date(), interval: '1d',
+      }, { validateResult: false });
+      const raw = (chart?.quotes || []).map(q => q.close).filter(c => c != null && c > 0);
+      if (raw.length >= 10) closes = raw;
+    } catch (_) {}
 
-    const current = valid[valid.length - 1];
-    const idx1mo  = Math.max(0, valid.length - 22);
-    const ret1mo  = ((current - valid[idx1mo]) / valid[idx1mo]) * 100;
-    const ret3mo  = ((current - valid[0]) / valid[0]) * 100;
+    // Fallback: raw Yahoo chart API
+    if (!closes) {
+      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`;
+      const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.yahoo.com/' } });
+      if (r.ok) {
+        const data = await r.json();
+        const raw = (data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []).filter(c => c != null && c > 0);
+        if (raw.length >= 10) closes = raw;
+      }
+    }
 
-    res.json({ symbol, ret1mo, ret3mo, current, dataPoints: valid.length });
+    if (!closes) return res.status(404).json({ error: 'No price data available' });
+
+    const current = closes[closes.length - 1];
+    const len     = closes.length;
+    const idx1mo  = Math.max(0, len - 22);
+    const idx3mo  = Math.max(0, len - 66);
+    const idx6mo  = Math.max(0, len - 132);
+    const ret1mo  = ((current - closes[idx1mo]) / closes[idx1mo]) * 100;
+    const ret3mo  = ((current - closes[idx3mo]) / closes[idx3mo]) * 100;
+    const ret6mo  = len >= 66  ? ((current - closes[idx6mo]) / closes[idx6mo]) * 100 : null;
+    const ret12mo = len >= 200 ? ((current - closes[0])       / closes[0])      * 100 : null;
+
+    res.json({
+      symbol,
+      ret1mo:  parseFloat(ret1mo.toFixed(2)),
+      ret3mo:  parseFloat(ret3mo.toFixed(2)),
+      ret6mo:  ret6mo  != null ? parseFloat(ret6mo.toFixed(2))  : null,
+      ret12mo: ret12mo != null ? parseFloat(ret12mo.toFixed(2)) : null,
+      current,
+      dataPoints: len,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
