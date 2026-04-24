@@ -134,9 +134,10 @@ function parseForm4Xml(xml) {
 
   const buys  = transactions.filter(t => t.type === 'A');
   const sells = transactions.filter(t => t.type === 'D');
-  const isBuy = buys.length > 0 && sells.length === 0;
-  const isSell = sells.length > 0 && buys.length === 0;
   const totalShares = transactions.reduce((s, t) => s + (t.type === 'A' ? t.shares : -t.shares), 0);
+  // Use net shares to handle RSU vest+same-day-sell filings (both A and D)
+  const isBuy  = totalShares > 0;
+  const isSell = totalShares < 0;
   const avgPrice = transactions.length > 0
     ? transactions.reduce((s, t) => s + t.price, 0) / transactions.length : 0;
 
