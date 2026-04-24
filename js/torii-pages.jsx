@@ -8162,6 +8162,966 @@ function ConvictionPage() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// KELLY CRITERION HELPER
+// ═══════════════════════════════════════════════════════════════════
+function calcKelly(conviction, entry, target, stop) {
+  const upside = Math.abs(target - entry);
+  const downside = Math.abs(entry - stop);
+  if (downside === 0) return null;
+  const rrRatio = upside / downside;
+  const winProb = Math.min(0.95, Math.max(0.1, conviction / 10));
+  const loseProb = 1 - winProb;
+  const kelly = (winProb * rrRatio - loseProb) / rrRatio;
+  const halfKelly = Math.max(0, kelly * 0.5);
+  return { rrRatio, winProb, kelly, halfKelly };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CAPITAL ALLOCATION PAGE — Unified multi-market view
+// ═══════════════════════════════════════════════════════════════════
+function CapitalPage({ onNav }) {
+  const API = API_URL;
+  const [data, setData] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [bankroll, setBankroll] = React.useState(() =>
+    parseFloat(localStorage.getItem('torii_bankroll') || '25000')
+  );
+  const [editBankroll, setEditBankroll] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch(`${API}/capital`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const saveBankroll = (v) => {
+    const n = parseFloat(v) || 25000;
+    setBankroll(n);
+    localStorage.setItem('torii_bankroll', n.toString());
+    setEditBankroll(false);
+  };
+
+  const panel = { background:'var(--surface)', borderRadius:12, padding:16, marginBottom:12, border:'1px solid var(--border)' };
+  const pctColor = p => p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--fg3)';
+  const fmt = n => n != null ? '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '$0';
+  const fmtSigned = n => n != null ? (n >= 0 ? '+' : '-') + fmt(Math.abs(n)) : '$0';
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:720, margin:'0 auto' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div>
+          <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>Capital Allocation</div>
+          <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>Unified view — equities, sports, crypto</div>
+        </div>
+        <div style={{ textAlign:'right' }}>
+          {editBankroll ? (
+            <input autoFocus defaultValue={bankroll} onBlur={e => saveBankroll(e.target.value)} onKeyDown={e => e.key === 'Enter' && saveBankroll(e.target.value)}
+              style={{ width:100, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'4px 8px', color:'var(--fg1)', fontSize:13, textAlign:'right' }} />
+          ) : (
+            <div onClick={() => setEditBankroll(true)} style={{ cursor:'pointer' }}>
+              <div style={{ fontSize:10, color:'var(--fg3)' }}>TOTAL BANKROLL</div>
+              <div style={{ fontSize:18, fontWeight:800, color:'var(--fg1)' }}>{fmt(bankroll)}</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {loading && <div style={{ color:'var(--fg3)', fontSize:13, textAlign:'center', padding:40 }}>Loading capital data…</div>}
+
+      {data && (
+        <>
+          {/* KPI Row */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:16 }}>
+            {[
+              { label:'Deployed', value: fmt(data.totalCapital), sub: `${((data.totalCapital / bankroll) * 100).toFixed(0)}% of bankroll` },
+              { label:'Day P&L', value: fmtSigned(data.totalDayPnl), color: pctColor(data.totalDayPnl) },
+              { label:'Realized P&L', value: fmtSigned(data.totalRealizedPnl), color: pctColor(data.totalRealizedPnl) },
+              { label:'Cash', value: fmt(bankroll - data.totalCapital), sub: `${(((bankroll - data.totalCapital) / bankroll) * 100).toFixed(0)}% available` },
+            ].map((k, i) => (
+              <div key={i} style={{ ...panel, textAlign:'center', padding:'10px 8px', marginBottom:0 }}>
+                <div style={{ fontSize:16, fontWeight:800, color: k.color || 'var(--fg1)' }}>{k.value}</div>
+                <div style={{ fontSize:9, color:'var(--fg3)', textTransform:'uppercase', marginTop:2 }}>{k.label}</div>
+                {k.sub && <div style={{ fontSize:9, color:'var(--fg3)', marginTop:1 }}>{k.sub}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Allocation Bars */}
+          <div style={panel}>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10 }}>Allocation</div>
+            <div style={{ display:'flex', height:24, borderRadius:8, overflow:'hidden', background:'var(--bg)', marginBottom:8 }}>
+              {data.allocation.equities > 0 && (
+                <div style={{ width:`${data.allocation.equities}%`, background:'var(--red)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, fontWeight:700, color:'#fff' }}>
+                  {data.allocation.equities > 10 ? `Equities ${data.allocation.equities}%` : ''}
+                </div>
+              )}
+              {data.allocation.sports > 0 && (
+                <div style={{ width:`${data.allocation.sports}%`, background:'var(--green)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, fontWeight:700, color:'#fff' }}>
+                  {data.allocation.sports > 10 ? `Sports ${data.allocation.sports}%` : ''}
+                </div>
+              )}
+              <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, fontWeight:700, color:'var(--fg3)' }}>
+                Cash {(100 - (data.allocation.equities || 0) - (data.allocation.sports || 0)).toFixed(0)}%
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:16, fontSize:10, color:'var(--fg3)' }}>
+              <span><span style={{ display:'inline-block', width:8, height:8, borderRadius:2, background:'var(--red)', marginRight:4 }}></span>Equities</span>
+              <span><span style={{ display:'inline-block', width:8, height:8, borderRadius:2, background:'var(--green)', marginRight:4 }}></span>Sports</span>
+              <span><span style={{ display:'inline-block', width:8, height:8, borderRadius:2, background:'var(--bg)', border:'1px solid var(--border)', marginRight:4 }}></span>Cash</span>
+            </div>
+          </div>
+
+          {/* Equities Summary */}
+          <div style={panel}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em' }}>📈 Equities</div>
+              <div style={{ fontSize:13, fontWeight:700, color:'var(--fg1)' }}>{fmt(data.equities.value)}</div>
+            </div>
+            <div style={{ display:'flex', gap:16, fontSize:11, color:'var(--fg2)', marginBottom:10 }}>
+              <span>Day: <strong style={{ color: pctColor(data.equities.dayPnl) }}>{fmtSigned(data.equities.dayPnl)}</strong></span>
+              <span>Unrealized: <strong style={{ color: pctColor(data.equities.unrealizedPnl) }}>{fmtSigned(data.equities.unrealizedPnl)}</strong></span>
+              <span>Realized: <strong style={{ color: pctColor(data.equities.realizedPnl) }}>{fmtSigned(data.equities.realizedPnl)}</strong></span>
+            </div>
+            {(data.equities.positions || []).slice(0, 8).map((p, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                <span style={{ fontSize:12, fontWeight:800, color:'var(--fg1)', width:50, cursor:'pointer' }}
+                  onClick={() => onNav && onNav(`stock-${p.ticker}`)}>{p.ticker}</span>
+                <span style={{ fontSize:11, color:'var(--fg3)', flex:1 }}>{p.shares} shares @ ${p.costBasis?.toFixed(2)}</span>
+                <span style={{ fontSize:12, fontWeight:700, color:'var(--fg1)' }}>{fmt(p.value)}</span>
+                <span style={{ fontSize:10, fontWeight:600, color: pctColor(p.unrealizedPnl), minWidth:60, textAlign:'right' }}>
+                  {fmtSigned(p.unrealizedPnl)} ({p.unrealizedPct?.toFixed(1)}%)
+                </span>
+              </div>
+            ))}
+            {(!data.equities.positions || data.equities.positions.length === 0) && (
+              <div style={{ fontSize:12, color:'var(--fg3)', textAlign:'center', padding:16 }}>No equity positions — add via Portfolio page</div>
+            )}
+          </div>
+
+          {/* Sports Betting Summary */}
+          <div style={panel}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em' }}>🏈 Sports Betting</div>
+              <div style={{ display:'flex', gap:8 }}>
+                <span style={{ fontSize:10, background: data.sports.totalResult >= 0 ? 'var(--green)22' : 'var(--red)22', color: data.sports.totalResult >= 0 ? 'var(--green)' : 'var(--red)', padding:'2px 8px', borderRadius:5, fontWeight:700 }}>
+                  ROI: {data.sports.roi}%
+                </span>
+                <button onClick={() => onNav && onNav('sports-betting')}
+                  style={{ fontSize:10, padding:'2px 10px', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--fg3)', cursor:'pointer' }}>
+                  Open →
+                </button>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+              {[
+                { label:'At Risk', value: fmt(data.sports.atRisk) },
+                { label:'Win Rate', value: `${data.sports.winRate}%` },
+                { label:'Total P&L', value: fmtSigned(data.sports.totalResult), color: pctColor(data.sports.totalResult) },
+                { label:'Record', value: `${data.sports.wins}W-${data.sports.losses}L` },
+              ].map((s, i) => (
+                <div key={i} style={{ textAlign:'center' }}>
+                  <div style={{ fontSize:14, fontWeight:700, color: s.color || 'var(--fg1)' }}>{s.value}</div>
+                  <div style={{ fontSize:9, color:'var(--fg3)', textTransform:'uppercase' }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* P&L History */}
+          {data.pnlHistory && data.pnlHistory.length > 0 && (
+            <div style={panel}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10 }}>📊 Cumulative P&L</div>
+              <div style={{ fontSize:24, fontWeight:800, color: pctColor(data.pnlHistory[data.pnlHistory.length - 1]?.cumPnl), marginBottom:8 }}>
+                {fmtSigned(data.pnlHistory[data.pnlHistory.length - 1]?.cumPnl || 0)}
+              </div>
+              {data.pnlHistory.slice(-10).map((e, i) => (
+                <div key={i} style={{ display:'flex', gap:8, padding:'3px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', fontSize:11 }}>
+                  <span style={{ color:'var(--fg3)', width:70 }}>{new Date(e.date).toLocaleDateString('en-US', { month:'short', day:'numeric' })}</span>
+                  <span style={{ fontSize:9, padding:'1px 6px', borderRadius:4, background: e.market === 'equities' ? 'var(--red)22' : 'var(--green)22', color: e.market === 'equities' ? 'var(--red)' : 'var(--green)', fontWeight:700 }}>
+                    {e.market === 'equities' ? 'EQ' : 'SP'}
+                  </span>
+                  <span style={{ flex:1, color:'var(--fg2)' }}>{e.label}</span>
+                  <span style={{ fontWeight:700, color: pctColor(e.pnl) }}>{fmtSigned(e.pnl)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {!loading && !data && (
+        <div style={{ ...panel, textAlign:'center', padding:40 }}>
+          <div style={{ fontSize:32, marginBottom:12 }}>💰</div>
+          <div style={{ fontSize:14, fontWeight:600, color:'var(--fg1)', marginBottom:8 }}>No capital deployed yet</div>
+          <div style={{ fontSize:12, color:'var(--fg3)' }}>Add equity positions via the Portfolio page, or log sports bets via Sports Betting to start tracking your capital allocation.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SPORTS BETTING PAGE — EV-based sports capital allocation
+// ═══════════════════════════════════════════════════════════════════
+function SportsBettingPage({ onNav }) {
+  const API = API_URL;
+  const [tab, setTab] = React.useState('bets'); // 'bets' | 'odds' | 'stats'
+  const [bets, setBets] = React.useState([]);
+  const [stats, setStats] = React.useState(null);
+  const [odds, setOdds] = React.useState([]);
+  const [sports, setSports] = React.useState([]);
+  const [selectedSport, setSelectedSport] = React.useState('');
+  const [loading, setLoading] = React.useState(true);
+  const [oddsLoading, setOddsLoading] = React.useState(false);
+  const [showAdd, setShowAdd] = React.useState(false);
+  const [form, setForm] = React.useState({
+    sport:'NFL', event:'', betType:'moneyline', selection:'', odds:'', stake:'',
+    estimatedProb:'', sportsbook:'', thesis:'', confidence:7, eventDate: new Date().toISOString().slice(0,16)
+  });
+  const [bankroll] = React.useState(() => parseFloat(localStorage.getItem('torii_bankroll') || '25000'));
+
+  React.useEffect(() => {
+    Promise.all([
+      fetch(`${API}/sports-bets`).then(r => r.ok ? r.json() : []),
+      fetch(`${API}/sports-bets/stats`).then(r => r.ok ? r.json() : null),
+      fetch(`${API}/odds/sports`).then(r => r.ok ? r.json() : []),
+    ]).then(([b, s, sp]) => {
+      setBets(Array.isArray(b) ? b : []);
+      setStats(s);
+      setSports(Array.isArray(sp) ? sp : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const loadOdds = (sportKey) => {
+    setSelectedSport(sportKey);
+    setOddsLoading(true);
+    fetch(`${API}/odds/odds/${sportKey}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => { setOdds(Array.isArray(d) ? d : []); setOddsLoading(false); })
+      .catch(() => setOddsLoading(false));
+  };
+
+  const placeBet = async () => {
+    if (!form.event || !form.selection || !form.odds || !form.stake) return;
+    try {
+      const body = {
+        ...form,
+        odds: parseInt(form.odds),
+        stake: parseFloat(form.stake),
+        estimatedProb: form.estimatedProb ? parseFloat(form.estimatedProb) / 100 : undefined,
+        confidence: parseInt(form.confidence),
+        eventDate: new Date(form.eventDate),
+      };
+      const r = await fetch(`${API}/sports-bets`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (r.ok) {
+        const bet = await r.json();
+        setBets(prev => [bet, ...prev]);
+        setShowAdd(false);
+        setForm({ sport:'NFL', event:'', betType:'moneyline', selection:'', odds:'', stake:'', estimatedProb:'', sportsbook:'', thesis:'', confidence:7, eventDate: new Date().toISOString().slice(0,16) });
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const settleBet = async (id, status) => {
+    try {
+      const r = await fetch(`${API}/sports-bets/${id}/settle`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status }) });
+      if (r.ok) {
+        const updated = await r.json();
+        setBets(prev => prev.map(b => b._id === id ? updated : b));
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  // EV calculator helper
+  const calcEV = () => {
+    const o = parseInt(form.odds);
+    const s = parseFloat(form.stake);
+    const p = form.estimatedProb ? parseFloat(form.estimatedProb) / 100 : null;
+    if (!o || !s) return null;
+    const toWin = o > 0 ? s * (o / 100) : s * (100 / Math.abs(o));
+    const impliedProb = o > 0 ? 100 / (o + 100) : Math.abs(o) / (Math.abs(o) + 100);
+    const ev = p ? (p * toWin) - ((1 - p) * s) : null;
+    const kelly = p && toWin ? Math.max(0, ((toWin/s) * p - (1-p)) / (toWin/s)) : null;
+    return { toWin: toWin.toFixed(2), impliedProb: (impliedProb * 100).toFixed(1), ev: ev?.toFixed(2), kelly: kelly ? (kelly * 100).toFixed(1) : null, kellyStake: kelly ? (kelly * 0.5 * bankroll).toFixed(0) : null };
+  };
+
+  const panel = { background:'var(--surface)', borderRadius:12, padding:16, marginBottom:12, border:'1px solid var(--border)' };
+  const pctColor = p => p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--fg3)';
+  const tabStyle = (t) => ({ fontSize:11, fontWeight:700, padding:'6px 14px', borderRadius:6, border:'none', cursor:'pointer', background: tab === t ? 'var(--red)' : 'transparent', color: tab === t ? '#fff' : 'var(--fg3)' });
+  const statusColor = { pending:'#f59e0b', won:'var(--green)', lost:'var(--red)', push:'var(--fg3)', void:'var(--fg3)' };
+  const ev = showAdd ? calcEV() : null;
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:720, margin:'0 auto' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+        <div>
+          <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>Sports Betting</div>
+          <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>EV-based sports capital allocation</div>
+        </div>
+        <button onClick={() => setShowAdd(!showAdd)}
+          style={{ background:'var(--red)', color:'#fff', border:'none', borderRadius:8, padding:'8px 16px', fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          + Log Bet
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display:'flex', gap:4, marginBottom:12 }}>
+        <button onClick={() => setTab('bets')} style={tabStyle('bets')}>Bet Log</button>
+        <button onClick={() => setTab('odds')} style={tabStyle('odds')}>Live Odds</button>
+        <button onClick={() => setTab('stats')} style={tabStyle('stats')}>Stats</button>
+      </div>
+
+      {/* Stats bar */}
+      {stats && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:6, marginBottom:12 }}>
+          {[
+            { l:'Record', v:`${stats.wins}W-${stats.losses}L` },
+            { l:'Win Rate', v:`${stats.winRate}%`, c: stats.winRate >= 52 ? 'var(--green)' : 'var(--red)' },
+            { l:'P&L', v:`${stats.totalResult >= 0 ? '+' : ''}$${stats.totalResult?.toFixed(0)}`, c: pctColor(stats.totalResult) },
+            { l:'ROI', v:`${stats.roi}%`, c: pctColor(stats.roi) },
+            { l:'Pending', v: stats.pending },
+          ].map((s, i) => (
+            <div key={i} style={{ background:'var(--surface)', borderRadius:8, padding:'6px 4px', border:'1px solid var(--border)', textAlign:'center' }}>
+              <div style={{ fontSize:14, fontWeight:800, color: s.c || 'var(--fg1)' }}>{s.v}</div>
+              <div style={{ fontSize:8, color:'var(--fg3)', textTransform:'uppercase' }}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add Bet Form */}
+      {showAdd && (
+        <div style={{ ...panel, background:'var(--bg)' }}>
+          <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', marginBottom:10 }}>Log New Bet</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
+            <select value={form.sport} onChange={e => setForm({...form, sport:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }}>
+              {['NFL','NBA','MLB','NHL','Soccer','MMA','Tennis','Golf','Other'].map(s => <option key={s}>{s}</option>)}
+            </select>
+            <select value={form.betType} onChange={e => setForm({...form, betType:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }}>
+              {['moneyline','spread','total','prop','parlay','futures','live'].map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <input type="datetime-local" value={form.eventDate} onChange={e => setForm({...form, eventDate:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+          </div>
+          <input placeholder="Event (e.g. Lakers vs Celtics)" value={form.event} onChange={e => setForm({...form, event:e.target.value})}
+            style={{ width:'100%', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12, marginBottom:8, boxSizing:'border-box' }} />
+          <input placeholder="Selection (e.g. Lakers -3.5)" value={form.selection} onChange={e => setForm({...form, selection:e.target.value})}
+            style={{ width:'100%', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12, marginBottom:8, boxSizing:'border-box' }} />
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:8, marginBottom:8 }}>
+            <input placeholder="Odds (+150)" value={form.odds} onChange={e => setForm({...form, odds:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+            <input placeholder="Stake $" value={form.stake} onChange={e => setForm({...form, stake:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+            <input placeholder="Your Prob %" value={form.estimatedProb} onChange={e => setForm({...form, estimatedProb:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+            <input placeholder="Sportsbook" value={form.sportsbook} onChange={e => setForm({...form, sportsbook:e.target.value})}
+              style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+          </div>
+          {/* EV Preview */}
+          {ev && (
+            <div style={{ display:'flex', gap:12, marginBottom:8, padding:'6px 10px', background:'var(--surface)', borderRadius:6, fontSize:11 }}>
+              <span>To Win: <strong style={{ color:'var(--green)' }}>${ev.toWin}</strong></span>
+              <span>Implied: <strong>{ev.impliedProb}%</strong></span>
+              {ev.ev && <span>EV: <strong style={{ color: parseFloat(ev.ev) > 0 ? 'var(--green)' : 'var(--red)' }}>${ev.ev}</strong></span>}
+              {ev.kelly && <span>½Kelly: <strong>{ev.kelly}%</strong> (${ev.kellyStake})</span>}
+            </div>
+          )}
+          <textarea placeholder="Thesis / reasoning (optional)" value={form.thesis} onChange={e => setForm({...form, thesis:e.target.value})}
+            rows={2} style={{ width:'100%', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12, resize:'vertical', marginBottom:8, boxSizing:'border-box' }} />
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={placeBet} style={{ background:'var(--green)', color:'#fff', border:'none', borderRadius:6, padding:'6px 16px', fontSize:12, fontWeight:700, cursor:'pointer' }}>Log Bet</button>
+            <button onClick={() => setShowAdd(false)} style={{ background:'transparent', color:'var(--fg3)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 16px', fontSize:12, cursor:'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {loading && <div style={{ color:'var(--fg3)', fontSize:13, textAlign:'center', padding:40 }}>Loading…</div>}
+
+      {/* Bet Log Tab */}
+      {tab === 'bets' && !loading && (
+        <div>
+          {bets.length === 0 && (
+            <div style={{ ...panel, textAlign:'center', padding:40 }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>🏈</div>
+              <div style={{ fontSize:14, fontWeight:600, color:'var(--fg1)', marginBottom:8 }}>No bets logged yet</div>
+              <div style={{ fontSize:12, color:'var(--fg3)' }}>Hit "+ Log Bet" to track your first sports wager. Every bet is a capital allocation decision.</div>
+            </div>
+          )}
+          {bets.map((b, i) => (
+            <div key={b._id || i} style={{ ...panel, padding:12 }}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+                    <span style={{ fontSize:9, padding:'1px 6px', borderRadius:4, background: statusColor[b.status] + '22', color: statusColor[b.status], fontWeight:700, textTransform:'uppercase' }}>{b.status}</span>
+                    <span style={{ fontSize:10, color:'var(--fg3)' }}>{b.sport}</span>
+                    <span style={{ fontSize:10, color:'var(--fg3)' }}>{b.betType}</span>
+                  </div>
+                  <div style={{ fontSize:13, fontWeight:700, color:'var(--fg1)', marginBottom:2 }}>{b.event}</div>
+                  <div style={{ fontSize:12, color:'var(--fg2)' }}>{b.selection} @ {b.odds > 0 ? '+' : ''}{b.odds}</div>
+                  {b.thesis && <div style={{ fontSize:11, color:'var(--fg3)', marginTop:4, fontStyle:'italic' }}>{b.thesis}</div>}
+                </div>
+                <div style={{ textAlign:'right' }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:'var(--fg1)' }}>${b.stake}</div>
+                  {b.status === 'pending' ? (
+                    <div style={{ fontSize:10, color:'var(--fg3)' }}>→ ${b.toWin?.toFixed(0)}</div>
+                  ) : (
+                    <div style={{ fontSize:12, fontWeight:700, color: pctColor(b.result) }}>{b.result >= 0 ? '+' : ''}${b.result?.toFixed(0)}</div>
+                  )}
+                </div>
+              </div>
+              {b.status === 'pending' && (
+                <div style={{ display:'flex', gap:6, marginTop:8 }}>
+                  <button onClick={() => settleBet(b._id, 'won')} style={{ fontSize:10, padding:'3px 10px', borderRadius:5, border:'none', background:'var(--green)', color:'#fff', fontWeight:700, cursor:'pointer' }}>Won</button>
+                  <button onClick={() => settleBet(b._id, 'lost')} style={{ fontSize:10, padding:'3px 10px', borderRadius:5, border:'none', background:'var(--red)', color:'#fff', fontWeight:700, cursor:'pointer' }}>Lost</button>
+                  <button onClick={() => settleBet(b._id, 'push')} style={{ fontSize:10, padding:'3px 10px', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--fg3)', cursor:'pointer' }}>Push</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Live Odds Tab */}
+      {tab === 'odds' && (
+        <div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:12 }}>
+            {sports.slice(0, 12).map(s => (
+              <button key={s.key} onClick={() => loadOdds(s.key)}
+                style={{ fontSize:10, padding:'4px 10px', borderRadius:6, border: selectedSport === s.key ? '1px solid var(--red)' : '1px solid var(--border)', background: selectedSport === s.key ? 'var(--red)22' : 'transparent', color: selectedSport === s.key ? 'var(--red)' : 'var(--fg3)', cursor:'pointer', fontWeight:600 }}>
+                {s.title}
+              </button>
+            ))}
+          </div>
+          {!selectedSport && <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:32 }}>Select a sport to view live odds and EV analysis</div>}
+          {oddsLoading && <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:32 }}>Loading odds…</div>}
+          {odds.map((event, i) => (
+            <div key={event.id || i} style={{ ...panel, padding:12 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                <div style={{ fontSize:13, fontWeight:700, color:'var(--fg1)' }}>{event.awayTeam} @ {event.homeTeam}</div>
+                <div style={{ fontSize:10, color:'var(--fg3)' }}>{new Date(event.commenceTime).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })}</div>
+              </div>
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                {(event.bestOdds || []).map((o, j) => (
+                  <div key={j} style={{ background: o.isPositiveEV ? 'var(--green)11' : 'var(--bg)', border: `1px solid ${o.isPositiveEV ? 'var(--green)44' : 'var(--border)'}`, borderRadius:6, padding:'6px 10px', minWidth:120 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--fg1)' }}>{o.name}</div>
+                    <div style={{ display:'flex', gap:8, fontSize:10, marginTop:2 }}>
+                      <span style={{ fontWeight:700 }}>{o.price > 0 ? '+' : ''}{o.price}</span>
+                      <span style={{ color:'var(--fg3)' }}>Fair: {(o.fairProb * 100).toFixed(0)}%</span>
+                      <span style={{ fontWeight:700, color: o.isPositiveEV ? 'var(--green)' : 'var(--fg3)' }}>EV: {o.evPct > 0 ? '+' : ''}{o.evPct}%</span>
+                    </div>
+                    <div style={{ fontSize:9, color:'var(--fg3)', marginTop:2 }}>Best: {o.book}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          {selectedSport && !oddsLoading && odds.length === 0 && (
+            <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:32 }}>
+              No upcoming events found. {!process.env.ODDS_API_KEY ? 'Add ODDS_API_KEY to Render env vars (free at the-odds-api.com).' : 'Check back closer to game time.'}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Stats Tab */}
+      {tab === 'stats' && stats && (
+        <div>
+          {/* By Sport */}
+          {Object.keys(stats.bySport || {}).length > 0 && (
+            <div style={panel}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10 }}>By Sport</div>
+              {Object.entries(stats.bySport).map(([sport, d]) => (
+                <div key={sport} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 0', borderTop:'1px solid var(--border)' }}>
+                  <span style={{ fontSize:12, fontWeight:700, color:'var(--fg1)', width:80 }}>{sport}</span>
+                  <span style={{ fontSize:11, color:'var(--fg3)' }}>{d.bets} bets</span>
+                  <span style={{ fontSize:11, color:'var(--fg3)' }}>{d.bets > 0 ? ((d.wins/d.bets)*100).toFixed(0) : 0}% win</span>
+                  <span style={{ flex:1 }}></span>
+                  <span style={{ fontSize:12, fontWeight:700, color: pctColor(d.result) }}>{d.result >= 0 ? '+' : ''}${d.result.toFixed(0)}</span>
+                  <span style={{ fontSize:10, color: pctColor(d.result) }}>{d.staked > 0 ? ((d.result/d.staked)*100).toFixed(1) : 0}% ROI</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* By Bet Type */}
+          {Object.keys(stats.byType || {}).length > 0 && (
+            <div style={panel}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10 }}>By Bet Type</div>
+              {Object.entries(stats.byType).map(([type, d]) => (
+                <div key={type} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 0', borderTop:'1px solid var(--border)' }}>
+                  <span style={{ fontSize:12, fontWeight:700, color:'var(--fg1)', width:80 }}>{type}</span>
+                  <span style={{ fontSize:11, color:'var(--fg3)' }}>{d.bets} bets</span>
+                  <span style={{ fontSize:11, color:'var(--fg3)' }}>{d.bets > 0 ? ((d.wins/d.bets)*100).toFixed(0) : 0}% win</span>
+                  <span style={{ flex:1 }}></span>
+                  <span style={{ fontSize:12, fontWeight:700, color: pctColor(d.result) }}>{d.result >= 0 ? '+' : ''}${d.result.toFixed(0)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Streak */}
+          {stats.currentStreak?.count > 0 && (
+            <div style={panel}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:6 }}>Current Streak</div>
+              <div style={{ fontSize:24, fontWeight:800, color: stats.currentStreak.type === 'won' ? 'var(--green)' : 'var(--red)' }}>
+                {stats.currentStreak.count} {stats.currentStreak.type === 'won' ? 'W' : 'L'}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COMMAND CENTER PAGE
+// ═══════════════════════════════════════════════════════════════════
+function CommandCenterPage({ onNav }) {
+  const API = API_URL;
+  const [signal, setSignal] = React.useState(null);
+  const [signalLoading, setSignalLoading] = React.useState(true);
+  const [theses, setTheses] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('torii_theses') || '[]'); } catch { return []; }
+  });
+  const [newThesis, setNewThesis] = React.useState({ ticker:'', thesis:'', conviction:7, timeframe:'12mo', entry:'', target:'', stop:'' });
+  const [showAddThesis, setShowAddThesis] = React.useState(false);
+  const [portfolioVal, setPortfolioVal] = React.useState(() => parseFloat(localStorage.getItem('torii_portfolio_val') || '22000'));
+  const [contacts, setContacts] = React.useState([]);
+  const [networkLoading, setNetworkLoading] = React.useState(true);
+  const [tasks, setTasks] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('torii_daily_tasks') || '[]'); } catch { return []; }
+  });
+  const [newTask, setNewTask] = React.useState('');
+  const [topPicks, setTopPicks] = React.useState([]);
+  const [picksLoading, setPicksLoading] = React.useState(true);
+
+  const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
+
+  React.useEffect(() => {
+    fetch(`${API}/briefing`).then(r => r.ok ? r.json() : null).then(d => { setSignal(d); setSignalLoading(false); }).catch(() => setSignalLoading(false));
+    fetch(`${API}/contacts`).then(r => r.ok ? r.json() : []).then(d => {
+      const arr = Array.isArray(d) ? d : (d.contacts || []);
+      const scored = arr.map(c => {
+        const lastDate = c.lastContacted || c.updatedAt || c.createdAt;
+        const days = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : 999;
+        return { ...c, daysSince: days };
+      }).sort((a, b) => b.daysSince - a.daysSince);
+      setContacts(scored.slice(0, 5));
+      setNetworkLoading(false);
+    }).catch(() => setNetworkLoading(false));
+    fetch(`${API}/screener/search`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ minScore:65, limit:3, strategy:'long', sortBy:'score' }) })
+      .then(r => r.ok ? r.json() : null).then(d => { setTopPicks(d?.results || []); setPicksLoading(false); }).catch(() => setPicksLoading(false));
+  }, []);
+
+  const saveTasks = (t) => { setTasks(t); localStorage.setItem('torii_daily_tasks', JSON.stringify(t)); };
+  const addTask = () => { if (!newTask.trim()) return; saveTasks([...tasks, { id: Date.now(), text: newTask.trim(), done: false }]); setNewTask(''); };
+  const toggleTask = (id) => saveTasks(tasks.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  const deleteTask = (id) => saveTasks(tasks.filter(t => t.id !== id));
+  const saveTheses = (arr) => { setTheses(arr); localStorage.setItem('torii_theses', JSON.stringify(arr)); };
+  const addThesis = () => {
+    if (!newThesis.ticker || !newThesis.thesis) return;
+    saveTheses([{ id: Date.now(), ticker: newThesis.ticker.toUpperCase(), thesis: newThesis.thesis, conviction: newThesis.conviction, timeframe: newThesis.timeframe, entry: parseFloat(newThesis.entry) || null, target: parseFloat(newThesis.target) || null, stop: parseFloat(newThesis.stop) || null, dateAdded: new Date().toISOString(), status: 'active' }, ...theses]);
+    setNewThesis({ ticker:'', thesis:'', conviction:7, timeframe:'12mo', entry:'', target:'', stop:'' });
+    setShowAddThesis(false);
+  };
+
+  const panel = { background:'var(--surface)', borderRadius:12, padding:'16px', marginBottom:12, border:'1px solid var(--border)' };
+  const panelHeader = { display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 };
+  const panelTitle = { fontSize:11, fontWeight:700, letterSpacing:'0.08em', textTransform:'uppercase', color:'var(--fg3)' };
+  const scoreColor = s => s >= 70 ? 'var(--green)' : s >= 55 ? '#f59e0b' : 'var(--red)';
+  const pctColor = p => p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--fg3)';
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:680, margin:'0 auto' }}>
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>Command Center</div>
+        <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>{today}</div>
+      </div>
+
+      {/* Signal Panel */}
+      <div style={panel}>
+        <div style={panelHeader}><span style={panelTitle}>⚡ Signal</span></div>
+        {signalLoading ? <div style={{ color:'var(--fg3)', fontSize:13 }}>Loading market signal…</div>
+        : signal ? (
+          <div>
+            {signal.kpis && signal.kpis.length > 0 && (
+              <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+                {signal.kpis.slice(0,4).map((k,i) => (
+                  <div key={i} style={{ background:'var(--bg)', borderRadius:8, padding:'6px 10px', minWidth:80 }}>
+                    <div style={{ fontSize:10, color:'var(--fg3)', marginBottom:2 }}>{k.label || k.symbol}</div>
+                    <div style={{ fontSize:13, fontWeight:700, color: k.change >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      {k.price || k.value}
+                      {k.change != null && <span style={{ fontSize:10, marginLeft:4 }}>{k.change >= 0 ? '+' : ''}{typeof k.change === 'number' ? k.change.toFixed(2) : k.change}%</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {signal.headlines && signal.headlines.slice(0,3).map((h,i) => (
+              <div key={i} style={{ borderLeft:'2px solid var(--red)', paddingLeft:10, marginBottom:8 }}>
+                <div style={{ fontSize:12, fontWeight:600, color:'var(--fg1)', lineHeight:1.4 }}>{h.title || h.headline}</div>
+                <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>{h.source || h.publisher}</div>
+              </div>
+            ))}
+            {(!signal.headlines || signal.headlines.length === 0) && <div style={{ fontSize:12, color:'var(--fg2)' }}>No headlines loaded yet.</div>}
+          </div>
+        ) : <div style={{ fontSize:12, color:'var(--fg3)' }}>Market signal unavailable.</div>}
+      </div>
+
+      {/* Thesis Tracker */}
+      <div style={panel}>
+        <div style={panelHeader}>
+          <span style={panelTitle}>🎯 Active Theses</span>
+          <button onClick={() => setShowAddThesis(!showAddThesis)} style={{ background:'var(--red)', color:'#fff', border:'none', borderRadius:6, padding:'4px 10px', fontSize:11, fontWeight:700, cursor:'pointer' }}>+ Log</button>
+        </div>
+        {showAddThesis && (
+          <div style={{ background:'var(--bg)', borderRadius:8, padding:12, marginBottom:12 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
+              <input placeholder="Ticker" value={newThesis.ticker} onChange={e => setNewThesis({...newThesis, ticker:e.target.value})} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+              <input placeholder="Entry $" value={newThesis.entry} onChange={e => setNewThesis({...newThesis, entry:e.target.value})} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+              <input placeholder="Target $" value={newThesis.target} onChange={e => setNewThesis({...newThesis, target:e.target.value})} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+            </div>
+            <textarea placeholder="Thesis..." value={newThesis.thesis} onChange={e => setNewThesis({...newThesis, thesis:e.target.value})} rows={2} style={{ width:'100%', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12, resize:'vertical', marginBottom:8, boxSizing:'border-box' }} />
+            <button onClick={addThesis} style={{ background:'var(--green)', color:'#fff', border:'none', borderRadius:6, padding:'6px 16px', fontSize:12, fontWeight:700, cursor:'pointer' }}>Add Thesis</button>
+          </div>
+        )}
+        {theses.filter(t => t.status === 'active').map(th => {
+          const k = th.entry && th.target && th.stop ? calcKelly(th.conviction, th.entry, th.target, th.stop) : null;
+          return (
+            <div key={th.id} style={{ padding:'8px 0', borderTop:'1px solid var(--border)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontSize:13, fontWeight:800, color:'var(--fg1)', cursor:'pointer' }} onClick={() => onNav && onNav(`stock-${th.ticker}`)}>{th.ticker}</span>
+                <span style={{ fontSize:10, color:'var(--fg3)' }}>{th.timeframe}</span>
+                {k && <span style={{ fontSize:10, color:'var(--green)' }}>½K: {(k.halfKelly*100).toFixed(1)}%</span>}
+                <span style={{ flex:1 }}></span>
+                <span style={{ fontSize:10, color:'var(--fg3)' }}>{new Date(th.dateAdded).toLocaleDateString('en-US', { month:'short', day:'numeric' })}</span>
+              </div>
+              <div style={{ fontSize:11, color:'var(--fg2)', marginTop:2 }}>{th.thesis}</div>
+            </div>
+          );
+        })}
+        {theses.filter(t => t.status === 'active').length === 0 && <div style={{ fontSize:12, color:'var(--fg3)' }}>No active theses — log one above.</div>}
+      </div>
+
+      {/* Top Picks from Screener */}
+      <div style={panel}>
+        <div style={panelHeader}><span style={panelTitle}>🏆 Top Screener Picks</span></div>
+        {picksLoading ? <div style={{ fontSize:12, color:'var(--fg3)' }}>Loading…</div>
+        : topPicks.length > 0 ? topPicks.map((p, i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+            <span style={{ fontSize:13, fontWeight:800, color:'var(--fg1)', width:50, cursor:'pointer' }} onClick={() => onNav && onNav(`stock-${p.symbol}`)}>{p.symbol}</span>
+            <span style={{ fontSize:11, color:'var(--fg3)', flex:1 }}>{p.name}</span>
+            <span style={{ fontSize:14, fontWeight:800, color: scoreColor(p.score) }}>{p.score}</span>
+            <span style={{ fontSize:10, padding:'2px 6px', borderRadius:4, background: scoreColor(p.score) + '22', color: scoreColor(p.score), fontWeight:700 }}>{p.rating}</span>
+          </div>
+        )) : <div style={{ fontSize:12, color:'var(--fg3)' }}>Run the screener to see top-scored stocks here.</div>}
+      </div>
+
+      {/* Tasks */}
+      <div style={panel}>
+        <div style={panelHeader}><span style={panelTitle}>✅ Today's Tasks</span></div>
+        <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+          <input placeholder="Add a task…" value={newTask} onChange={e => setNewTask(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTask()}
+            style={{ flex:1, background:'var(--bg)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 8px', color:'var(--fg1)', fontSize:12 }} />
+          <button onClick={addTask} style={{ background:'var(--red)', color:'#fff', border:'none', borderRadius:6, padding:'6px 12px', fontSize:11, fontWeight:700, cursor:'pointer' }}>+</button>
+        </div>
+        {tasks.map(t => (
+          <div key={t.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'4px 0' }}>
+            <input type="checkbox" checked={t.done} onChange={() => toggleTask(t.id)} />
+            <span style={{ flex:1, fontSize:12, color: t.done ? 'var(--fg3)' : 'var(--fg1)', textDecoration: t.done ? 'line-through' : 'none' }}>{t.text}</span>
+            <button onClick={() => deleteTask(t.id)} style={{ background:'transparent', border:'none', color:'var(--fg3)', cursor:'pointer', fontSize:10 }}>×</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AI ANALYST PAGE
+// ═══════════════════════════════════════════════════════════════════
+function AIAnalystPage({ onNav }) {
+  const API = API_URL;
+  const [theses, setTheses] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [generating, setGenerating] = React.useState(false);
+  const [stats, setStats] = React.useState(null);
+  const [expanded, setExpanded] = React.useState(null);
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      fetch(`${API}/analyst`).then(r => r.ok ? r.json() : []),
+      fetch(`${API}/analyst/stats`).then(r => r.ok ? r.json() : null),
+    ]).then(([t, s]) => { setTheses(Array.isArray(t) ? t : []); setStats(s); setLoading(false); }).catch(() => setLoading(false));
+  };
+  React.useEffect(load, []);
+
+  const generate = async () => {
+    setGenerating(true);
+    try {
+      const r = await fetch(`${API}/analyst/generate`, { method:'POST' });
+      const data = await r.json();
+      if (Array.isArray(data)) setTheses(prev => [...data, ...prev]);
+      else if (data.theses) setTheses(prev => [...data.theses, ...prev]);
+    } catch (e) { console.error(e); }
+    setGenerating(false);
+    load();
+  };
+
+  const act = async (id, action) => {
+    await fetch(`${API}/analyst/${id}/${action}`, { method:'PATCH' });
+    setTheses(prev => prev.map(t => t._id === id ? { ...t, status: action === 'approve' ? 'approved' : 'dismissed' } : t));
+  };
+
+  const convColor = c => c >= 8 ? 'var(--green)' : c >= 6 ? '#f59e0b' : 'var(--fg3)';
+  const pending = theses.filter(t => t.status === 'pending');
+  const approved = theses.filter(t => t.status === 'approved');
+  const panel = { background:'var(--surface)', borderRadius:12, padding:16, marginBottom:12, border:'1px solid var(--border)' };
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:720, margin:'0 auto' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div>
+          <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>AI Research Team</div>
+          <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>Your virtual analyst — reviews data, generates theses, awaits your approval</div>
+        </div>
+        <button onClick={generate} disabled={generating} style={{ background:'var(--red)', color:'#fff', border:'none', borderRadius:8, padding:'8px 16px', fontSize:12, fontWeight:700, cursor:'pointer', opacity: generating ? 0.6 : 1 }}>
+          {generating ? 'Generating…' : '⚡ Generate Now'}
+        </button>
+      </div>
+
+      {stats && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:16 }}>
+          {[['Total',stats.total],['Pending',stats.pending],['Approved',stats.approved],['Today',stats.todayGenerated]].map(([l,v]) => (
+            <div key={l} style={{ background:'var(--surface)', borderRadius:8, padding:'8px 12px', border:'1px solid var(--border)', textAlign:'center' }}>
+              <div style={{ fontSize:20, fontWeight:800, color:'var(--fg1)' }}>{v ?? 0}</div>
+              <div style={{ fontSize:9, color:'var(--fg3)', textTransform:'uppercase' }}>{l}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {loading && <div style={{ color:'var(--fg3)', fontSize:13, textAlign:'center', padding:40 }}>Loading…</div>}
+      {!loading && pending.length === 0 && approved.length === 0 && (
+        <div style={{ ...panel, textAlign:'center', padding:40 }}>
+          <div style={{ fontSize:32, marginBottom:12 }}>🤖</div>
+          <div style={{ fontSize:14, fontWeight:600, color:'var(--fg1)', marginBottom:8 }}>No theses yet</div>
+          <div style={{ fontSize:12, color:'var(--fg3)', marginBottom:16 }}>Hit "Generate Now" to have the AI analyst surface investment ideas.</div>
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <div style={{ marginBottom:8 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:'#f59e0b', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:8 }}>Awaiting Review ({pending.length})</div>
+          {pending.map(th => (
+            <div key={th._id} style={panel}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:15, fontWeight:800, color:'var(--fg1)', cursor:'pointer' }} onClick={() => onNav && onNav(`stock-${th.ticker}`)}>{th.ticker}</span>
+                <span style={{ fontSize:10, fontWeight:700, color: convColor(th.conviction||5), background: convColor(th.conviction||5)+'22', borderRadius:5, padding:'1px 6px' }}>Conv {th.conviction}/10</span>
+                {th.sector && <span style={{ fontSize:10, color:'var(--fg3)' }}>{th.sector}</span>}
+              </div>
+              <div style={{ fontSize:13, fontWeight:600, color:'var(--fg1)', marginBottom:4 }}>{th.headline}</div>
+              <div style={{ fontSize:11, color:'var(--fg2)', lineHeight:1.5, marginBottom:8 }}>{expanded === th._id ? th.thesis : (th.thesis||'').slice(0,150) + '…'}</div>
+              <div style={{ display:'flex', gap:6 }}>
+                <button onClick={() => setExpanded(expanded === th._id ? null : th._id)} style={{ fontSize:10, padding:'3px 10px', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--fg3)', cursor:'pointer' }}>{expanded === th._id ? 'Collapse' : 'Read Full'}</button>
+                <button onClick={() => act(th._id,'approve')} style={{ fontSize:10, padding:'3px 10px', borderRadius:5, border:'none', background:'var(--green)', color:'#fff', fontWeight:700, cursor:'pointer' }}>✓ Approve</button>
+                <button onClick={() => act(th._id,'dismiss')} style={{ fontSize:10, padding:'3px 10px', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--fg3)', cursor:'pointer' }}>✕ Dismiss</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {approved.length > 0 && (
+        <div>
+          <div style={{ fontSize:11, fontWeight:700, color:'var(--green)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:8 }}>Approved ({approved.length})</div>
+          {approved.map(th => (
+            <div key={th._id} style={panel}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontSize:15, fontWeight:800, color:'var(--fg1)', cursor:'pointer' }} onClick={() => onNav && onNav(`stock-${th.ticker}`)}>{th.ticker}</span>
+                <span style={{ fontSize:10, fontWeight:700, color: convColor(th.conviction||5) }}>Conv {th.conviction}/10</span>
+              </div>
+              <div style={{ fontSize:12, color:'var(--fg2)', marginTop:4 }}>{(th.thesis||'').slice(0,150)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TOKEN ECONOMY PAGE
+// ═══════════════════════════════════════════════════════════════════
+function TokenEconomyPage({ onNav }) {
+  const API = API_URL;
+  const [data, setData] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    fetch(`${API}/token-economy`).then(r => r.ok ? r.json() : null).then(d => { setData(d); setLoading(false); }).catch(() => setLoading(false));
+  }, []);
+
+  const pctColor = p => p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--fg3)';
+  const fmt = (n, d=2) => n != null ? n.toLocaleString(undefined, { minimumFractionDigits:d, maximumFractionDigits:d }) : '—';
+  const panel = { background:'var(--surface)', borderRadius:12, padding:16, marginBottom:12, border:'1px solid var(--border)' };
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:680, margin:'0 auto' }}>
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>Token Economy</div>
+        <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>AI infrastructure stocks + crypto</div>
+      </div>
+      {loading && <div style={{ color:'var(--fg3)', fontSize:13, textAlign:'center', padding:40 }}>Loading…</div>}
+      {!loading && !data && <div style={{ color:'var(--fg3)', fontSize:13, textAlign:'center', padding:40 }}>Could not load data — refresh to try again.</div>}
+      {data && (
+        <>
+          <div style={panel}>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>AI Infrastructure Stocks</div>
+            {(data.aiStocks || []).map((s, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                <span style={{ fontSize:13, fontWeight:800, color:'var(--fg1)', width:56, cursor:'pointer' }} onClick={() => onNav && onNav(`stock-${s.symbol}`)}>{s.symbol}</span>
+                <span style={{ fontSize:11, color:'var(--fg3)', flex:1 }}>{s.name}</span>
+                <span style={{ fontSize:13, fontWeight:700, color:'var(--fg1)', marginRight:8 }}>${fmt(s.price)}</span>
+                <span style={{ fontSize:11, fontWeight:600, color: pctColor(s.changePercent) }}>{s.changePercent > 0 ? '+' : ''}{fmt(s.changePercent, 2)}%</span>
+              </div>
+            ))}
+            {(!data.aiStocks || data.aiStocks.length === 0) && <div style={{ fontSize:12, color:'var(--fg3)' }}>AI stock data loading…</div>}
+          </div>
+          <div style={panel}>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:12 }}>Crypto</div>
+            {(data.crypto || []).map((c, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                <span style={{ fontSize:13, fontWeight:800, color:'var(--fg1)', width:56 }}>{c.symbol}</span>
+                <span style={{ fontSize:11, color:'var(--fg3)', flex:1 }}>{c.name}</span>
+                <span style={{ fontSize:13, fontWeight:700, color:'var(--fg1)', marginRight:8 }}>${c.price > 1000 ? fmt(c.price, 0) : fmt(c.price, 4)}</span>
+                <span style={{ fontSize:11, fontWeight:600, color: pctColor(c.change24h) }}>{c.change24h > 0 ? '+' : ''}{fmt(c.change24h, 2)}%</span>
+              </div>
+            ))}
+            {(!data.crypto || data.crypto.length === 0) && <div style={{ fontSize:12, color:'var(--fg3)' }}>Crypto data unavailable.</div>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// THEME ENGINE PAGE — Second-order beneficiary finder
+// ═══════════════════════════════════════════════════════════════════
+function ThemeEnginePage({ onNav }) {
+  const API = API_URL;
+  const [theme, setTheme] = React.useState('');
+  const [results, setResults] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const analyze = async () => {
+    if (!theme.trim()) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`${API}/analyst/theme`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ theme }) });
+      const data = await r.json();
+      setResults(data);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const panel = { background:'var(--surface)', borderRadius:12, padding:16, marginBottom:12, border:'1px solid var(--border)' };
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:720, margin:'0 auto' }}>
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>Theme Engine</div>
+        <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>Find second-order beneficiaries of macro themes</div>
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        <input placeholder="e.g. AI data center buildout, Japan tourism boom, GLP-1 drugs…" value={theme} onChange={e => setTheme(e.target.value)} onKeyDown={e => e.key === 'Enter' && analyze()}
+          style={{ flex:1, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'10px 12px', color:'var(--fg1)', fontSize:13 }} />
+        <button onClick={analyze} disabled={loading} style={{ background:'var(--red)', color:'#fff', border:'none', borderRadius:8, padding:'10px 20px', fontSize:12, fontWeight:700, cursor:'pointer', opacity: loading ? 0.6 : 1 }}>
+          {loading ? 'Analyzing…' : 'Analyze'}
+        </button>
+      </div>
+      {results?.data && (
+        <div style={panel}>
+          <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', textTransform:'uppercase', marginBottom:10 }}>Results: {results.theme}</div>
+          <div style={{ fontSize:12, color:'var(--fg2)', lineHeight:1.7, whiteSpace:'pre-wrap' }}>
+            {typeof results.data === 'string' ? results.data : JSON.stringify(results.data, null, 2)}
+          </div>
+        </div>
+      )}
+      {!results && !loading && (
+        <div style={{ ...panel, textAlign:'center', padding:40 }}>
+          <div style={{ fontSize:32, marginBottom:12 }}>🔍</div>
+          <div style={{ fontSize:14, fontWeight:600, color:'var(--fg1)', marginBottom:8 }}>Enter a macro theme</div>
+          <div style={{ fontSize:12, color:'var(--fg3)' }}>The AI will identify second-order beneficiaries — companies that win from a theme without being the obvious play.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COVERED CALL PAGE
+// ═══════════════════════════════════════════════════════════════════
+function CoveredCallPage({ onNav }) {
+  const API = API_URL;
+  const [form, setForm] = React.useState({ ticker:'', shares:'', currentPrice:'', targetExit:'', daysToExpiry:'30' });
+  const [result, setResult] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const analyze = async () => {
+    if (!form.ticker) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`${API}/covered-call/analyze`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
+      const data = await r.json();
+      setResult(data);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const panel = { background:'var(--surface)', borderRadius:12, padding:16, marginBottom:12, border:'1px solid var(--border)' };
+  const pctColor = p => p > 0 ? 'var(--green)' : p < 0 ? 'var(--red)' : 'var(--fg3)';
+
+  return (
+    <div style={{ padding:'12px 14px 80px', maxWidth:720, margin:'0 auto' }}>
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:'var(--fg1)' }}>Covered Calls</div>
+        <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>Generate income on equity positions</div>
+      </div>
+      <div style={{ ...panel, background:'var(--bg)' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
+          <input placeholder="Ticker" value={form.ticker} onChange={e => setForm({...form, ticker:e.target.value.toUpperCase()})} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'8px', color:'var(--fg1)', fontSize:13 }} />
+          <input placeholder="Shares" value={form.shares} onChange={e => setForm({...form, shares:e.target.value})} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'8px', color:'var(--fg1)', fontSize:13 }} />
+          <input placeholder="Days to Expiry" value={form.daysToExpiry} onChange={e => setForm({...form, daysToExpiry:e.target.value})} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:6, padding:'8px', color:'var(--fg1)', fontSize:13 }} />
+        </div>
+        <button onClick={analyze} disabled={loading} style={{ background:'var(--red)', color:'#fff', border:'none', borderRadius:8, padding:'8px 20px', fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          {loading ? 'Analyzing…' : 'Find Calls'}
+        </button>
+      </div>
+      {result?.data && (
+        <div style={panel}>
+          <div style={{ fontSize:12, color:'var(--fg2)', lineHeight:1.7, whiteSpace:'pre-wrap' }}>
+            {typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2)}
+          </div>
+        </div>
+      )}
+      {!result && !loading && (
+        <div style={{ ...panel, textAlign:'center', padding:40 }}>
+          <div style={{ fontSize:32, marginBottom:12 }}>📞</div>
+          <div style={{ fontSize:14, fontWeight:600, color:'var(--fg1)', marginBottom:8 }}>Enter a ticker to find covered call opportunities</div>
+          <div style={{ fontSize:12, color:'var(--fg3)' }}>Analyzes the options chain and recommends strikes for income generation.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
@@ -8170,4 +9130,5 @@ Object.assign(window, {
   MacroPage, WatchlistIntelPage, InsiderPage, AttributionPage, ResearchPage,
   CalendarPage, CongressPage, OptionsPage, ShortPage, ValuationPage, LPPage, DiligencePage, ConvictionPage,
   OpportunityBoard,
+  CapitalPage, SportsBettingPage, CommandCenterPage, AIAnalystPage, TokenEconomyPage, ThemeEnginePage, CoveredCallPage,
 });

@@ -45,6 +45,17 @@ import shortRoutes from './routes/shortinterest.js';
 import lpRoutes from './routes/lps.js';
 import diligenceRoutes from './routes/diligence.js';
 import scoresRoutes from './routes/scores.js';
+import screenerRoutes from './routes/screener.js';
+import analystRoutes from './routes/analyst.js';
+import coveredCallRoutes from './routes/coveredcall.js';
+import tokenEconomyRoutes from './routes/tokeneconomy.js';
+import deepResearchRoutes from './routes/deepresearch.js';
+import altDataRoutes from './routes/altdata.js';
+import sportsBetRoutes from './routes/sportsbets.js';
+import oddsRoutes from './routes/odds.js';
+import capitalRoutes from './routes/capital.js';
+import { runAnalystIfStale } from './services/aiAnalystService.js';
+import { seedUniverseIfEmpty, runUniverseScoring } from './services/universeService.js';
 
 dotenv.config();
 
@@ -93,6 +104,15 @@ app.use('/api/short', shortRoutes);
 app.use('/api/lps', lpRoutes);
 app.use('/api/diligence', diligenceRoutes);
 app.use('/api/scores', scoresRoutes);
+app.use('/api/screener', screenerRoutes);
+app.use('/api/analyst', analystRoutes);
+app.use('/api/covered-call', coveredCallRoutes);
+app.use('/api/token-economy', tokenEconomyRoutes);
+app.use('/api/deepresearch', deepResearchRoutes);
+app.use('/api/altdata', altDataRoutes);
+app.use('/api/sports-bets', sportsBetRoutes);
+app.use('/api/odds', oddsRoutes);
+app.use('/api/capital', capitalRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -107,6 +127,12 @@ app.get('*', (req, res) => {
 // Initialize data on startup — staggered to avoid Yahoo 429s on cold start
 initializeTasks().catch(err => console.error('Error initializing tasks:', err));
 initializeWatchlist().catch(err => console.error('Error initializing watchlist:', err));
+seedUniverseIfEmpty().catch(err => console.error('Error seeding universe:', err));
+
+// AI Analyst: generate theses if stale (runs once on startup, non-blocking)
+setTimeout(() => {
+  runAnalystIfStale().catch(err => console.error('AI analyst startup error:', err));
+}, 45000);
 
 // KPIs: cache-aware, only hits Yahoo for stale data
 setTimeout(() => {
@@ -166,6 +192,18 @@ cron.schedule('0 12 * * 1-5', () => {
 cron.schedule('0 */6 * * 1-5', () => {
   console.log('Running batch conviction scoring...');
   scoreAllWatchlist().catch(err => console.error('Scoring error:', err));
+});
+
+// AI Analyst: generate fresh theses every morning at 6am ET
+cron.schedule('0 6 * * *', () => {
+  console.log('Running AI Analyst — generating daily theses...');
+  runAnalystIfStale().catch(err => console.error('AI analyst cron error:', err));
+});
+
+// Nightly universal screener scoring at 2am ET (7:00 UTC)
+cron.schedule('0 2 * * *', () => {
+  console.log('Running nightly universe screener scoring...');
+  runUniverseScoring().catch(err => console.error('Universe scoring error:', err));
 });
 
 app.listen(PORT, () => {

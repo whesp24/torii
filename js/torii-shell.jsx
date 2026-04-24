@@ -36,10 +36,23 @@ const NAV = [
   { id:'tools',      label:'Tools',        icon:'tools'      },
   { id:'analytics',  label:'Analytics',    icon:'analytics'  },
   { id:'push',       label:'Notify',       icon:'push'       },
+  { id:'command-center', label:'Command Center', icon:'command' },
+  { id:'capital',    label:'Capital',      icon:'capital'    },
+  { id:'sports-betting', label:'Sports Betting', icon:'sports' },
+  { id:'ai-analyst', label:'AI Analyst',   icon:'ai-analyst' },
+  { id:'token-economy', label:'Token Economy', icon:'token'  },
+  { id:'theme-engine', label:'Theme Engine', icon:'theme'    },
+  { id:'covered-calls', label:'Covered Calls', icon:'calls'  },
+  { id:'screener',   label:'Screener',     icon:'screener'   },
 ];
 
 // Sectioned structure for sidebar rendering
 const NAV_SECTIONS = [
+  {
+    id: 'command',
+    label: 'COMMAND',
+    items: ['command-center','capital','sports-betting','ai-analyst','token-economy','theme-engine','covered-calls','screener'],
+  },
   {
     id: 'markets',
     label: 'MARKETS',
@@ -110,6 +123,14 @@ function NavIcon({ id, active }) {
   if (id==='diligence')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>;
   if (id==='conviction')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>;
   if (id==='board')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>;
+  if (id==='command')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>;
+  if (id==='capital')     return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M15 9.5c0-1.38-1.34-2.5-3-2.5s-3 1.12-3 2.5S10.34 12 12 12s3 1.12 3 2.5-1.34 2.5-3 2.5"/></svg>;
+  if (id==='sports')      return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg>;
+  if (id==='ai-analyst')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><circle cx="12" cy="10" r="1"/></svg>;
+  if (id==='token')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/></svg>;
+  if (id==='theme')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>;
+  if (id==='calls')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>;
+  if (id==='screener')    return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>;
   return null;
 }
 
@@ -862,6 +883,13 @@ function App() {
         {page==='diligence'   && <DiligencePage />}
         {page==='conviction'  && <ConvictionPage />}
         {page==='board'       && <OpportunityBoard />}
+        {page==='command-center' && <CommandCenterPage onNav={setPage} />}
+        {page==='capital'        && <CapitalPage onNav={setPage} />}
+        {page==='sports-betting' && <SportsBettingPage onNav={setPage} />}
+        {page==='ai-analyst'     && <AIAnalystPage onNav={setPage} />}
+        {page==='token-economy'  && <TokenEconomyPage onNav={setPage} />}
+        {page==='theme-engine'   && <ThemeEnginePage onNav={setPage} />}
+        {page==='covered-calls'  && <CoveredCallPage onNav={setPage} />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 
