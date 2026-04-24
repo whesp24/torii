@@ -7487,6 +7487,8 @@ function OpportunityBoard() {
   const [minScore,   setMinScore]   = React.useState(0);
   const [selected,   setSelected]   = React.useState(null);
   const [runProgress,setRunProgress]= React.useState(null);    // { done, total }
+  const [signalFilter, setSignalFilter] = React.useState('');  // signal label to sort by
+  const [sigDirection, setSigDirection] = React.useState('all'); // all|bullish|bearish
 
   React.useEffect(() => { loadScores(); }, []);
 
@@ -7553,9 +7555,34 @@ function OpportunityBoard() {
 
   const SCORE_COLOR = (s) => s >= 70 ? 'var(--green)' : s >= 45 ? '#f59e0b' : 'var(--red-loss)';
 
+  // All unique signal labels across all stocks (for the dropdown)
+  const allSignalLabels = React.useMemo(() => {
+    const labels = new Set();
+    scores.forEach(s => (s.signals || []).forEach(sig => labels.add(sig.label)));
+    return Array.from(labels);
+  }, [scores]);
+
+  // Get a specific signal's delta for a stock (for sorting)
+  const getSignalDelta = (stock, label) => {
+    const sig = (stock.signals || []).find(s => s.label === label);
+    return sig ? (sig.delta || 0) : -999;
+  };
+  const getSignalDir = (stock, label) => {
+    const sig = (stock.signals || []).find(s => s.label === label);
+    return sig ? (sig.direction || 'neutral') : null;
+  };
+
   const filtered = scores
     .filter(s => filter === 'all' || s.strategy === filter)
-    .filter(s => s.score >= minScore);
+    .filter(s => s.score >= minScore)
+    .filter(s => {
+      if (!signalFilter || sigDirection === 'all') return true;
+      return getSignalDir(s, signalFilter) === sigDirection;
+    })
+    .sort((a, b) => {
+      if (signalFilter) return getSignalDelta(b, signalFilter) - getSignalDelta(a, signalFilter);
+      return b.score - a.score;
+    });
 
   const signalDotColor = (direction) =>
     direction === 'bullish' ? '#30D158' : direction === 'bearish' ? '#FF3B30' : '#6b7280';
@@ -7610,8 +7637,8 @@ function OpportunityBoard() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="card" style={{ marginBottom:10, padding:'10px 14px', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+      {/* Strategy + score filters */}
+      <div className="card" style={{ marginBottom:6, padding:'10px 14px', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
         <span style={{ fontSize:11, color:'var(--fg3)', marginRight:4 }}>Strategy:</span>
         {strategyTabs.map(tab => (
           <button key={tab.key} onClick={() => setFilter(tab.key)}
@@ -7637,14 +7664,48 @@ function OpportunityBoard() {
         <button onClick={loadScores} style={{ padding:'4px 10px', borderRadius:6, border:'1px solid var(--bdr)', background:'transparent', color:'var(--fg3)', fontSize:11, cursor:'pointer' }}>↺ Refresh</button>
       </div>
 
+      {/* Signal category filter */}
+      {allSignalLabels.length > 0 && (
+        <div className="card" style={{ marginBottom:10, padding:'10px 14px', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <span style={{ fontSize:11, color:'var(--fg3)', flexShrink:0 }}>Sort by signal:</span>
+          <select value={signalFilter} onChange={e => setSignalFilter(e.target.value)}
+            style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--fg)', cursor:'pointer', minWidth:180 }}>
+            <option value="">— Overall Score —</option>
+            {allSignalLabels.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+          {signalFilter && (
+            <>
+              <span style={{ fontSize:11, color:'var(--fg3)' }}>Direction:</span>
+              {['all','bullish','bearish','neutral'].map(d => (
+                <button key={d} onClick={() => setSigDirection(d)}
+                  style={{ padding:'3px 9px', borderRadius:20, fontSize:11, cursor:'pointer', fontWeight:500, textTransform:'capitalize',
+                    border: sigDirection===d ? '1.5px solid var(--red)' : '1px solid var(--bdr)',
+                    background: sigDirection===d ? '#ff3b3018' : 'transparent',
+                    color: sigDirection===d ? 'var(--red)' : 'var(--fg2)' }}>
+                  {d}
+                </button>
+              ))}
+              <button onClick={() => { setSignalFilter(''); setSigDirection('all'); }}
+                style={{ marginLeft:4, padding:'3px 8px', borderRadius:6, border:'1px solid var(--bdr)', background:'transparent', color:'var(--fg3)', fontSize:11, cursor:'pointer' }}>
+                ✕ Clear
+              </button>
+              <span style={{ marginLeft:'auto', fontSize:11, color:'var(--fg3)' }}>
+                Sorted by <strong style={{ color:'var(--fg)' }}>{signalFilter}</strong> score ↓
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 340px' : '1fr', gap:10 }}>
         {/* Main board */}
         <div className="card" style={{ padding:0, overflow:'hidden' }}>
           {/* Table header */}
           <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 90px 70px 80px 68px',
             padding:'8px 14px', borderBottom:'1px solid var(--bdr)', background:'var(--bg)' }}>
-            {['Ticker','Score','Strategy','Signals','Price','Change'].map(h => (
-              <span key={h} style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase' }}>{h}</span>
+            {['Ticker', signalFilter ? `${signalFilter} ↓` : 'Score', 'Strategy', 'Signals', 'Price', 'Change'].map(h => (
+              <span key={h} style={{ fontSize:10, fontWeight:700, color: signalFilter && h.includes('↓') ? 'var(--red)' : 'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{h}</span>
             ))}
           </div>
 
@@ -7667,6 +7728,12 @@ function OpportunityBoard() {
               const sc = STRATEGY_COLORS[s.strategy] || STRATEGY_COLORS.neutral;
               const isSelected = selected?.symbol === s.symbol;
               const activeSignals = (s.signals || []).filter(sig => !sig.noData);
+              // When signal filter active, show that signal's score prominently
+              const focusSig = signalFilter ? (s.signals || []).find(sig => sig.label === signalFilter) : null;
+              const displayScore = focusSig ? focusSig.delta : s.score;
+              const displayColor = focusSig
+                ? (focusSig.delta > 0 ? 'var(--green)' : focusSig.delta < 0 ? 'var(--red-loss)' : '#f59e0b')
+                : SCORE_COLOR(s.score);
               return (
                 <div key={s.symbol} onClick={() => setSelected(isSelected ? null : s)}
                   style={{ display:'grid', gridTemplateColumns:'90px 1fr 90px 70px 80px 68px',
@@ -7677,13 +7744,15 @@ function OpportunityBoard() {
                   <div style={{ fontFamily:'var(--font-mono)', fontSize:13, fontWeight:700, color:'var(--fg)', display:'flex', alignItems:'center' }}>
                     {s.symbol}
                   </div>
-                  {/* Score bar */}
+                  {/* Score / signal bar */}
                   <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                     <div style={{ flex:1, height:4, background:'var(--bdr)', borderRadius:2, overflow:'hidden' }}>
-                      <div style={{ height:'100%', width:`${s.score}%`, background:SCORE_COLOR(s.score), borderRadius:2, transition:'width 0.3s' }} />
+                      <div style={{ height:'100%',
+                        width: focusSig ? `${Math.min(100, Math.abs(focusSig.delta) / 15 * 100)}%` : `${s.score}%`,
+                        background: displayColor, borderRadius:2, transition:'width 0.3s' }} />
                     </div>
-                    <span style={{ fontSize:12, fontWeight:700, fontFamily:'var(--font-mono)', color:SCORE_COLOR(s.score), minWidth:26, textAlign:'right' }}>
-                      {s.score}
+                    <span style={{ fontSize:12, fontWeight:700, fontFamily:'var(--font-mono)', color:displayColor, minWidth:36, textAlign:'right' }}>
+                      {focusSig ? `${focusSig.delta > 0 ? '+' : ''}${focusSig.delta}` : s.score}
                     </span>
                   </div>
                   {/* Strategy badge */}
@@ -7695,8 +7764,9 @@ function OpportunityBoard() {
                   {/* Signal dots */}
                   <div style={{ display:'flex', gap:3, alignItems:'center', flexWrap:'wrap' }}>
                     {activeSignals.slice(0,6).map((sig,i) => (
-                      <span key={i} title={sig.label}
-                        style={{ width:7, height:7, borderRadius:'50%', background:signalDotColor(sig.direction), display:'inline-block', flexShrink:0 }} />
+                      <span key={i} title={`${sig.label}: ${sig.delta > 0 ? '+' : ''}${sig.delta}pts`}
+                        style={{ width:7, height:7, borderRadius:'50%', background:signalDotColor(sig.direction), display:'inline-block', flexShrink:0,
+                          outline: focusSig && sig.label === signalFilter ? '2px solid white' : 'none' }} />
                     ))}
                     {activeSignals.length > 6 && <span style={{ fontSize:9, color:'var(--fg3)' }}>+{activeSignals.length-6}</span>}
                   </div>

@@ -528,11 +528,11 @@ export async function scoreTicker(symbol, { congData } = {}) {
       fetchYahooSummary(t),
       fetchPriceMomentum(t),
       fetchOptionsFlow(t),   // ETFs like SPY/QQQ have major options signal — don't skip
-      isMacro ? Promise.resolve(null) : fetchNewsSentiment(t),
-      isMacro ? Promise.resolve(0)    : getInsiderCount(t),
+      fetchNewsSentiment(t), // macro/ETF stocks have relevant market news — don't skip
+      isMacro ? Promise.resolve(0) : getInsiderCount(t),  // ETFs have no insider Form 4s
       Catalyst.find({ ticker: t, date: { $gte: new Date().toISOString().slice(0, 10) } }).lean().catch(() => []),
       congData ? Promise.resolve(congData) : loadCongData(),
-      isMacro ? Promise.resolve(null) : fetchSocialSentiment(t),
+      fetchSocialSentiment(t), // macro ETFs (SPY, QQQ) have active StockTwits communities
     ]);
 
   // ── 1. Watchlist thesis ─────────────────────────────────────────────────────
@@ -703,9 +703,10 @@ export async function scoreTicker(symbol, { congData } = {}) {
       delta, source: 'STOCK Act',
     });
   } else {
+    // Absence of congressional trading = neutral (politicians not moving = no signal)
     gathered.push({
-      label: 'Congressional Trading', value: 'No trades in 90d',
-      direction: 'neutral', delta: 0, source: 'STOCK Act', noData: true,
+      label: 'Congressional Trading', value: 'No trades in 90d · neutral signal',
+      direction: 'neutral', delta: 0, source: 'STOCK Act',
     });
   }
 
@@ -731,10 +732,17 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: netActivity > 0 ? 'bullish' : netActivity < 0 ? 'bearish' : 'neutral',
       delta, source: src,
     });
-  } else {
+  } else if (isMacro) {
+    // ETFs are trust structures — no individual insider Form 4 filings expected
     gathered.push({
-      label: 'Insider Activity', value: 'No insider transactions in 90d',
-      direction: 'neutral', delta: 0, source: 'SEC EDGAR', noData: true,
+      label: 'Insider Activity', value: 'ETF — no individual insider filings · neutral',
+      direction: 'neutral', delta: 0, source: 'SEC EDGAR',
+    });
+  } else {
+    // No insider activity = neutral (absence of buying/selling = no directional signal)
+    gathered.push({
+      label: 'Insider Activity', value: 'No insider transactions in 90d · neutral',
+      direction: 'neutral', delta: 0, source: 'SEC EDGAR',
     });
   }
 
@@ -756,13 +764,13 @@ export async function scoreTicker(symbol, { congData } = {}) {
     });
   } else if (newsSentiment && newsSentiment.total > 0) {
     gathered.push({
-      label: 'News Sentiment', value: `${newsSentiment.total} articles · insufficient for signal`,
-      direction: 'neutral', delta: 0, source: 'Yahoo News', noData: true,
+      label: 'News Sentiment', value: `${newsSentiment.total} article${newsSentiment.total>1?'s':''} · insufficient for signal · neutral`,
+      direction: 'neutral', delta: 0, source: 'Yahoo News',
     });
   } else {
     gathered.push({
-      label: 'News Sentiment', value: 'No recent news found',
-      direction: 'neutral', delta: 0, source: 'Yahoo News', noData: true,
+      label: 'News Sentiment', value: 'No recent news found · neutral',
+      direction: 'neutral', delta: 0, source: 'Yahoo News',
     });
   }
 
@@ -781,15 +789,11 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: delta >= 4 ? 'bullish' : delta <= -4 ? 'bearish' : 'neutral',
       delta, source: 'Yahoo Finance',
     });
-  } else if (isMacro) {
-    gathered.push({
-      label: 'Options Flow', value: 'ETF/index — check ConvictionPage for detailed options analysis',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
-    });
   } else {
+    // Not enough options activity — neutral (not missing data)
     gathered.push({
-      label: 'Options Flow', value: 'No options activity or not listed',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      label: 'Options Flow', value: 'No significant options activity · neutral',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
     });
   }
 
@@ -825,24 +829,26 @@ export async function scoreTicker(symbol, { congData } = {}) {
       delta, source: 'Yahoo Finance',
     });
   } else {
+    const epsNote = isMacro
+      ? 'ETF — no individual earnings reports · not applicable'
+      : 'No earnings history with estimates · neutral';
     gathered.push({
-      label: 'EPS Surprise', value: 'No earnings data available',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      label: 'EPS Surprise', value: epsNote,
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
     });
   }
 
   // ── 11. Institutional Ownership — Yahoo Finance defaultKeyStatistics ─────────────
   // High institutional ownership with stable/growing position = smart money signal
-  if (!isMacro && yfSummary?.instPctHeld != null) {
+  if (yfSummary?.instPctHeld != null) {
     const inst    = yfSummary.instPctHeld;
     const insider = yfSummary.insiderPctHeld;
-    // High institutional ownership = validation; very high insider = alignment
     let delta = 0;
     if (inst > 80) delta = +4;
     else if (inst > 60) delta = +3;
     else if (inst > 40) delta = +2;
     else if (inst < 10) delta = -2;
-    if (insider && insider > 15) delta += 2; // high insider ownership = bullish
+    if (insider && insider > 15) delta += 2;
     total += delta;
     const insiderNote = insider != null ? ` · ${insider.toFixed(1)}% insider held` : '';
     gathered.push({
@@ -851,10 +857,16 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
       delta, source: 'Yahoo Finance',
     });
-  } else if (!isMacro) {
+  } else if (isMacro) {
+    // ETFs are widely held by institutions by definition — positive structural signal
     gathered.push({
-      label: 'Institutional Ownership', value: 'No institutional data',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      label: 'Institutional Ownership', value: 'ETF — held by millions of investors & institutions · broad ownership',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
+    });
+  } else {
+    gathered.push({
+      label: 'Institutional Ownership', value: 'No institutional data available · neutral',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
     });
   }
 
@@ -931,7 +943,7 @@ export async function scoreTicker(symbol, { congData } = {}) {
   const hasMargins = yfSummary?.grossMargins != null || yfSummary?.operatingMargins != null;
   const hasROE = yfSummary?.returnOnEquity != null;
 
-  if (!isMacro && (hasGrowth || hasMargins || hasROE)) {
+  if (hasGrowth || hasMargins || hasROE) {
     const rg    = yfSummary.revenueGrowth;       // % YoY
     const gm    = yfSummary.grossMargins;         // %
     const om    = yfSummary.operatingMargins;     // %
@@ -977,17 +989,22 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral',
       delta, source: 'Yahoo Finance',
     });
-  } else if (!isMacro) {
+  } else if (isMacro) {
     gathered.push({
-      label: 'Fundamental Quality', value: 'No fundamental data available',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      label: 'Fundamental Quality', value: 'ETF — diversified basket of holdings · varies by underlying',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
+    });
+  } else {
+    gathered.push({
+      label: 'Fundamental Quality', value: 'No fundamental data available · neutral',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
     });
   }
 
   // ── 11c. Valuation — P/E relative to growth (PEG) ────────────────────────────
   // Fama & French (1992): value (low P/B, low P/E) premium is persistent.
   // Avoid negative P/E (losses) and extreme multiples for scoring.
-  if (!isMacro && yfSummary?.peRatio != null && yfSummary.peRatio > 0) {
+  if (yfSummary?.peRatio != null && yfSummary.peRatio > 0) {
     const pe    = yfSummary.peRatio;
     const fwdPE = yfSummary.fwdPE;
     const rg    = yfSummary.revenueGrowth;
@@ -1025,17 +1042,47 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral',
       delta, source: 'Yahoo Finance',
     });
-  } else if (!isMacro) {
+  } else if (yfSummary?.peRatio != null && yfSummary.peRatio <= 0) {
+    // Loss-making company — negative P/E is a bearish signal
+    const valParts = ['Loss-making (negative P/E)'];
+    let delta = -5;
+    if (yfSummary.fwdPE != null && yfSummary.fwdPE > 0 && yfSummary.fwdPE < 30) {
+      delta += 3; valParts.push(`Fwd P/E ${yfSummary.fwdPE.toFixed(1)} (path to profit)`);
+    } else if (yfSummary.fwdPE != null && yfSummary.fwdPE > 0) {
+      valParts.push(`Fwd P/E ${yfSummary.fwdPE.toFixed(1)}`);
+    }
+    if (yfSummary.revenueGrowth != null && yfSummary.revenueGrowth > 30) {
+      delta += 2; valParts.push(`Rev +${yfSummary.revenueGrowth.toFixed(0)}% (growth premium)`);
+    }
+    total += delta;
     gathered.push({
-      label: 'Valuation', value: yfSummary?.peRatio != null ? 'Negative P/E (loss-making)' : 'No valuation data',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      label: 'Valuation', value: valParts.join(' · '),
+      direction: delta >= -2 ? 'neutral' : 'bearish', delta, source: 'Yahoo Finance',
+    });
+  } else if (isMacro) {
+    gathered.push({
+      label: 'Valuation', value: 'ETF — market-cap weighted index · expense ratio based valuation',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
+    });
+  } else if (yfSummary?.fwdPE != null && yfSummary.fwdPE > 0) {
+    const fpe = yfSummary.fwdPE;
+    const delta = fpe < 15 ? +3 : fpe < 25 ? +1 : fpe > 50 ? -2 : 0;
+    total += delta;
+    gathered.push({
+      label: 'Valuation', value: `Fwd P/E ${fpe.toFixed(1)} · no trailing P/E`,
+      direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source: 'Yahoo Finance',
+    });
+  } else {
+    gathered.push({
+      label: 'Valuation', value: 'No valuation data available · neutral',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
     });
   }
 
   // ── 11d. Social Sentiment — StockTwits public API ─────────────────────────────
   // Da, Engelberg & Gao (2011): investor attention → short-run positive price pressure.
   // Chen et al. (2014): StockTwits bearish % strongly predicts next-day negative returns.
-  if (!isMacro && social && social.tagged >= 5) {
+  if (social && social.tagged >= 5) {
     const { bull: sBull, bear: sBear, bullPct, watcherCount } = social;
     const delta = bullPct > 75 ? +5 : bullPct > 60 ? +3 : bullPct < 35 ? -5 : bullPct < 45 ? -3 : 0;
     total += delta;
@@ -1046,10 +1093,11 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
       delta, source: 'StockTwits',
     });
-  } else if (!isMacro) {
+  } else {
     gathered.push({
-      label: 'Social Sentiment', value: social ? 'Insufficient tagged messages' : 'No StockTwits data',
-      direction: 'neutral', delta: 0, source: 'StockTwits', noData: true,
+      label: 'Social Sentiment',
+      value: social?.tagged > 0 ? `${social.tagged} tagged messages · insufficient sample · neutral` : 'No StockTwits data · neutral',
+      direction: 'neutral', delta: 0, source: 'StockTwits',
     });
   }
 
@@ -1080,9 +1128,12 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: 'bullish', delta: catDelta, source: 'Yahoo Finance + Calendar',
     });
   } else {
+    const catalystNote = isMacro
+      ? 'ETF — no individual earnings date · macro events drive movement'
+      : 'No earnings or events in next 60d · neutral';
     gathered.push({
-      label: 'Upcoming Catalysts', value: 'No earnings or events in next 60d',
-      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      label: 'Upcoming Catalysts', value: catalystNote,
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance',
     });
   }
 
