@@ -50,28 +50,40 @@ router.get('/form4/:ticker', async (req, res) => {
     if (!r.ok) throw new Error(`EDGAR ${r.status}`);
     const xml = await r.text();
 
-    // Parse <entry> blocks
+    // Parse <entry> blocks — filter strictly to Form 4 / 4/A only
+    // (EDGAR type=4 prefix-matches 424B prospectus filings too)
     const entryBlocks = xmlAll(xml, 'entry');
 
-    const filings = entryBlocks.slice(0, 25).map(entry => {
-      const title      = xmlTag(entry, 'title');      // "4 - HUANG JEN-HSUN (0001346985) (Reporting)"
-      const dateFiled  = xmlTag(entry, 'date-filed');
-      const period     = xmlTag(entry, 'period-of-report');
-      const href       = xmlTag(entry, 'filing-href') || xmlTag(entry, 'link');
-      const accession  = xmlTag(entry, 'accession-number');
-      const formType   = xmlTag(entry, 'filing-type') || '4';
+    const filings = entryBlocks
+      .filter(entry => {
+        const ft = xmlTag(entry, 'filing-type');
+        return ft === '4' || ft === '4/A' || ft === '';   // empty means it IS a 4
+      })
+      .slice(0, 25)
+      .map(entry => {
+        const title      = xmlTag(entry, 'title');   // "4 - HUANG JEN-HSUN (0001346985) (Reporting)"
+        const dateFiled  = xmlTag(entry, 'date-filed')
+                        || xmlTag(entry, 'updated')?.slice(0, 10)
+                        || '';
+        const period     = xmlTag(entry, 'period-of-report') || '';
+        const href       = xmlTag(entry, 'filing-href')
+                        || (entry.match(/href="([^"]*Archives[^"]*)"/)?.[1] ?? '');
+        const accession  = xmlTag(entry, 'accession-number');
+        const formType   = xmlTag(entry, 'filing-type') || '4';
 
-      // Extract filer name from title: "4 - NAME (CIK) (Reporting)"
-      const filerMatch = title.match(/^4[^-]*-\s*(.+?)\s*\(\d+\)/i);
-      const rawName    = filerMatch ? filerMatch[1] : title;
-      const filerName  = titleCase(rawName) || 'Unknown';
+        // Extract filer name from title: "4 - NAME (CIK) (Reporting)"
+        const filerMatch = title.match(/^4[^-]*-\s*(.+?)\s*\(\d+\)/i);
+        const rawName    = filerMatch ? filerMatch[1] : '';
+        const filerName  = rawName ? titleCase(rawName) : 'Unknown';
 
-      return { filer: filerName, date: dateFiled, period, formType, accession, url: href };
-    });
+        return { filer: filerName, date: dateFiled, period, formType, accession, url: href };
+      })
+      .filter(f => f.filer !== 'Unknown' || f.date);   // drop 424B noise that slipped through
 
     // Try to extract total count from feed (not always present)
     const totalMatch = xml.match(/<opensearch:totalResults>(\d+)<\/opensearch:totalResults>/);
-    const count = totalMatch ? parseInt(totalMatch[1]) : filings.length;
+    const rawCount   = totalMatch ? parseInt(totalMatch[1]) : entryBlocks.length;
+    const count      = Math.min(rawCount, filings.length * 4 || rawCount); // rough estimate
 
     res.json({ ticker, filings, count });
   } catch (err) {

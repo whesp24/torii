@@ -4880,19 +4880,22 @@ function WatchlistIntelPage() {
 // ─── 13F / INSIDER TRACKING ────────────────────────────────────────────────────
 
 function InsiderPage() {
-  const [funds,       setFunds]       = React.useState([]);
-  const [fundData,    setFundData]    = React.useState({});
-  const [form4Ticker, setForm4Ticker] = React.useState('');
-  const [form4Data,   setForm4Data]   = React.useState(null);
-  const [form4Loading,setForm4Loading]= React.useState(false);
-  const [tab,         setTab]         = React.useState('funds'); // 'funds' | 'form4'
+  const [funds,        setFunds]        = React.useState([]);
+  const [fundData,     setFundData]     = React.useState({});
+  const [expandedFund, setExpandedFund] = React.useState(null);
+  const [form4Query,   setForm4Query]   = React.useState('');
+  const [form4Days,    setForm4Days]    = React.useState(90);
+  const [form4Data,    setForm4Data]    = React.useState(null);
+  const [form4Loading, setForm4Loading] = React.useState(false);
+  const [tab,          setTab]          = React.useState('form4');
+  const [sortCol,      setSortCol]      = React.useState('date');
+  const [sortDir,      setSortDir]      = React.useState(-1);
 
   React.useEffect(() => {
     fetch(`${API_URL}/insider/funds`)
       .then(r => r.json())
       .then(data => {
         setFunds(Array.isArray(data) ? data : []);
-        // Load each fund's latest filing info
         (Array.isArray(data) ? data : []).forEach(fund => {
           fetch(`${API_URL}/insider/funds/${fund.cik}/latest`)
             .then(r => r.json())
@@ -4903,14 +4906,36 @@ function InsiderPage() {
   }, []);
 
   function searchForm4() {
-    if (!form4Ticker.trim()) return;
+    const ticker = form4Query.trim().toUpperCase().replace(/[^A-Z0-9.]/g, '');
+    if (!ticker) return;
     setForm4Loading(true);
     setForm4Data(null);
-    fetch(`${API_URL}/insider/form4/${form4Ticker.trim().toUpperCase()}`)
+    fetch(`${API_URL}/insider/form4/${ticker}`)
       .then(r => r.json())
       .then(d => { setForm4Data(d); setForm4Loading(false); })
       .catch(() => setForm4Loading(false));
   }
+
+  function toggleSort(col) {
+    if (sortCol === col) setSortDir(d => d * -1);
+    else { setSortCol(col); setSortDir(-1); }
+  }
+
+  const sortedFilings = React.useMemo(() => {
+    if (!form4Data?.filings) return [];
+    return [...form4Data.filings].sort((a, b) => {
+      const va = a[sortCol] || '';
+      const vb = b[sortCol] || '';
+      return va < vb ? -sortDir : va > vb ? sortDir : 0;
+    });
+  }, [form4Data, sortCol, sortDir]);
+
+  const colHdr = (label, col) => (
+    <th onClick={() => toggleSort(col)}
+      style={{ padding:'8px 12px', textAlign:'left', fontSize:10, fontFamily:'var(--font-mono)', color: sortCol===col?'var(--red)':'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.08em', cursor:'pointer', userSelect:'none', whiteSpace:'nowrap', borderBottom:'1px solid var(--bdr)' }}>
+      {label}{sortCol===col?(sortDir>0?' ↑':' ↓'):''}
+    </th>
+  );
 
   return (
     <div className="page-root">
@@ -4923,100 +4948,186 @@ function InsiderPage() {
 
       {/* Tab strip */}
       <div className="filter-strip" style={{ marginBottom:16 }}>
-        {[['funds','Institutional 13F'],['form4','Insider Form 4']].map(([id, label]) => (
+        {[['form4','Insider Form 4'],['funds','Institutional 13F']].map(([id, label]) => (
           <button key={id} className={`filter-chip${tab===id?' active':''}`} onClick={() => setTab(id)}>{label}</button>
         ))}
       </div>
 
-      {tab === 'funds' && (
-        <div>
-          <div style={{ fontSize:11, color:'var(--fg3)', marginBottom:12, fontFamily:'var(--font-mono)' }}>
-            Notable fund 13F filings — sourced from SEC EDGAR. Click any row to view on EDGAR.
-          </div>
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {funds.map(fund => {
-              const d = fundData[fund.cik];
-              const latest = d?.recentFilings?.[0];
-              return (
-                <div key={fund.cik} className="card" style={{ display:'flex', alignItems:'center', gap:12 }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>{fund.name}</div>
-                    <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>CIK: {fund.cik}</div>
-                  </div>
-                  <div style={{ textAlign:'right' }}>
-                    {latest ? (
-                      <>
-                        <div style={{ fontSize:12, color:'var(--fg2)', fontFamily:'var(--font-mono)' }}>Latest 13F: {latest.date}</div>
-                        <a href={latest.url} target="_blank" rel="noopener"
-                          style={{ fontSize:11, color:'var(--red)', textDecoration:'none' }} onClick={e => e.stopPropagation()}>
-                          View on EDGAR ↗
-                        </a>
-                      </>
-                    ) : d ? (
-                      <span style={{ fontSize:11, color:'var(--fg3)' }}>No 13F found</span>
-                    ) : (
-                      <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Loading…</span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ marginTop:16, padding:'12px 16px', background:'var(--surf)', borderRadius:10, fontSize:11, color:'var(--fg3)', lineHeight:1.6 }}>
-            <strong style={{ color:'var(--fg2)' }}>Note:</strong> 13F filings are quarterly and published 45 days after quarter-end. They reflect holdings as of the quarter close, not current positions.
-          </div>
-        </div>
-      )}
-
+      {/* ── FORM 4 TAB ── */}
       {tab === 'form4' && (
         <div>
-          <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-            <input
-              value={form4Ticker}
-              onChange={e => setForm4Ticker(e.target.value.toUpperCase())}
-              onKeyDown={e => e.key === 'Enter' && searchForm4()}
-              placeholder="Enter ticker (e.g. NVDA)"
-              style={{ flex:1, padding:'10px 14px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:8, fontSize:13, color:'var(--fg)' }}
-            />
-            <button onClick={searchForm4} disabled={form4Loading}
-              style={{ padding:'10px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}>
-              {form4Loading ? 'Searching…' : 'Search'}
-            </button>
+          {/* Bloomberg-style search bar */}
+          <div className="card" style={{ marginBottom:14, padding:'14px 16px' }}>
+            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <div style={{ position:'relative', flex:1, minWidth:180 }}>
+                <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:12, color:'var(--fg3)', fontFamily:'var(--font-mono)', pointerEvents:'none' }}>TICKER›</span>
+                <input
+                  value={form4Query}
+                  onChange={e => setForm4Query(e.target.value.toUpperCase())}
+                  onKeyDown={e => e.key === 'Enter' && searchForm4()}
+                  placeholder="NVDA"
+                  style={{ width:'100%', padding:'9px 12px 9px 64px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:14, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)', boxSizing:'border-box' }}
+                />
+              </div>
+              <div style={{ display:'flex', gap:4 }}>
+                {[30,60,90].map(d => (
+                  <button key={d} onClick={() => setForm4Days(d)}
+                    style={{ padding:'8px 12px', fontSize:11, fontFamily:'var(--font-mono)', fontWeight:700, border:'1px solid', borderRadius:6, cursor:'pointer',
+                      background: form4Days===d?'var(--red)':'transparent',
+                      borderColor: form4Days===d?'var(--red)':'var(--bdr)',
+                      color: form4Days===d?'#fff':'var(--fg3)' }}>
+                    {d}D
+                  </button>
+                ))}
+              </div>
+              <button onClick={searchForm4} disabled={form4Loading}
+                style={{ padding:'9px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', opacity:form4Loading?0.7:1 }}>
+                {form4Loading ? 'LOADING…' : 'SEARCH'}
+              </button>
+            </div>
+            <div style={{ marginTop:8, fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+              Searches EDGAR for Form 4 insider transactions (director/officer buy/sell disclosures) · SEC required within 2 business days
+            </div>
           </div>
 
+          {/* Results */}
           {form4Data && (
-            <div>
-              <div style={{ marginBottom:10, fontSize:12, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
-                {form4Data.count} Form 4 filings found for <strong style={{ color:'var(--red)' }}>{form4Data.ticker}</strong> (last 90 days)
+            <div className="card" style={{ padding:0, overflow:'hidden' }}>
+              <div style={{ padding:'10px 16px', borderBottom:'1px solid var(--bdr)', display:'flex', alignItems:'center', gap:12 }}>
+                <span style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'var(--fg3)' }}>
+                  {sortedFilings.length} Form 4 filings ·
+                </span>
+                <span style={{ fontFamily:'var(--font-mono)', fontSize:13, fontWeight:800, color:'var(--red)' }}>{form4Data.ticker}</span>
+                <span style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'var(--fg3)' }}>· last {form4Days} days</span>
               </div>
-              {form4Data.filings?.length === 0 ? (
-                <div className="card" style={{ textAlign:'center', color:'var(--fg3)', padding:30 }}>No insider transactions found in last 90 days</div>
+              {sortedFilings.length === 0 ? (
+                <div style={{ padding:30, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>No insider transactions found in this period</div>
               ) : (
-                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {form4Data.filings?.map((f, i) => (
-                    <div key={i} className="card" style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px' }}>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontWeight:600, fontSize:13 }}>{f.filer}</div>
-                        <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Filed: {f.date} · Period: {f.period}</div>
-                      </div>
-                      <a href={f.url} target="_blank" rel="noopener"
-                        style={{ fontSize:11, color:'var(--red)', textDecoration:'none', fontWeight:700 }}>
-                        EDGAR ↗
-                      </a>
-                    </div>
-                  ))}
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                    <thead>
+                      <tr style={{ background:'var(--surf)' }}>
+                        {colHdr('INSIDER', 'filer')}
+                        {colHdr('FILED', 'date')}
+                        {colHdr('PERIOD', 'period')}
+                        {colHdr('TYPE', 'formType')}
+                        <th style={{ padding:'8px 12px', textAlign:'right', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.08em', borderBottom:'1px solid var(--bdr)' }}>EDGAR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedFilings.map((f, i) => (
+                        <tr key={i} style={{ borderBottom:'1px solid var(--bdr)', transition:'background 0.1s' }}
+                          onMouseEnter={e => e.currentTarget.style.background='var(--surf)'}
+                          onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                          <td style={{ padding:'10px 12px', fontSize:13, fontWeight:600, color:'var(--fg)' }}>{f.filer || '—'}</td>
+                          <td style={{ padding:'10px 12px', fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg2)', whiteSpace:'nowrap' }}>{f.date || '—'}</td>
+                          <td style={{ padding:'10px 12px', fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg3)', whiteSpace:'nowrap' }}>{f.period || '—'}</td>
+                          <td style={{ padding:'10px 12px' }}>
+                            <span style={{ padding:'2px 8px', borderRadius:4, fontSize:10, fontFamily:'var(--font-mono)', fontWeight:700, background:'rgba(239,68,68,0.12)', color:'var(--red)' }}>{f.formType}</span>
+                          </td>
+                          <td style={{ padding:'10px 12px', textAlign:'right' }}>
+                            {f.url ? (
+                              <a href={f.url} target="_blank" rel="noopener"
+                                style={{ fontSize:11, color:'var(--red)', textDecoration:'none', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                                ↗
+                              </a>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
           )}
 
           {!form4Data && !form4Loading && (
-            <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)' }}>
-              <div style={{ fontSize:24, marginBottom:8 }}>📋</div>
-              <div>Search a ticker to see recent insider Form 4 filings</div>
-              <div style={{ fontSize:11, marginTop:6 }}>Covers director/officer buy/sell transactions from SEC EDGAR</div>
+            <div className="card" style={{ textAlign:'center', padding:'40px 20px', color:'var(--fg3)' }}>
+              <div style={{ fontFamily:'var(--font-mono)', fontSize:32, marginBottom:12, color:'var(--bdr)' }}>SEC/EDGAR</div>
+              <div style={{ fontSize:13, marginBottom:6 }}>Enter a ticker to query Form 4 insider transactions</div>
+              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Director and officer buy/sell disclosures from SEC EDGAR</div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── 13F TAB ── */}
+      {tab === 'funds' && (
+        <div>
+          <div style={{ fontSize:11, color:'var(--fg3)', marginBottom:12, fontFamily:'var(--font-mono)', padding:'0 2px' }}>
+            Notable institutional funds · quarterly 13F-HR filings · SEC EDGAR · Q1 published ~45 days after quarter-end
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {funds.map(fund => {
+              const d = fundData[fund.cik];
+              const latest = d?.recentFilings?.[0];
+              const isExpanded = expandedFund === fund.cik;
+              const holdings = d?.holdings || [];
+              const totalVal = holdings.reduce((s, h) => s + h.value, 0);
+              return (
+                <div key={fund.cik} className="card" style={{ padding:0, overflow:'hidden' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', cursor:'pointer' }}
+                    onClick={() => setExpandedFund(isExpanded ? null : fund.cik)}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>{fund.name}</div>
+                      <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                        CIK {fund.cik}
+                        {d?.holdingsCount ? ` · ${d.holdingsCount} positions` : ''}
+                        {latest?.date ? ` · Filed ${latest.date}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                      {latest ? (
+                        <a href={latest.url} target="_blank" rel="noopener"
+                          style={{ fontSize:11, color:'var(--red)', textDecoration:'none', fontFamily:'var(--font-mono)', fontWeight:700 }}
+                          onClick={e => e.stopPropagation()}>
+                          EDGAR ↗
+                        </a>
+                      ) : d === undefined ? (
+                        <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>Loading…</span>
+                      ) : (
+                        <span style={{ fontSize:11, color:'var(--fg3)' }}>No 13F found</span>
+                      )}
+                      <span style={{ color:'var(--fg3)', fontSize:12 }}>{isExpanded ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+                  {isExpanded && holdings.length > 0 && (
+                    <div style={{ borderTop:'1px solid var(--bdr)', overflowX:'auto' }}>
+                      <div style={{ padding:'8px 16px', fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', background:'var(--surf)' }}>
+                        TOP HOLDINGS · Total reported: ${(totalVal/1000).toFixed(0)}M
+                      </div>
+                      <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                        <thead>
+                          <tr style={{ background:'var(--surf)' }}>
+                            {['#','ISSUER','VALUE ($M)','SHARES','CUSIP'].map(h => (
+                              <th key={h} style={{ padding:'6px 12px', textAlign: h==='VALUE ($M)'||h==='SHARES'?'right':'left', fontSize:9, fontFamily:'var(--font-mono)', color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.08em', borderBottom:'1px solid var(--bdr)', whiteSpace:'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {holdings.slice(0, 15).map((h, i) => (
+                            <tr key={i} style={{ borderBottom:'1px solid var(--bdr)' }}>
+                              <td style={{ padding:'7px 12px', fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>{i+1}</td>
+                              <td style={{ padding:'7px 12px', fontSize:12, fontWeight:600 }}>{h.issuer}</td>
+                              <td style={{ padding:'7px 12px', textAlign:'right', fontSize:12, fontFamily:'var(--font-mono)', color:'var(--green)' }}>${(h.value/1000).toFixed(1)}M</td>
+                              <td style={{ padding:'7px 12px', textAlign:'right', fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg2)' }}>{h.shares?.toLocaleString()}</td>
+                              <td style={{ padding:'7px 12px', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{h.cusip}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {isExpanded && holdings.length === 0 && d !== undefined && (
+                    <div style={{ padding:'16px', borderTop:'1px solid var(--bdr)', fontSize:12, color:'var(--fg3)', textAlign:'center' }}>
+                      {d ? 'Holdings not parsed — click EDGAR to view filing directly' : 'Loading…'}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
