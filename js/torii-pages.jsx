@@ -7821,27 +7821,29 @@ function ConvictionPage() {
     const results = await Promise.allSettled([
       // 1. Watchlist / thesis
       fetch(`${API_URL}/watchlist/${t}`).then(r=>r.json()).catch(()=>null),
-      // 2. Sentiment
-      fetch(`${API_URL}/sentiment/analyze/${t}`, { method:'POST', headers:{'Content-Type':'application/json'} }).then(r=>r.json()).catch(()=>null),
-      // 3. Short interest
+      // 2. Short interest (legacy endpoint, optional)
       fetch(`${API_URL}/short/${t}`).then(r=>r.json()).catch(()=>null),
-      // 4. Congressional trades
+      // 3. Congressional trades
       fetch(`${API_URL}/congressional?ticker=${t}&days=90`).then(r=>r.json()).catch(()=>null),
-      // 5. Options flow
+      // 4. Options flow (legacy)
       fetch(`${API_URL}/options/${t}`).then(r=>r.json()).catch(()=>null),
-      // 6. Insider Form 4
+      // 5. Insider Form 4
       fetch(`${API_URL}/insider/form4/${t}`).then(r=>r.json()).catch(()=>null),
-      // 7. Catalysts upcoming
+      // 6. Catalysts upcoming
       fetch(`${API_URL}/catalysts?ticker=${t}&from=${new Date().toISOString().slice(0,10)}`).then(r=>r.json()).catch(()=>[]),
-      // 8. Analyst price target (Finnhub — optional, used when key is set)
+      // 7. Analyst price target (Finnhub — optional, used when key is set)
       fetch(`${API_URL}/stocks/price-target/${t}`).then(r=>r.json()).catch(()=>null),
-      // 9. Fundamentals — Finnhub metric+quote+profile
+      // 8. Fundamentals — Finnhub metric+quote+profile
       fetch(`${API_URL}/stocks/fundamentals/${t}`).then(r=>r.json()).catch(()=>null),
-      // 10. Yahoo Finance quoteSummary — analyst targets + short interest + 52w (no key needed)
+      // 9. Yahoo Finance quoteSummary — analyst targets + short interest + 52w + earnings (no key needed)
       fetch(`${API_URL}/stocks/yahoo-summary/${t}`).then(r=>r.json()).catch(()=>null),
+      // 10. Price momentum — actual 1mo/3mo returns from Yahoo chart
+      fetch(`${API_URL}/stocks/momentum/${t}`).then(r=>r.json()).catch(()=>null),
+      // 11. News sentiment — keyword scoring on real headlines (no AI key needed)
+      fetch(`${API_URL}/stocks/news-sentiment/${t}`).then(r=>r.json()).catch(()=>null),
     ]);
 
-    const [wl, sent, shi, cong, opts, ins, cats, pt, fund, yf] = results.map(r => r.status==='fulfilled' ? r.value : null);
+    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent] = results.map(r => r.status==='fulfilled' ? r.value : null);
     const quote  = fund?.quote  || null;
     const metric = fund?.metric || null;
 
@@ -7864,9 +7866,11 @@ function ConvictionPage() {
     const currentPrice = quote?.c || yf?.currentPrice;
     const targetMean   = pt?.targetMean || yf?.targetMean;
     const targetSource = pt?.targetMean ? 'Finnhub' : 'Yahoo Finance';
-    if (targetMean && currentPrice) {
+    if (targetMean && currentPrice && (yf?.numAnalysts > 0 || pt?.targetMean)) {
       const upside = ((targetMean - currentPrice) / currentPrice) * 100;
-      const delta = upside > 30 ? +15 : upside > 15 ? +10 : upside > 5 ? +5 : upside < -15 ? -12 : upside < -5 ? -6 : 0;
+      const analystWeight = (yf?.numAnalysts || 0) >= 10 ? 1.0 : (yf?.numAnalysts || 0) >= 5 ? 0.75 : 0.5;
+      const rawDelta = upside > 30 ? +15 : upside > 15 ? +10 : upside > 5 ? +5 : upside < -15 ? -12 : upside < -5 ? -6 : 0;
+      const delta = Math.round(rawDelta * analystWeight);
       total += delta;
       const rec = pt?.recommendation;
       const recLabel = rec ? ` · ${rec.strongBuy}SB/${rec.buy}B/${rec.hold}H/${rec.sell}S`
@@ -7875,69 +7879,98 @@ function ConvictionPage() {
       gathered.push({ label:'Analyst Consensus',
         value: `$${targetMean.toFixed(2)} target · ${upside>0?'+':''}${upside.toFixed(0)}% upside${nAnalysts}${recLabel}`,
         direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: targetSource });
+    } else if (yf?.recKey) {
+      const recMap = { 'strong_buy':+8, 'buy':+5, 'hold':0, 'sell':-5, 'underperform':-8, 'strong_sell':-10 };
+      const delta = recMap[yf.recKey] ?? 0;
+      total += delta;
+      gathered.push({ label:'Analyst Consensus',
+        value: `Consensus: ${yf.recKey}${yf.numAnalysts > 0 ? ` · ${yf.numAnalysts} analysts` : ''}`,
+        direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: 'Yahoo Finance' });
     } else {
       gathered.push({ label:'Analyst Consensus', value: 'No analyst coverage', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
-    // Price Momentum — Finnhub metric first, Yahoo Finance fallback
-    const high52 = metric?.['52WeekHigh'] || yf?.high52;
-    const low52  = metric?.['52WeekLow']  || yf?.low52;
-    const livePrice = quote?.c || yf?.currentPrice;
-    if (livePrice && high52 && low52) {
-      const pctFromHigh = ((livePrice - high52) / high52) * 100;
-      const range = high52 - low52;
-      const posInRange = range > 0 ? ((livePrice - low52) / range) * 100 : 50;
-      const delta = pctFromHigh > -8 ? +8 : pctFromHigh > -20 ? +4 : pctFromHigh > -35 ? 0 : pctFromHigh > -50 ? -5 : -10;
+    // Price Momentum — actual returns first (Jegadeesh & Titman 1993), 52w fallback
+    if (mom && !mom.error && mom.ret3mo != null) {
+      const { ret1mo, ret3mo } = mom;
+      let delta = ret3mo > 30 ? +12 : ret3mo > 15 ? +8 : ret3mo > 5 ? +4 : ret3mo > -5 ? 0 : ret3mo > -15 ? -4 : ret3mo > -30 ? -8 : -12;
+      if (ret1mo > 0 && delta > 0) delta = Math.min(delta + 2, 14);
+      if (ret1mo < 0 && delta < 0) delta = Math.max(delta - 2, -14);
       total += delta;
+      const high52 = metric?.['52WeekHigh'] || yf?.high52;
+      const liveP  = quote?.c || yf?.currentPrice;
+      const rangeNote = (high52 && liveP) ? ` · ${(((liveP-high52)/high52)*100).toFixed(0)}% from 52w high` : '';
       gathered.push({ label:'Price Momentum',
-        value: `${pctFromHigh.toFixed(1)}% from 52w high · ${posInRange.toFixed(0)}% of range`,
-        direction: delta>=4?'bullish':delta<=-5?'bearish':'neutral', delta, source:'Yahoo Finance' });
+        value: `${ret1mo>0?'+':''}${ret1mo.toFixed(1)}% (1mo) · ${ret3mo>0?'+':''}${ret3mo.toFixed(1)}% (3mo)${rangeNote}`,
+        direction: delta>=4?'bullish':delta<=-4?'bearish':'neutral', delta, source:'Yahoo Finance' });
     } else {
-      gathered.push({ label:'Price Momentum', value: 'No price data', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
-    }
-
-    // Sentiment
-    if (sent && !sent.error && sent.score != null) {
-      const delta = sent.score > 60 ? +10 : sent.score < 40 ? -10 : 0;
-      total += delta;
-      gathered.push({ label:'News Sentiment', value: `${sent.score?.toFixed(0)}% positive`, direction: sent.score>60?'bullish':sent.score<40?'bearish':'neutral', delta, source:'AI' });
-    } else {
-      gathered.push({ label:'News Sentiment', value: 'No news data', direction: 'neutral', delta: 0, source:'AI', noData: true });
-    }
-
-    // Short interest — Finnhub/FINRA first, Yahoo Finance fallback
-    if (shi && !shi.error) {
-      const sp = shi.shortInterestPct ?? shi.finra?.shortPct ?? yf?.shortPct;
-      if (sp != null) {
-        const delta = sp > 20 ? -10 : sp > 10 ? -5 : sp < 3 ? +5 : 0;
+      const high52 = metric?.['52WeekHigh'] || yf?.high52;
+      const low52  = metric?.['52WeekLow']  || yf?.low52;
+      const livePrice = quote?.c || yf?.currentPrice;
+      if (livePrice && high52 && low52) {
+        const pctFromHigh = ((livePrice - high52) / high52) * 100;
+        const range = high52 - low52;
+        const posInRange = range > 0 ? ((livePrice - low52) / range) * 100 : 50;
+        const delta = pctFromHigh > -8 ? +8 : pctFromHigh > -20 ? +4 : pctFromHigh > -35 ? 0 : pctFromHigh > -50 ? -5 : -10;
         total += delta;
-        gathered.push({ label:'Short Interest', value: `${sp.toFixed(1)}% of float`, direction: sp>20?'bearish':sp>10?'neutral':'bullish', delta, source:'FINRA/Yahoo' });
+        gathered.push({ label:'Price Momentum',
+          value: `${pctFromHigh.toFixed(1)}% from 52w high · ${posInRange.toFixed(0)}% of range`,
+          direction: delta>=4?'bullish':delta<=-5?'bearish':'neutral', delta, source:'Yahoo Finance' });
       } else {
-        gathered.push({ label:'Short Interest', value: 'No data', direction: 'neutral', delta: 0, source:'FINRA/Finnhub', noData: true });
+        gathered.push({ label:'Price Momentum', value: 'No price data', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
       }
+    }
+
+    // News Sentiment — keyword scoring on real headlines (no AI key needed)
+    if (newsSent && !newsSent.error && newsSent.total >= 3) {
+      const { bull, bear, total: nTotal, label: sentLabel, source: sentSrc } = newsSent;
+      const netSentiment = bull - bear;
+      const sentimentPct = nTotal > 0 ? (netSentiment / nTotal) * 100 : 0;
+      const delta = sentimentPct > 40 ? +8 : sentimentPct > 20 ? +5 : sentimentPct > 0 ? +2
+        : sentimentPct < -40 ? -8 : sentimentPct < -20 ? -5 : sentimentPct < 0 ? -2 : 0;
+      total += delta;
+      gathered.push({ label:'News Sentiment',
+        value: `${sentLabel} · ${bull} bullish / ${bear} bearish / ${nTotal-bull-bear} neutral (${nTotal} articles)`,
+        direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: sentSrc || 'Yahoo News' });
     } else {
-      gathered.push({ label:'Short Interest', value: 'No data', direction: 'neutral', delta: 0, source:'FINRA/Finnhub', noData: true });
+      gathered.push({ label:'News Sentiment', value: 'No news found', direction: 'neutral', delta: 0, source:'Yahoo News', noData: true });
+    }
+
+    // Short interest — Yahoo Finance primary (already in yf), legacy endpoint fallback
+    const shortPct = yf?.shortPct ?? (shi && !shi.error ? (shi.shortInterestPct ?? shi.finra?.shortPct ?? null) : null);
+    if (shortPct != null) {
+      const delta = shortPct > 25 ? -12 : shortPct > 15 ? -8 : shortPct > 8 ? -4 : shortPct > 4 ? -1 : shortPct < 2 ? +4 : +2;
+      total += delta;
+      const dtc = yf?.shortRatio ? ` · ${yf.shortRatio.toFixed(1)}d to cover` : '';
+      gathered.push({ label:'Short Interest',
+        value: `${shortPct.toFixed(1)}% of float shorted${dtc}`,
+        direction: shortPct>15?'bearish':shortPct>8?'neutral':'bullish', delta, source:'Yahoo Finance' });
+    } else {
+      gathered.push({ label:'Short Interest', value: 'No short data available', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
     // Congressional trading
     if (cong && Array.isArray(cong.trades) && cong.trades.length > 0) {
       const buys  = cong.trades.filter(tx => tx.isBuy).length;
       const sells = cong.trades.filter(tx => !tx.isBuy).length;
-      const delta = buys > sells + 1 ? +8 : buys < sells - 1 ? -8 : 0;
+      const delta = buys > sells + 1 ? +8 : buys > sells ? +4 : buys < sells - 1 ? -8 : buys < sells ? -4 : 0;
       total += delta;
       gathered.push({ label:'Congressional Trading', value: `${buys} buys / ${sells} sells (90d)`, direction: buys>sells?'bullish':buys<sells?'bearish':'neutral', delta, source:'STOCK Act' });
     } else {
       gathered.push({ label:'Congressional Trading', value: 'No trades in 90d', direction: 'neutral', delta: 0, source:'STOCK Act', noData: true });
     }
 
-    // Options flow
-    if (opts && !opts.error && opts.putCallRatio != null) {
-      const pcr = opts.putCallRatio;
-      const delta = pcr < 0.7 ? +8 : pcr > 1.2 ? -8 : 0;
+    // Options flow — Yahoo Finance options chain (P/C ratio), legacy endpoint fallback
+    const pcRatio = opts?.putCallRatio ?? null;
+    if (pcRatio != null) {
+      // Legacy endpoint format
+      const delta = pcRatio < 0.5 ? +10 : pcRatio < 0.7 ? +6 : pcRatio < 0.9 ? +3 : pcRatio < 1.1 ? 0 : pcRatio < 1.3 ? -4 : pcRatio < 1.6 ? -7 : -10;
       total += delta;
-      gathered.push({ label:'Options Flow (P/C ratio)', value: `${pcr.toFixed(2)} — ${opts.sentiment}`, direction: opts.sentiment==='bullish'?'bullish':opts.sentiment==='bearish'?'bearish':'neutral', delta, source:'Yahoo Finance' });
+      gathered.push({ label:'Options Flow',
+        value: `P/C ratio ${pcRatio.toFixed(2)} — ${opts.sentiment || (pcRatio<0.8?'bullish':pcRatio>1.2?'bearish':'neutral')}`,
+        direction: delta>=4?'bullish':delta<=-4?'bearish':'neutral', delta, source:'Yahoo Finance' });
     } else {
-      gathered.push({ label:'Options Flow (P/C ratio)', value: 'No options data', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
+      gathered.push({ label:'Options Flow', value: 'No options activity or not listed', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
     // Insider Form 4 — buy vs sell breakdown
@@ -7953,14 +7986,22 @@ function ConvictionPage() {
       gathered.push({ label:'Insider Transactions', value: 'No Form 4s in 90d', direction: 'neutral', delta: 0, source:'SEC EDGAR', noData: true });
     }
 
-    // Upcoming catalysts
-    if (Array.isArray(cats) && cats.length > 0) {
-      const high = cats.filter(c => c.impact === 'high').length;
-      const delta = high >= 2 ? +8 : high === 1 ? +4 : +2;
-      total += delta;
-      gathered.push({ label:'Upcoming Catalysts', value: `${cats.length} events · ${high} high impact`, direction: 'bullish', delta, source:'Calendar' });
+    // Upcoming catalysts — MongoDB events + Yahoo earnings date
+    const hasMongoCats = Array.isArray(cats) && cats.length > 0;
+    const hasEarnings  = yf?.daysToEarnings != null && yf.daysToEarnings <= 60;
+    if (hasMongoCats || hasEarnings) {
+      const high  = hasMongoCats ? cats.filter(c => c.impact === 'high').length : 0;
+      let catDelta = high >= 2 ? +8 : high === 1 ? +4 : hasMongoCats ? +2 : 0;
+      const catParts = [];
+      if (hasEarnings) {
+        catParts.push(`Earnings in ${yf.daysToEarnings}d`);
+        catDelta += yf.daysToEarnings <= 7 ? +5 : yf.daysToEarnings <= 14 ? +3 : +2;
+      }
+      if (hasMongoCats) catParts.push(`${cats.length} event${cats.length>1?'s':''}${high>0?` (${high} high-impact)`:''}`);
+      total += catDelta;
+      gathered.push({ label:'Upcoming Catalysts', value: catParts.join(' · '), direction: 'bullish', delta: catDelta, source:'Yahoo Finance + Calendar' });
     } else {
-      gathered.push({ label:'Upcoming Catalysts', value: 'No upcoming events', direction: 'neutral', delta: 0, source:'Calendar', noData: true });
+      gathered.push({ label:'Upcoming Catalysts', value: 'No earnings or events in next 60d', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
     total = Math.min(100, Math.max(0, Math.round(total)));
