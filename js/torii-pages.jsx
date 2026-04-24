@@ -7797,13 +7797,15 @@ function OpportunityBoard() {
 }
 
 function ConvictionPage() {
-  const [ticker,   setTicker]   = React.useState('');
-  const [loading,  setLoading]  = React.useState(false);
-  const [signals,  setSignals]  = React.useState([]);
-  const [score,    setScore]    = React.useState(null);
-  const [aiResult, setAiResult] = React.useState(null);
-  const [aiLoad,   setAiLoad]   = React.useState(false);
-  const [watchlist,setWatchlist]= React.useState([]);
+  const [ticker,     setTicker]     = React.useState('');
+  const [loading,    setLoading]    = React.useState(false);
+  const [signals,    setSignals]    = React.useState([]);
+  const [score,      setScore]      = React.useState(null);
+  const [aiResult,   setAiResult]   = React.useState(null);
+  const [headlines,  setHeadlines]  = React.useState([]);
+  const [showNews,   setShowNews]   = React.useState(false);
+  const [stockInfo,  setStockInfo]  = React.useState(null);
+  const [watchlist,  setWatchlist]  = React.useState([]);
 
   React.useEffect(() => {
     fetch(`${API_URL}/watchlist`).then(r=>r.json()).then(d=>setWatchlist(Array.isArray(d)?d:[])).catch(()=>{});
@@ -7815,7 +7817,7 @@ function ConvictionPage() {
   async function analyze() {
     const t = ticker.trim().toUpperCase();
     if (!t) return;
-    setLoading(true); setSignals([]); setScore(null); setAiResult(null);
+    setLoading(true); setSignals([]); setScore(null); setAiResult(null); setHeadlines([]); setStockInfo(null);
 
     const gathered = [];
     const results = await Promise.allSettled([
@@ -7825,9 +7827,9 @@ function ConvictionPage() {
       fetch(`${API_URL}/short/${t}`).then(r=>r.json()).catch(()=>null),
       // 3. Congressional trades
       fetch(`${API_URL}/congressional?ticker=${t}&days=90`).then(r=>r.json()).catch(()=>null),
-      // 4. Options flow (legacy)
+      // 4. Options flow (Yahoo options chain → P/C ratio + unusual activity)
       fetch(`${API_URL}/options/${t}`).then(r=>r.json()).catch(()=>null),
-      // 5. Insider Form 4
+      // 5. Insider Form 4 — buy vs sell breakdown
       fetch(`${API_URL}/insider/form4/${t}`).then(r=>r.json()).catch(()=>null),
       // 6. Catalysts upcoming
       fetch(`${API_URL}/catalysts?ticker=${t}&from=${new Date().toISOString().slice(0,10)}`).then(r=>r.json()).catch(()=>[]),
@@ -7835,17 +7837,25 @@ function ConvictionPage() {
       fetch(`${API_URL}/stocks/price-target/${t}`).then(r=>r.json()).catch(()=>null),
       // 8. Fundamentals — Finnhub metric+quote+profile
       fetch(`${API_URL}/stocks/fundamentals/${t}`).then(r=>r.json()).catch(()=>null),
-      // 9. Yahoo Finance quoteSummary — analyst targets + short interest + 52w + earnings (no key needed)
+      // 9. Yahoo Finance quoteSummary — analyst targets + short + 52w + earnings + institutional + P/E
       fetch(`${API_URL}/stocks/yahoo-summary/${t}`).then(r=>r.json()).catch(()=>null),
       // 10. Price momentum — actual 1mo/3mo returns from Yahoo chart
       fetch(`${API_URL}/stocks/momentum/${t}`).then(r=>r.json()).catch(()=>null),
-      // 11. News sentiment — keyword scoring on real headlines (no AI key needed)
+      // 11. News sentiment — keyword scoring on real headlines
       fetch(`${API_URL}/stocks/news-sentiment/${t}`).then(r=>r.json()).catch(()=>null),
+      // 12. Alpha Vantage AI news sentiment — real NLP scores per article (free key)
+      fetch(`${API_URL}/stocks/av-news/${t}`).then(r=>r.json()).catch(()=>null),
+      // 13. Alpha Vantage EPS surprise history — beat/miss/avg surprise %
+      fetch(`${API_URL}/stocks/earnings-surprise/${t}`).then(r=>r.json()).catch(()=>null),
     ]);
 
-    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent] = results.map(r => r.status==='fulfilled' ? r.value : null);
+    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent, avNews, epsSurprise] =
+      results.map(r => r.status==='fulfilled' ? r.value : null);
     const quote  = fund?.quote  || null;
     const metric = fund?.metric || null;
+
+    // Store stock info for the header display
+    setStockInfo({ name: yf?.name || t, currentPrice: quote?.c || yf?.currentPrice, changePercent: yf?.changePercent });
 
     let total = 50; // base
 
@@ -8016,26 +8026,81 @@ function ConvictionPage() {
       gathered.push({ label:'Upcoming Catalysts', value: 'No earnings or events in next 60d', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
+    // EPS Surprise — Alpha Vantage EARNINGS (beat/miss history = strong forward-looking signal)
+    if (epsSurprise && !epsSurprise.error && epsSurprise.total >= 2) {
+      const { beats, total: epsTotal, avgSurprisePct, mostRecentBeat, mostRecentSurprisePct } = epsSurprise;
+      const beatPct = beats / epsTotal;
+      let delta = 0;
+      if (beatPct >= 0.75 && avgSurprisePct > 5)  delta = +8;
+      else if (beatPct >= 0.5 && avgSurprisePct > 0) delta = +4;
+      else if (beatPct < 0.25)                     delta = -6;
+      else if (avgSurprisePct < -5)                delta = -4;
+      if (mostRecentBeat && mostRecentSurprisePct > 10)  delta = Math.min(delta + 3, 10);
+      if (!mostRecentBeat && mostRecentSurprisePct < -10) delta = Math.max(delta - 3, -8);
+      total += delta;
+      const recentStr = mostRecentSurprisePct != null
+        ? `· most recent: ${mostRecentBeat ? '✓ beat' : '✗ miss'} (${mostRecentSurprisePct > 0 ? '+' : ''}${mostRecentSurprisePct.toFixed(1)}%)` : '';
+      gathered.push({ label:'EPS Surprise',
+        value: `${beats}/${epsTotal} beats (last 4Q) · avg ${avgSurprisePct > 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% ${recentStr}`,
+        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Alpha Vantage' });
+    } else {
+      gathered.push({ label:'EPS Surprise', value: 'No earnings history with estimates available', direction:'neutral', delta:0, source:'Alpha Vantage', noData:true });
+    }
+
+    // Institutional Ownership — Yahoo Finance (smart money validation signal)
+    if (yf?.instPctHeld != null) {
+      const inst    = yf.instPctHeld;
+      const insider = yf.insiderPctHeld;
+      let delta = inst > 80 ? +4 : inst > 60 ? +3 : inst > 40 ? +2 : inst < 10 ? -2 : 0;
+      if (insider && insider > 15) delta += 2;
+      total += delta;
+      const insiderNote = insider != null ? ` · ${insider.toFixed(1)}% insider owned` : '';
+      const topHolders  = yf.instOwners?.length > 0 ? ` · top: ${yf.instOwners[0].name}` : '';
+      gathered.push({ label:'Institutional Ownership',
+        value: `${inst.toFixed(1)}% institutional${insiderNote}${topHolders}`,
+        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+    } else {
+      gathered.push({ label:'Institutional Ownership', value:'No institutional data available', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
+    }
+
+    // Alpha Vantage AI News Sentiment — NLP-scored articles (upgraded from keyword matching)
+    // Falls back to keyword newsSent if AV not available or rate-limited
+    const useAvNews = avNews && !avNews.error && avNews.total >= 3;
+    const sentObj   = useAvNews ? avNews : null;
+    if (useAvNews) {
+      const { bull: avBull, bear: avBear, neutral: avNeutral, total: avTotal, avgScore, label: avLabel } = avNews;
+      const sentimentPct = avTotal > 0 ? ((avBull - avBear) / avTotal) * 100 : 0;
+      const delta = avBull - avBear > 2 ? (sentimentPct > 40 ? +8 : +5) : avBear - avBull > 2 ? (sentimentPct < -40 ? -8 : -5) : 0;
+      total += delta;
+      gathered.push({ label:'News Sentiment (AI)',
+        value: `${avLabel} · ${avBull} positive / ${avBear} negative / ${avNeutral} neutral articles (avg score ${avgScore > 0 ? '+' : ''}${avgScore.toFixed(2)})`,
+        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Alpha Vantage AI' });
+      // Store headlines for the news panel
+      if (avNews.headlines?.length) setHeadlines(avNews.headlines.map(h => typeof h === 'string' ? { title:h } : h));
+    } else if (newsSent && !newsSent.error && newsSent.total >= 3) {
+      const { bull, bear, total: nTotal, label: sentLabel, source: sentSrc } = newsSent;
+      const netSentiment = bull - bear;
+      const sentimentPct = nTotal > 0 ? (netSentiment / nTotal) * 100 : 0;
+      const delta = sentimentPct > 40 ? +8 : sentimentPct > 20 ? +5 : sentimentPct > 0 ? +2
+        : sentimentPct < -40 ? -8 : sentimentPct < -20 ? -5 : sentimentPct < 0 ? -2 : 0;
+      total += delta;
+      gathered.push({ label:'News Sentiment',
+        value: `${sentLabel} · ${bull} bullish / ${bear} bearish / ${nTotal-bull-bear} neutral (${nTotal} articles)`,
+        direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: sentSrc || 'Yahoo News' });
+      if (newsSent.headlines?.length) setHeadlines(newsSent.headlines.map(h => typeof h === 'string' ? { title:h } : h));
+    } else {
+      gathered.push({ label:'News Sentiment', value: 'No recent news found', direction: 'neutral', delta: 0, source:'Yahoo News', noData: true });
+    }
+
     total = Math.min(100, Math.max(0, Math.round(total)));
     setSignals(gathered);
     setScore(total);
     setLoading(false);
-  }
 
-  async function runAI() {
-    setAiLoad(true);
-    const payload = signals.map(s => ({ label: s.label, value: s.value, direction: s.direction }));
-    const r = await fetch(`${API_URL}/sentiment/regime`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ ticker, signals: payload, score }),
-    }).catch(()=>null);
-    // Fallback: use macro regime endpoint with custom prompt
-    const res = await fetch(`${API_URL}/macro/regime`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ indicators: signals.map(s => ({ label: s.label, value: s.value, unit:'' })) }),
-    }).then(r2=>r2.json()).catch(()=>null);
-    setAiResult(res);
-    setAiLoad(false);
+    // Auto-generate narrative (no button needed — fires automatically)
+    const narBody = { ticker: t, score: total, rating: total>=80?'STRONG BUY':total>=65?'BUY':total>=45?'NEUTRAL':total>=30?'SELL':'STRONG SELL', signals: gathered };
+    fetch(`${API_URL}/scores/narrative`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(narBody) })
+      .then(r=>r.json()).then(nar => { if (nar?.narrative) setAiResult(nar); }).catch(()=>{});
   }
 
   const SCORE_COLOR = score == null ? 'var(--fg3)' : score >= 70 ? 'var(--green)' : score >= 40 ? '#f59e0b' : 'var(--red-loss)';
@@ -8047,7 +8112,7 @@ function ConvictionPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Conviction Score</h1>
-          <p className="page-sub">Aggregate all signals → AI investment score · thesis · short · options · congress · insider</p>
+          <p className="page-sub">13-signal AI analysis · news · earnings · momentum · short · options · insider · congress · institutional</p>
         </div>
       </div>
 
@@ -8088,36 +8153,54 @@ function ConvictionPage() {
         <div>
           {/* Score hero */}
           <div style={{ display:'grid', gridTemplateColumns:'auto 1fr', gap:14, marginBottom:14 }}>
-            <div className="card" style={{ textAlign:'center', minWidth:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
-              <div style={{ fontSize:72, fontWeight:900, fontFamily:'var(--font-mono)', color: SCORE_COLOR, lineHeight:1 }}>{score}</div>
-              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', marginBottom:8 }}>/ 100</div>
-              <div style={{ fontSize:14, fontWeight:800, letterSpacing:'0.1em', color: SCORE_COLOR }}>{RATING}</div>
-              <div style={{ marginTop:10, width:'80%', height:6, background:'var(--surf)', borderRadius:3, overflow:'hidden' }}>
-                <div style={{ height:'100%', width:`${score}%`, background: SCORE_COLOR, borderRadius:3, transition:'width 0.5s' }} />
+            <div className="card" style={{ textAlign:'center', minWidth:210, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:4 }}>
+              <div style={{ fontSize:64, fontWeight:900, fontFamily:'var(--font-mono)', color: SCORE_COLOR, lineHeight:1 }}>{score}</div>
+              <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>/ 100</div>
+              <div style={{ fontSize:13, fontWeight:800, letterSpacing:'0.1em', color: SCORE_COLOR }}>{RATING}</div>
+              <div style={{ width:'80%', height:5, background:'var(--surf)', borderRadius:3, overflow:'hidden', margin:'6px 0' }}>
+                <div style={{ height:'100%', width:`${score}%`, background: SCORE_COLOR, borderRadius:3, transition:'width 0.6s' }} />
               </div>
-              <div style={{ marginTop:8, fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg)', fontWeight:700 }}>{ticker}</div>
+              <div style={{ fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg)', fontWeight:800 }}>{stockInfo?.name || ticker}</div>
+              {stockInfo?.currentPrice && (
+                <div style={{ fontSize:11, color:'var(--fg3)' }}>
+                  ${stockInfo.currentPrice.toFixed(2)}
+                  {stockInfo.changePercent != null && (
+                    <span style={{ marginLeft:6, color: stockInfo.changePercent >= 0 ? 'var(--green)' : 'var(--red-loss)', fontWeight:700 }}>
+                      {stockInfo.changePercent >= 0 ? '+' : ''}{stockInfo.changePercent.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+              )}
+              <div style={{ marginTop:6, fontSize:10, color:'var(--fg3)' }}>
+                {signals.filter(s=>!s.noData).length}/{signals.length} signals active
+              </div>
+              {/* Mini signal bar */}
+              <div style={{ display:'flex', gap:3, marginTop:4 }}>
+                {signals.map((s,i) => (
+                  <div key={i} style={{ width:8, height:8, borderRadius:2, background: s.noData ? 'var(--bdr)' : DIR_COLOR[s.direction]||'var(--fg3)', opacity: s.noData ? 0.3 : 1 }} title={s.label} />
+                ))}
+              </div>
             </div>
 
-            <div className="card">
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-                <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', flex:1 }}>Signal Breakdown</span>
-                <button onClick={runAI} disabled={aiLoad}
-                  style={{ padding:'5px 12px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
-                  {aiLoad ? '✦ Thinking…' : '✦ AI Narrative'}
-                </button>
+            <div className="card" style={{ overflow:'hidden' }}>
+              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:10 }}>
+                Signal Breakdown · {signals.filter(s=>s.direction==='bullish'&&!s.noData).length} bullish · {signals.filter(s=>s.direction==='bearish'&&!s.noData).length} bearish
               </div>
               {signals.map((sig, i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none', opacity: sig.noData ? 0.45 : 1 }}>
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none', opacity: sig.noData ? 0.4 : 1 }}>
                   <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: sig.noData ? 'var(--bdr)' : DIR_COLOR[sig.direction]||'var(--fg3)' }} />
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:12, fontWeight:600 }}>{sig.label}</div>
-                    <div style={{ fontSize:11, color:'var(--fg3)' }}>{sig.value} · <span style={{ fontFamily:'var(--font-mono)', fontSize:10 }}>{sig.source}</span></div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:11, fontWeight:700 }}>{sig.label}</div>
+                    <div style={{ fontSize:10, color:'var(--fg3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      {sig.value}
+                      <span style={{ marginLeft:6, fontFamily:'var(--font-mono)', fontSize:9, opacity:0.6 }}>{sig.source}</span>
+                    </div>
                   </div>
-                  <div style={{ textAlign:'right' }}>
+                  <div style={{ textAlign:'right', flexShrink:0 }}>
                     {!sig.noData && (
-                      <span style={{ fontSize:11, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
+                      <div style={{ fontSize:10, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
                         {sig.direction.toUpperCase()}
-                      </span>
+                      </div>
                     )}
                     <div style={{ fontSize:10, fontFamily:'var(--font-mono)', color: sig.delta>0?'var(--green)':sig.delta<0?'var(--red-loss)':'var(--fg3)' }}>
                       {sig.noData ? 'N/A' : `${sig.delta>0?'+':''}${sig.delta}pts`}
@@ -8126,23 +8209,44 @@ function ConvictionPage() {
                 </div>
               ))}
               {signals.length === 0 && (
-                <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:16 }}>No signals gathered — check your API connections</div>
+                <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:16 }}>No signals — click ANALYZE above</div>
               )}
             </div>
           </div>
 
-          {/* AI Narrative */}
-          {aiResult && (
-            <div className="card" style={{ borderLeft:'3px solid var(--red)' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-                <span style={{ fontSize:11, color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em' }}>✦ AI Assessment</span>
-                {aiResult.regime && (
-                  <span style={{ fontSize:10, padding:'2px 8px', borderRadius:4, background:'rgba(239,68,68,0.12)', color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                    {aiResult.regime.toUpperCase()}
-                  </span>
-                )}
+          {/* Auto-generated Investment Narrative */}
+          {aiResult?.narrative && (
+            <div className="card" style={{ marginBottom:14, borderLeft:'3px solid var(--red)', padding:'14px 16px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+                <span style={{ fontSize:10, color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em' }}>✦ Investment Thesis</span>
+                <div style={{ display:'flex', gap:6 }}>
+                  {aiResult.bullCount > 0 && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:3, background:'rgba(34,197,94,0.12)', color:'var(--green)', fontFamily:'var(--font-mono)', fontWeight:700 }}>{aiResult.bullCount} BULL</span>}
+                  {aiResult.bearCount > 0 && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:3, background:'rgba(239,68,68,0.12)', color:'var(--red-loss)', fontFamily:'var(--font-mono)', fontWeight:700 }}>{aiResult.bearCount} BEAR</span>}
+                </div>
               </div>
-              <p style={{ margin:0, fontSize:13, color:'var(--fg2)', lineHeight:1.7 }}>{aiResult.summary}</p>
+              <p style={{ margin:0, fontSize:13, color:'var(--fg)', lineHeight:1.75, fontWeight:400 }}>{aiResult.narrative}</p>
+            </div>
+          )}
+
+          {/* News Headlines Panel */}
+          {headlines.length > 0 && (
+            <div className="card" style={{ marginBottom:14 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom: showNews ? 10 : 0, cursor:'pointer' }} onClick={() => setShowNews(!showNews)}>
+                <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', flex:1 }}>Recent Headlines ({headlines.length})</span>
+                <span style={{ fontSize:11, color:'var(--fg3)' }}>{showNews ? '▲' : '▼'}</span>
+              </div>
+              {showNews && headlines.map((h, i) => (
+                <div key={i} style={{ padding:'7px 0', borderTop:'1px solid var(--bdr)', display:'flex', alignItems:'flex-start', gap:8 }}>
+                  {h.score != null && (
+                    <div style={{ width:6, height:6, borderRadius:'50%', flexShrink:0, marginTop:4,
+                      background: h.score > 0.15 ? 'var(--green)' : h.score < -0.15 ? 'var(--red-loss)' : 'var(--fg3)' }} />
+                  )}
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:'var(--fg2)', lineHeight:1.4 }}>{h.title || h}</div>
+                    {h.source && <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>{h.source} {h.label ? `· ${h.label}` : ''}</div>}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -8151,10 +8255,11 @@ function ConvictionPage() {
       {score === null && !loading && (
         <div className="card" style={{ textAlign:'center', padding:'48px 20px', color:'var(--fg3)' }}>
           <div style={{ fontSize:64, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--bdr)', marginBottom:12 }}>∑</div>
-          <div style={{ fontSize:14, marginBottom:6, color:'var(--fg2)' }}>Enter a ticker to compute conviction score</div>
-          <div style={{ fontSize:11, fontFamily:'var(--font-mono)', lineHeight:1.8 }}>
-            Aggregates: thesis status · news sentiment · short interest<br/>
-            congressional trades · options flow · insider filings · catalysts
+          <div style={{ fontSize:14, marginBottom:8, color:'var(--fg2)' }}>Enter a ticker to compute conviction score</div>
+          <div style={{ fontSize:11, fontFamily:'var(--font-mono)', lineHeight:2, color:'var(--fg3)' }}>
+            13 signals · thesis · news (AI) · EPS surprise · momentum<br/>
+            short interest · options flow · insider · congressional · institutional<br/>
+            analyst consensus · upcoming catalysts · auto narrative
           </div>
         </div>
       )}

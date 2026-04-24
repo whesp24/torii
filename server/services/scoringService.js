@@ -93,7 +93,7 @@ async function safeText(url, opts = {}) {
 // Single call gets: quote, analyst targets, short interest, 52w, earnings date
 async function fetchYahooSummary(symbol) {
   const modules = encodeURIComponent(
-    'summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory'
+    'summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory,institutionOwnership'
   );
   const url  = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
   const data = await yfFetch(url);
@@ -131,6 +131,13 @@ async function fetchYahooSummary(symbol) {
   const upgrades = res.upgradeDowngradeHistory?.history || [];
   const upgrades30d = upgrades.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
 
+  // Institutional ownership — check for increasing/decreasing positions
+  const instOwnership = res.institutionOwnership?.ownershipList || [];
+  const instPctHeld   = defKS.heldPercentInstitutions?.raw != null
+    ? defKS.heldPercentInstitutions.raw * 100 : null;
+  const insiderPctHeld = defKS.heldPercentInsiders?.raw != null
+    ? defKS.heldPercentInsiders.raw * 100 : null;
+
   return {
     currentPrice, changePercent,
     high52:       sumD.fiftyTwoWeekHigh?.raw    ?? defKS.fiftyTwoWeekHigh?.raw    ?? null,
@@ -147,6 +154,13 @@ async function fetchYahooSummary(symbol) {
     name:         price.shortName || price.longName || symbol,
     marketCap:    price.marketCap?.raw          ?? null,
     beta:         defKS.beta?.raw               ?? null,
+    // P/E and growth metrics for context
+    peRatio:      sumD.trailingPE?.raw          ?? defKS.trailingPE?.raw ?? null,
+    fwdPE:        sumD.forwardPE?.raw           ?? null,
+    revenueGrowth: finD.revenueGrowth?.raw     != null ? finD.revenueGrowth.raw * 100 : null,
+    grossMargins: finD.grossMargins?.raw        != null ? finD.grossMargins.raw * 100 : null,
+    operatingMargins: finD.operatingMargins?.raw != null ? finD.operatingMargins.raw * 100 : null,
+    returnOnEquity: finD.returnOnEquity?.raw    != null ? finD.returnOnEquity.raw * 100 : null,
     daysToEarnings,
     nextEarningsTs,
     // Analyst trend breakdown (strongBuy/buy/hold/sell counts)
@@ -156,6 +170,11 @@ async function fetchYahooSummary(symbol) {
     // Recent upgrades/downgrades (last 30 days)
     recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.newGrade || '')).length,
     recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.newGrade || '')).length,
+    recentActions:    upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, to: u.newGrade })),
+    // Institutional ownership
+    instPctHeld,
+    insiderPctHeld,
+    instOwners: instOwnership.slice(0, 5).map(o => ({ name: o.organization, pct: o.pctHeld?.raw != null ? o.pctHeld.raw * 100 : null })),
   };
 }
 
@@ -614,7 +633,34 @@ export async function scoreTicker(symbol, { congData } = {}) {
     });
   }
 
-  // ── 10. Upcoming Catalysts — Yahoo earnings date + MongoDB events ─────────────
+  // ── 10. Institutional Ownership — Yahoo Finance defaultKeyStatistics ─────────────
+  // High institutional ownership with stable/growing position = smart money signal
+  if (!isMacro && yfSummary?.instPctHeld != null) {
+    const inst    = yfSummary.instPctHeld;
+    const insider = yfSummary.insiderPctHeld;
+    // High institutional ownership = validation; very high insider = alignment
+    let delta = 0;
+    if (inst > 80) delta = +4;
+    else if (inst > 60) delta = +3;
+    else if (inst > 40) delta = +2;
+    else if (inst < 10) delta = -2;
+    if (insider && insider > 15) delta += 2; // high insider ownership = bullish
+    total += delta;
+    const insiderNote = insider != null ? ` · ${insider.toFixed(1)}% insider held` : '';
+    gathered.push({
+      label: 'Institutional Ownership',
+      value: `${inst.toFixed(1)}% institutional${insiderNote}`,
+      direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
+      delta, source: 'Yahoo Finance',
+    });
+  } else if (!isMacro) {
+    gathered.push({
+      label: 'Institutional Ownership', value: 'No institutional data',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+    });
+  }
+
+  // ── 12. Upcoming Catalysts — Yahoo earnings date + MongoDB events ─────────────
   const hasMongoCats = cats.length > 0;
   const hasEarnings  = yfSummary?.daysToEarnings != null && yfSummary.daysToEarnings <= 60;
 

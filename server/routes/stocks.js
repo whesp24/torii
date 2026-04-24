@@ -83,7 +83,7 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
       'Accept-Language': 'en-US,en;q=0.9',
       'Referer': 'https://finance.yahoo.com/',
     };
-    const modules = encodeURIComponent('summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory');
+    const modules = encodeURIComponent('summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory,institutionOwnership');
     const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
     const r = await fetch(url, { headers: YF_HEADERS });
     if (!r.ok) return res.status(404).json({ error: `Yahoo Finance ${r.status}` });
@@ -118,6 +118,7 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
     const latestTrend = recTrend[0] || {};
     const upgrades = result.upgradeDowngradeHistory?.history || [];
     const upgrades30d = upgrades.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
+    const instOwnership = result.institutionOwnership?.ownershipList || [];
 
     res.json({
       symbol,
@@ -137,6 +138,13 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
       recKey:        finD.recommendationKey        ?? null,
       marketCap:     price.marketCap?.raw          ?? null,
       beta:          defKS.beta?.raw               ?? null,
+      // Valuation
+      peRatio:       sumD.trailingPE?.raw          ?? defKS.trailingPE?.raw    ?? null,
+      fwdPE:         sumD.forwardPE?.raw           ?? null,
+      revenueGrowth: finD.revenueGrowth?.raw      != null ? finD.revenueGrowth.raw * 100 : null,
+      grossMargins:  finD.grossMargins?.raw        != null ? finD.grossMargins.raw * 100  : null,
+      operatingMargins: finD.operatingMargins?.raw != null ? finD.operatingMargins.raw * 100 : null,
+      returnOnEquity: finD.returnOnEquity?.raw     != null ? finD.returnOnEquity.raw * 100  : null,
       daysToEarnings,
       nextEarningsTs,
       // Analyst trend breakdown (strongBuy/buy/hold/sell counts)
@@ -147,6 +155,13 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
       recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.newGrade || '')).length,
       recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.newGrade || '')).length,
       recentActions: upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, from: u.fromGrade, to: u.toGrade })),
+      // Institutional ownership
+      instPctHeld:   defKS.heldPercentInstitutions?.raw != null ? defKS.heldPercentInstitutions.raw * 100 : null,
+      insiderPctHeld: defKS.heldPercentInsiders?.raw    != null ? defKS.heldPercentInsiders.raw * 100    : null,
+      instOwners:    instOwnership.slice(0, 5).map(o => ({
+        name: o.organization,
+        pct:  o.pctHeld?.raw != null ? parseFloat((o.pctHeld.raw * 100).toFixed(2)) : null,
+      })),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -290,6 +305,117 @@ router.get('/news-sentiment/:symbol', async (req, res) => {
       netSentiment, sentimentPct,
       label: netSentiment > 0 ? 'Positive' : netSentiment < 0 ? 'Negative' : 'Mixed',
       headlines: headlines.slice(0, 5), // return first 5 for display
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Alpha Vantage NEWS_SENTIMENT — real AI-analyzed sentiment with per-article scores
+// Free tier: 25 req/day. Use on-demand (ConvictionPage), not batch scoring.
+router.get('/av-news/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const AV_KEY = process.env.ALPHA_VANTAGE_KEY;
+  if (!AV_KEY) return res.status(503).json({ error: 'No Alpha Vantage key configured' });
+  try {
+    const url = `https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=${symbol}&limit=50&apikey=${AV_KEY}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return res.status(r.status).json({ error: `Alpha Vantage ${r.status}` });
+    const data = await r.json();
+    if (data['Information']) return res.status(429).json({ error: 'Alpha Vantage rate limit reached (25/day free tier)' });
+    if (data['Note']) return res.status(429).json({ error: 'Alpha Vantage rate limit (5/min)' });
+
+    const feed = data.feed || [];
+    if (feed.length === 0) return res.status(404).json({ error: 'No news found' });
+
+    // Filter to articles relevant to this specific ticker (relevance_score ≥ 0.3)
+    const relevant = feed.filter(a =>
+      (a.ticker_sentiment || []).some(ts => ts.ticker === symbol && parseFloat(ts.relevance_score) >= 0.3)
+    );
+    const articles = relevant.length >= 5 ? relevant : feed.slice(0, 30);
+
+    // Compute relevance-weighted average sentiment score for this ticker
+    let totalWeight = 0, weightedScore = 0;
+    const scored = articles.slice(0, 30).map(a => {
+      const ts = (a.ticker_sentiment || []).find(t => t.ticker === symbol);
+      const score     = ts ? parseFloat(ts.ticker_sentiment_score) : parseFloat(a.overall_sentiment_score || 0);
+      const relevance = ts ? parseFloat(ts.relevance_score) : 0.3;
+      weightedScore += score * relevance;
+      totalWeight   += relevance;
+      return {
+        title:     a.title,
+        source:    a.source,
+        time:      a.time_published,
+        score:     parseFloat(score.toFixed(3)),
+        label:     ts?.ticker_sentiment_label || a.overall_sentiment_label,
+        relevance: parseFloat(relevance.toFixed(3)),
+        url:       a.url,
+      };
+    });
+
+    const avgScore = totalWeight > 0 ? weightedScore / totalWeight : 0;
+    const bull    = scored.filter(a => a.score > 0.15).length;
+    const bear    = scored.filter(a => a.score < -0.15).length;
+    const neutral = scored.length - bull - bear;
+    const label   = avgScore > 0.25 ? 'Bullish' : avgScore > 0.1 ? 'Somewhat Bullish'
+      : avgScore > -0.1 ? 'Neutral' : avgScore > -0.25 ? 'Somewhat Bearish' : 'Bearish';
+
+    res.json({
+      symbol, source: 'Alpha Vantage AI',
+      avgScore: parseFloat(avgScore.toFixed(3)),
+      label, bull, bear, neutral,
+      total: scored.length,
+      headlines: scored.slice(0, 5).map(a => ({ title: a.title, source: a.source, score: a.score, label: a.label })),
+      articles:  scored.slice(0, 10),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Alpha Vantage EARNINGS — EPS surprise history (beat/miss, avg surprise %)
+// Free tier: counts toward 25/day limit.
+router.get('/earnings-surprise/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const AV_KEY = process.env.ALPHA_VANTAGE_KEY;
+  if (!AV_KEY) return res.status(503).json({ error: 'No Alpha Vantage key configured' });
+  try {
+    const url = `https://www.alphavantage.co/query?function=EARNINGS&symbol=${symbol}&apikey=${AV_KEY}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return res.status(r.status).json({ error: `Alpha Vantage ${r.status}` });
+    const data = await r.json();
+    if (data['Information']) return res.status(429).json({ error: 'Alpha Vantage rate limit reached (25/day free tier)' });
+    if (data['Note']) return res.status(429).json({ error: 'Alpha Vantage rate limit (5/min)' });
+
+    const quarterly = data.quarterlyEarnings || [];
+    if (quarterly.length === 0) return res.status(404).json({ error: 'No earnings data' });
+
+    const recent = quarterly.slice(0, 8).map(q => ({
+      date:        q.reportedDate,
+      fiscalEnd:   q.fiscalDateEnding,
+      reported:    parseFloat(q.reportedEPS),
+      estimated:   parseFloat(q.estimatedEPS),
+      surprise:    parseFloat(q.surprise),
+      surprisePct: parseFloat(q.surprisePercentage),
+      beat:        parseFloat(q.surprise) > 0,
+    })).filter(q => !isNaN(q.reported) && !isNaN(q.estimated));
+
+    if (recent.length === 0) return res.status(404).json({ error: 'No EPS history with estimates' });
+
+    const last4   = recent.slice(0, 4);
+    const beats   = last4.filter(q => q.beat).length;
+    const avgSurp = last4.reduce((s, q) => s + (q.surprisePct || 0), 0) / last4.length;
+
+    res.json({
+      symbol,
+      recent: last4,
+      beats,
+      misses: last4.length - beats,
+      total:  last4.length,
+      avgSurprisePct: parseFloat(avgSurp.toFixed(2)),
+      mostRecentBeat:       last4[0]?.beat,
+      mostRecentSurprisePct: last4[0]?.surprisePct,
+      mostRecentDate:       last4[0]?.date,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
