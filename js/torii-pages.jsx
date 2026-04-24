@@ -7475,404 +7475,9 @@ function DiligencePage() {
 // ─── CONVICTION SCORE DASHBOARD ───────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SCREENER TAB — universal stock screener with saved filters
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ScreenerTab() {
-  const [metadata, setMetadata] = React.useState({ sectors: [], exchanges: [], signalLabels: [] });
-  const [results, setResults] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const [totalResults, setTotalResults] = React.useState(0);
-  const [savedScreens, setSavedScreens] = React.useState([]);
-  const [hasSearched, setHasSearched] = React.useState(false);
-
-  // Universe scoring state
-  const [universeStatus, setUniverseStatus] = React.useState({ total: 0, scored: 0, lastRunAt: null, running: false });
-  const [universeProgress, setUniverseProgress] = React.useState(null); // { done, total, symbol }
-  const [universeRunStatus, setUniverseRunStatus] = React.useState('');
-
-  // Filter state
-  const [filters, setFilters] = React.useState({
-    sector: '', exchange: '', strategy: '', minScore: 45, maxScore: 100,
-    minMarketCap: null, maxMarketCap: null, minPE: null, maxPE: null,
-    hasEarnings: false, minRet3mo: null, maxShortPct: null,
-    signalLabel: '', signalDir: 'all'
-  });
-  const [sortBy, setSortBy] = React.useState('score');
-  const [sortDir, setSortDir] = React.useState('desc');
-  const [savingScreen, setSavingScreen] = React.useState(false);
-  const [screenName, setScreenName] = React.useState('');
-
-  // Load metadata, saved screens, and universe status on mount
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const [metaRes, screensRes, statusRes] = await Promise.all([
-          fetch(`${API_URL}/screener/metadata`).then(r => r.json()),
-          fetch(`${API_URL}/screener/screens`).then(r => r.json()),
-          fetch(`${API_URL}/screener/status`).then(r => r.json()),
-        ]);
-        setMetadata(metaRes);
-        setSavedScreens(Array.isArray(screensRes) ? screensRes : []);
-        setUniverseStatus(statusRes);
-      } catch (e) { console.error(e); }
-    })();
-  }, []);
-
-  async function triggerUniverseScore() {
-    if (universeStatus.running) return;
-    setUniverseStatus(s => ({ ...s, running: true }));
-    setUniverseRunStatus('Starting…');
-    setUniverseProgress({ done: 0, total: universeStatus.total || '?' });
-    try {
-      const resp = await fetch(`${API_URL}/screener/run`, { method: 'POST' });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        setUniverseRunStatus(err.error || `Error ${resp.status}`);
-        setUniverseStatus(s => ({ ...s, running: false }));
-        return;
-      }
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'progress') {
-              setUniverseProgress({ done: ev.done, total: ev.total, symbol: ev.symbol });
-              setUniverseRunStatus(`Scoring ${ev.symbol}… (${ev.done}/${ev.total})`);
-              setUniverseStatus(s => ({ ...s, scored: ev.done }));
-            } else if (ev.type === 'complete') {
-              setUniverseRunStatus(`✓ Done — ${ev.scored} stocks scored`);
-              setUniverseStatus(s => ({ ...s, running: false, scored: ev.scored, lastRunAt: ev.lastRunAt }));
-              setUniverseProgress(null);
-            } else if (ev.type === 'error') {
-              setUniverseRunStatus(`Error: ${ev.message}`);
-              setUniverseStatus(s => ({ ...s, running: false }));
-              setUniverseProgress(null);
-            }
-          } catch (_) {}
-        }
-      }
-    } catch (e) {
-      setUniverseRunStatus(`Connection error: ${e.message}`);
-      setUniverseStatus(s => ({ ...s, running: false }));
-      setUniverseProgress(null);
-    }
-  }
-
-  async function runSearch() {
-    setLoading(true);
-    setHasSearched(true);
-    try {
-      const searchBody = {
-        ...filters,
-        sortBy, sortDir,
-        limit: 100, offset: 0,
-      };
-      const res = await fetch(`${API_URL}/screener/search`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(searchBody)
-      }).then(r => r.json());
-      setResults(res.results || []);
-      setTotalResults(res.total || 0);
-    } catch (e) { console.error(e); }
-    setLoading(false);
-  }
-
-  async function addToWatchlist(symbol) {
-    try {
-      await fetch(`${API_URL}/screener/watchlist`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol })
-      });
-      setResults(results.map(r => r.symbol === symbol ? { ...r, inWatchlist: true } : r));
-    } catch (e) { console.error(e); }
-  }
-
-  async function saveScreen() {
-    if (!screenName) return;
-    try {
-      const newScreen = await fetch(`${API_URL}/screener/screens`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: screenName, filters, sortBy, sortDir })
-      }).then(r => r.json());
-      setSavedScreens([newScreen, ...savedScreens]);
-      setScreenName('');
-    } catch (e) { console.error(e); }
-  }
-
-  async function deleteScreen(id) {
-    try {
-      await fetch(`${API_URL}/screener/screens/${id}`, { method: 'DELETE' });
-      setSavedScreens(savedScreens.filter(s => s._id !== id));
-    } catch (e) { console.error(e); }
-  }
-
-  const fmtPrice = (p) => p == null ? '—' : p >= 1000 ? `$${(p/1000).toFixed(1)}k` : `$${p.toFixed(2)}`;
-  const fmtMkt = (m) => m == null ? '—' : m > 1000 ? `$${(m/1000).toFixed(0)}B` : `$${m.toFixed(0)}M`;
-  const fmtChg = (c) => c == null ? '' : `${c > 0 ? '+' : ''}${c.toFixed(2)}%`;
-
-  return (
-    <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap:14, height:'100%' }}>
-      {/* Left sidebar: filters */}
-      <div style={{ overflowY:'auto', paddingRight:8 }}>
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Sector</label>
-          <select value={filters.sector} onChange={e => setFilters({...filters, sector: e.target.value})}
-            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:6, border:'1px solid var(--bdr)',
-              background:'var(--bg)', color:'var(--fg)', fontSize:12, cursor:'pointer' }}>
-            <option value="">— All —</option>
-            {metadata.sectors.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Exchange</label>
-          <select value={filters.exchange} onChange={e => setFilters({...filters, exchange: e.target.value})}
-            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:6, border:'1px solid var(--bdr)',
-              background:'var(--bg)', color:'var(--fg)', fontSize:12, cursor:'pointer' }}>
-            <option value="">— All —</option>
-            {metadata.exchanges.map(e => <option key={e} value={e}>{e}</option>)}
-          </select>
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Strategy</label>
-          <select value={filters.strategy} onChange={e => setFilters({...filters, strategy: e.target.value})}
-            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:6, border:'1px solid var(--bdr)',
-              background:'var(--bg)', color:'var(--fg)', fontSize:12, cursor:'pointer' }}>
-            <option value="">— All —</option>
-            <option value="long">Long</option>
-            <option value="short">Short</option>
-            <option value="neutral">Neutral</option>
-          </select>
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Score Range</label>
-          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
-            <input type="number" min={0} max={100} value={filters.minScore}
-              onChange={e => setFilters({...filters, minScore: +e.target.value})}
-              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11 }} placeholder="Min" />
-            <span style={{ color:'var(--fg3)' }}>—</span>
-            <input type="number" min={0} max={100} value={filters.maxScore}
-              onChange={e => setFilters({...filters, maxScore: +e.target.value})}
-              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11 }} placeholder="Max" />
-          </div>
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Market Cap ($M)</label>
-          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
-            <input type="number" value={filters.minMarketCap || ''}
-              onChange={e => setFilters({...filters, minMarketCap: e.target.value ? +e.target.value : null})}
-              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11 }} placeholder="Min" />
-            <span style={{ color:'var(--fg3)' }}>—</span>
-            <input type="number" value={filters.maxMarketCap || ''}
-              onChange={e => setFilters({...filters, maxMarketCap: e.target.value ? +e.target.value : null})}
-              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11 }} placeholder="Max" />
-          </div>
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>P/E Range</label>
-          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4 }}>
-            <input type="number" value={filters.minPE || ''}
-              onChange={e => setFilters({...filters, minPE: e.target.value ? +e.target.value : null})}
-              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11 }} placeholder="Min" />
-            <span style={{ color:'var(--fg3)' }}>—</span>
-            <input type="number" value={filters.maxPE || ''}
-              onChange={e => setFilters({...filters, maxPE: e.target.value ? +e.target.value : null})}
-              style={{ flex:1, padding:'4px 6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11 }} placeholder="Max" />
-          </div>
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>3-Month Return (%)</label>
-          <input type="number" value={filters.minRet3mo || ''}
-            onChange={e => setFilters({...filters, minRet3mo: e.target.value ? +e.target.value : null})}
-            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:4, border:'1px solid var(--bdr)',
-              background:'var(--bg)', color:'var(--fg)', fontSize:11 }} placeholder="Min return" />
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Max Short Interest (%)</label>
-          <input type="number" value={filters.maxShortPct || ''}
-            onChange={e => setFilters({...filters, maxShortPct: e.target.value ? +e.target.value : null})}
-            style={{ width:'100%', marginTop:4, padding:'6px 8px', borderRadius:4, border:'1px solid var(--bdr)',
-              background:'var(--bg)', color:'var(--fg)', fontSize:11 }} placeholder="Max %" />
-        </div>
-
-        <div style={{ marginBottom:16 }}>
-          <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, cursor:'pointer' }}>
-            <input type="checkbox" checked={filters.hasEarnings}
-              onChange={e => setFilters({...filters, hasEarnings: e.target.checked})}
-              style={{ cursor:'pointer' }} />
-            <span style={{ color:'var(--fg2)' }}>Earnings in 60d</span>
-          </label>
-        </div>
-
-        <button onClick={runSearch} disabled={loading}
-          style={{ width:'100%', padding:'10px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
-            fontSize:12, fontWeight:700, cursor:loading?'not-allowed':'pointer', opacity:loading?0.7:1 }}>
-          {loading ? '🔍 Searching…' : '▶ Run Search'}
-        </button>
-
-        {/* Saved screens section */}
-        {savedScreens.length > 0 && (
-          <div style={{ marginTop:20, paddingTop:16, borderTop:'1px solid var(--bdr)' }}>
-            <div style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', textTransform:'uppercase', marginBottom:10, letterSpacing:'0.06em' }}>Saved Screens</div>
-            {savedScreens.map(screen => (
-              <div key={screen._id} style={{ padding:8, background:'var(--bg)', borderRadius:6, marginBottom:6, fontSize:11 }}>
-                <div style={{ fontWeight:600, color:'var(--fg)', marginBottom:4 }}>{screen.name}</div>
-                <div style={{ color:'var(--fg3)', fontSize:10, marginBottom:6 }}>{screen.lastResultCount || 0} results</div>
-                <div style={{ display:'flex', gap:6 }}>
-                  <button onClick={() => { setFilters(screen.filters); setSortBy(screen.sortBy); setSortDir(screen.sortDir); }}
-                    style={{ flex:1, padding:'4px', background:'var(--bdr)', border:'none', borderRadius:4, color:'var(--fg2)',
-                      fontSize:10, cursor:'pointer' }}>Load</button>
-                  <button onClick={() => deleteScreen(screen._id)}
-                    style={{ flex:1, padding:'4px', background:'var(--red-loss)', border:'none', borderRadius:4, color:'#fff',
-                      fontSize:10, cursor:'pointer' }}>Delete</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Save current filters */}
-        {!savingScreen ? (
-          <button onClick={() => setSavingScreen(true)}
-            style={{ width:'100%', marginTop:12, padding:'8px', background:'var(--bdr)', border:'none', borderRadius:6,
-              color:'var(--fg2)', fontSize:11, cursor:'pointer' }}>💾 Save Filters</button>
-        ) : (
-          <div style={{ marginTop:12, padding:8, background:'var(--bg)', borderRadius:6 }}>
-            <input type="text" value={screenName} onChange={e => setScreenName(e.target.value)}
-              placeholder="Screen name…"
-              style={{ width:'100%', padding:'6px', borderRadius:4, border:'1px solid var(--bdr)', background:'var(--bg)',
-                color:'var(--fg)', fontSize:11, marginBottom:6 }} />
-            <div style={{ display:'flex', gap:6 }}>
-              <button onClick={saveScreen}
-                style={{ flex:1, padding:'6px', background:'var(--green)', border:'none', borderRadius:4, color:'#fff',
-                  fontSize:10, cursor:'pointer', fontWeight:600 }}>Save</button>
-              <button onClick={() => { setSavingScreen(false); setScreenName(''); }}
-                style={{ flex:1, padding:'6px', background:'var(--bdr)', border:'none', borderRadius:4, color:'var(--fg2)',
-                  fontSize:10, cursor:'pointer' }}>Cancel</button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Right: results table */}
-      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-
-        {/* Universe status banner */}
-        <div style={{ padding:'10px 14px', background:'var(--bg)', borderRadius:8, border:'1px solid var(--bdr)',
-          display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
-          <div>
-            <div style={{ fontSize:12, fontWeight:700, color:'var(--fg)' }}>
-              Stock Universe
-              <span style={{ marginLeft:8, fontFamily:'var(--font-mono)', color: universeStatus.scored === universeStatus.total && universeStatus.total > 0 ? 'var(--green)' : 'var(--fg3)' }}>
-                {universeStatus.scored}/{universeStatus.total} scored
-              </span>
-            </div>
-            {universeProgress ? (
-              <div style={{ marginTop:4 }}>
-                <div style={{ height:4, background:'var(--bdr)', borderRadius:2, width:200, overflow:'hidden' }}>
-                  <div style={{ height:'100%', background:'var(--red)', borderRadius:2, width: universeProgress.total > 0 ? `${(universeProgress.done/universeProgress.total)*100}%` : '0%', transition:'width 0.3s' }} />
-                </div>
-                <div style={{ fontSize:10, color:'var(--fg3)', marginTop:3 }}>{universeRunStatus}</div>
-              </div>
-            ) : universeRunStatus ? (
-              <div style={{ fontSize:11, color: universeRunStatus.startsWith('✓') ? 'var(--green)' : 'var(--fg3)', marginTop:2 }}>{universeRunStatus}</div>
-            ) : universeStatus.lastRunAt ? (
-              <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>Last run: {new Date(universeStatus.lastRunAt).toLocaleDateString()}</div>
-            ) : (
-              <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>Not yet scored — run to populate the screener</div>
-            )}
-          </div>
-          <button onClick={triggerUniverseScore}
-            disabled={universeStatus.running}
-            style={{ padding:'7px 14px', background: universeStatus.running ? 'var(--bdr)' : 'var(--red)', color: universeStatus.running ? 'var(--fg3)' : '#fff',
-              border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor: universeStatus.running ? 'not-allowed' : 'pointer', whiteSpace:'nowrap' }}>
-            {universeStatus.running ? '⏳ Scoring…' : universeStatus.scored === 0 ? '▶ Score Universe' : '↺ Re-score Universe'}
-          </button>
-        </div>
-
-        <div style={{ fontSize:13, color:'var(--fg3)', fontWeight:600 }}>
-          {hasSearched ? `${totalResults} results` : 'Set filters and click Run Search'} {hasSearched && sortBy ? `· sorted by ${sortBy}` : ''}
-        </div>
-        <div className="card" style={{ padding:0, overflow:'hidden', flex:1, display:'flex', flexDirection:'column' }}>
-          {/* Table header */}
-          <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 100px 90px 90px 100px 60px',
-            padding:'8px 14px', borderBottom:'1px solid var(--bdr)', background:'var(--bg)', sticky:'top', top:0 }}>
-            {['Ticker', 'Name', 'Exchange', 'Score', 'P/E', 'Mkt Cap', 'Action'].map(h => (
-              <span key={h} style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{h}</span>
-            ))}
-          </div>
-
-          {loading ? (
-            <div style={{ padding:40, textAlign:'center' }}>
-              <div style={{ fontSize:24, marginBottom:8 }}>🔍</div>
-              <div style={{ color:'var(--fg3)', fontSize:13 }}>Searching stocks…</div>
-            </div>
-          ) : !hasSearched ? (
-            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>
-              {universeStatus.scored === 0
-                ? <><div style={{ fontSize:22, marginBottom:10 }}>📊</div><div>Score the universe first, then run a search to find opportunities</div></>
-                : <><div style={{ fontSize:22, marginBottom:10 }}>🎯</div><div>Set your filters and click <strong>Run Search</strong></div></>
-              }
-            </div>
-          ) : results.length === 0 ? (
-            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>
-              {universeStatus.scored === 0
-                ? <><div style={{ fontSize:22, marginBottom:10 }}>📊</div><div>No stocks scored yet. Click <strong>Score Universe</strong> above to build the database, then search again.</div></>
-                : <><div style={{ fontSize:22, marginBottom:8 }}>🔎</div><div>No results match your filters — try widening the score range or removing some filters</div></>
-              }
-            </div>
-          ) : (
-            <div style={{ overflowY:'auto', flex:1 }}>
-              {results.map(r => (
-                <div key={r.symbol} style={{ display:'grid', gridTemplateColumns:'90px 1fr 100px 90px 90px 100px 60px',
-                  padding:'9px 14px', borderBottom:'1px solid var(--bdr)', alignItems:'center', fontSize:11 }}>
-                  <div style={{ fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }}>{r.symbol}</div>
-                  <div style={{ color:'var(--fg2)', fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.name}</div>
-                  <div style={{ fontSize:10, color:'var(--fg3)' }}>{r.exchange}</div>
-                  <div style={{ fontFamily:'var(--font-mono)', fontWeight:700, color: r.score>=70?'var(--green)':r.score>=45?'#f59e0b':'var(--red)' }}>{r.score}</div>
-                  <div style={{ fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>{r.peRatio ? r.peRatio.toFixed(1) : '—'}</div>
-                  <div style={{ fontFamily:'var(--font-mono)', color:'var(--fg3)', fontSize:10 }}>{fmtMkt(r.marketCap)}</div>
-                  <button onClick={() => addToWatchlist(r.symbol)} disabled={r.inWatchlist}
-                    style={{ padding:'4px 8px', background: r.inWatchlist ? 'var(--green)' : 'var(--bdr)', border:'none',
-                      borderRadius:4, color: r.inWatchlist ? '#fff' : 'var(--fg3)', fontSize:10, cursor:r.inWatchlist?'default':'pointer',
-                      fontWeight:600 }}>
-                    {r.inWatchlist ? '★' : '+'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // OPPORTUNITY BOARD — ranked screener across all watchlist tickers
 // ─────────────────────────────────────────────────────────────────────────────
 function OpportunityBoard() {
-  const [tab, setTab] = React.useState('watchlist'); // 'watchlist' | 'screener'
   const [scores,     setScores]     = React.useState([]);
   const [loading,    setLoading]    = React.useState(true);
   const [running,    setRunning]    = React.useState(false);
@@ -7882,8 +7487,6 @@ function OpportunityBoard() {
   const [minScore,   setMinScore]   = React.useState(0);
   const [selected,   setSelected]   = React.useState(null);
   const [runProgress,setRunProgress]= React.useState(null);    // { done, total }
-  const [signalFilter, setSignalFilter] = React.useState('');  // signal label to sort by
-  const [sigDirection, setSigDirection] = React.useState('all'); // all|bullish|bearish
 
   React.useEffect(() => { loadScores(); }, []);
 
@@ -7950,34 +7553,9 @@ function OpportunityBoard() {
 
   const SCORE_COLOR = (s) => s >= 70 ? 'var(--green)' : s >= 45 ? '#f59e0b' : 'var(--red-loss)';
 
-  // All unique signal labels across all stocks (for the dropdown)
-  const allSignalLabels = React.useMemo(() => {
-    const labels = new Set();
-    scores.forEach(s => (s.signals || []).forEach(sig => labels.add(sig.label)));
-    return Array.from(labels);
-  }, [scores]);
-
-  // Get a specific signal's delta for a stock (for sorting)
-  const getSignalDelta = (stock, label) => {
-    const sig = (stock.signals || []).find(s => s.label === label);
-    return sig ? (sig.delta || 0) : -999;
-  };
-  const getSignalDir = (stock, label) => {
-    const sig = (stock.signals || []).find(s => s.label === label);
-    return sig ? (sig.direction || 'neutral') : null;
-  };
-
   const filtered = scores
     .filter(s => filter === 'all' || s.strategy === filter)
-    .filter(s => s.score >= minScore)
-    .filter(s => {
-      if (!signalFilter || sigDirection === 'all') return true;
-      return getSignalDir(s, signalFilter) === sigDirection;
-    })
-    .sort((a, b) => {
-      if (signalFilter) return getSignalDelta(b, signalFilter) - getSignalDelta(a, signalFilter);
-      return b.score - a.score;
-    });
+    .filter(s => s.score >= minScore);
 
   const signalDotColor = (direction) =>
     direction === 'bullish' ? '#30D158' : direction === 'bearish' ? '#FF3B30' : '#6b7280';
@@ -7999,43 +7577,25 @@ function OpportunityBoard() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Opportunity Board</h1>
-          <p className="page-sub">{tab === 'watchlist' ? 'All watchlist tickers scored · ranked by conviction · filter by strategy' : 'Universal screener · search 400+ stocks · save filters'}</p>
+          <p className="page-sub">All watchlist tickers scored · ranked by conviction · filter by strategy</p>
         </div>
-        {tab === 'watchlist' && (
-          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-            {lastRunAt && (
-              <span style={{ fontSize:11, color:'var(--fg3)' }}>
-                Last run {lastRunAt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
-              </span>
-            )}
-            <button onClick={triggerRun} disabled={running}
-              style={{ padding:'8px 18px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
-                fontSize:12, fontWeight:700, cursor:running?'not-allowed':'pointer', fontFamily:'var(--font-mono)',
-                letterSpacing:'0.06em', opacity:running?0.7:1 }}>
-              {running ? '⏳ RUNNING…' : '▶ RUN SCORES'}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Tab switcher */}
-      <div style={{ display:'flex', gap:8, marginBottom:14, paddingBottom:12, borderBottom:'1px solid var(--bdr)' }}>
-        {[{ key:'watchlist', label:'Watchlist' }, { key:'screener', label:'Screener' }].map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            style={{ padding:'6px 14px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
-              border: tab===t.key ? '1.5px solid var(--red)' : '1px solid var(--bdr)',
-              background: tab===t.key ? '#ff3b3015' : 'transparent',
-              color: tab===t.key ? 'var(--red)' : 'var(--fg2)' }}>
-            {t.label}
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          {lastRunAt && (
+            <span style={{ fontSize:11, color:'var(--fg3)' }}>
+              Last run {lastRunAt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+            </span>
+          )}
+          <button onClick={triggerRun} disabled={running}
+            style={{ padding:'8px 18px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
+              fontSize:12, fontWeight:700, cursor:running?'not-allowed':'pointer', fontFamily:'var(--font-mono)',
+              letterSpacing:'0.06em', opacity:running?0.7:1 }}>
+            {running ? '⏳ RUNNING…' : '▶ RUN SCORES'}
           </button>
-        ))}
+        </div>
       </div>
 
-      {/* Content: tab-based */}
-      {tab === 'watchlist' ? (
-        <>
-        {/* Run progress bar */}
-        {running && runProgress && (
+      {/* Run progress bar */}
+      {running && runProgress && (
         <div className="card" style={{ marginBottom:10, padding:'10px 14px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
             <span style={{ fontSize:11, color:'var(--fg2)' }}>{runStatus}</span>
@@ -8050,8 +7610,8 @@ function OpportunityBoard() {
         </div>
       )}
 
-      {/* Strategy + score filters */}
-      <div className="card" style={{ marginBottom:6, padding:'10px 14px', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+      {/* Filters */}
+      <div className="card" style={{ marginBottom:10, padding:'10px 14px', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
         <span style={{ fontSize:11, color:'var(--fg3)', marginRight:4 }}>Strategy:</span>
         {strategyTabs.map(tab => (
           <button key={tab.key} onClick={() => setFilter(tab.key)}
@@ -8077,48 +7637,14 @@ function OpportunityBoard() {
         <button onClick={loadScores} style={{ padding:'4px 10px', borderRadius:6, border:'1px solid var(--bdr)', background:'transparent', color:'var(--fg3)', fontSize:11, cursor:'pointer' }}>↺ Refresh</button>
       </div>
 
-      {/* Signal category filter */}
-      {allSignalLabels.length > 0 && (
-        <div className="card" style={{ marginBottom:10, padding:'10px 14px', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-          <span style={{ fontSize:11, color:'var(--fg3)', flexShrink:0 }}>Sort by signal:</span>
-          <select value={signalFilter} onChange={e => setSignalFilter(e.target.value)}
-            style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--bdr)',
-              background:'var(--bg)', color:'var(--fg)', cursor:'pointer', minWidth:180 }}>
-            <option value="">— Overall Score —</option>
-            {allSignalLabels.map(l => <option key={l} value={l}>{l}</option>)}
-          </select>
-          {signalFilter && (
-            <>
-              <span style={{ fontSize:11, color:'var(--fg3)' }}>Direction:</span>
-              {['all','bullish','bearish','neutral'].map(d => (
-                <button key={d} onClick={() => setSigDirection(d)}
-                  style={{ padding:'3px 9px', borderRadius:20, fontSize:11, cursor:'pointer', fontWeight:500, textTransform:'capitalize',
-                    border: sigDirection===d ? '1.5px solid var(--red)' : '1px solid var(--bdr)',
-                    background: sigDirection===d ? '#ff3b3018' : 'transparent',
-                    color: sigDirection===d ? 'var(--red)' : 'var(--fg2)' }}>
-                  {d}
-                </button>
-              ))}
-              <button onClick={() => { setSignalFilter(''); setSigDirection('all'); }}
-                style={{ marginLeft:4, padding:'3px 8px', borderRadius:6, border:'1px solid var(--bdr)', background:'transparent', color:'var(--fg3)', fontSize:11, cursor:'pointer' }}>
-                ✕ Clear
-              </button>
-              <span style={{ marginLeft:'auto', fontSize:11, color:'var(--fg3)' }}>
-                Sorted by <strong style={{ color:'var(--fg)' }}>{signalFilter}</strong> score ↓
-              </span>
-            </>
-          )}
-        </div>
-      )}
-
       <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 340px' : '1fr', gap:10 }}>
         {/* Main board */}
         <div className="card" style={{ padding:0, overflow:'hidden' }}>
           {/* Table header */}
           <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 90px 70px 80px 68px',
             padding:'8px 14px', borderBottom:'1px solid var(--bdr)', background:'var(--bg)' }}>
-            {['Ticker', signalFilter ? `${signalFilter} ↓` : 'Score', 'Strategy', 'Signals', 'Price', 'Change'].map(h => (
-              <span key={h} style={{ fontSize:10, fontWeight:700, color: signalFilter && h.includes('↓') ? 'var(--red)' : 'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{h}</span>
+            {['Ticker','Score','Strategy','Signals','Price','Change'].map(h => (
+              <span key={h} style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase' }}>{h}</span>
             ))}
           </div>
 
@@ -8141,12 +7667,6 @@ function OpportunityBoard() {
               const sc = STRATEGY_COLORS[s.strategy] || STRATEGY_COLORS.neutral;
               const isSelected = selected?.symbol === s.symbol;
               const activeSignals = (s.signals || []).filter(sig => !sig.noData);
-              // When signal filter active, show that signal's score prominently
-              const focusSig = signalFilter ? (s.signals || []).find(sig => sig.label === signalFilter) : null;
-              const displayScore = focusSig ? focusSig.delta : s.score;
-              const displayColor = focusSig
-                ? (focusSig.delta > 0 ? 'var(--green)' : focusSig.delta < 0 ? 'var(--red-loss)' : '#f59e0b')
-                : SCORE_COLOR(s.score);
               return (
                 <div key={s.symbol} onClick={() => setSelected(isSelected ? null : s)}
                   style={{ display:'grid', gridTemplateColumns:'90px 1fr 90px 70px 80px 68px',
@@ -8157,15 +7677,13 @@ function OpportunityBoard() {
                   <div style={{ fontFamily:'var(--font-mono)', fontSize:13, fontWeight:700, color:'var(--fg)', display:'flex', alignItems:'center' }}>
                     {s.symbol}
                   </div>
-                  {/* Score / signal bar */}
+                  {/* Score bar */}
                   <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                     <div style={{ flex:1, height:4, background:'var(--bdr)', borderRadius:2, overflow:'hidden' }}>
-                      <div style={{ height:'100%',
-                        width: focusSig ? `${Math.min(100, Math.abs(focusSig.delta) / 15 * 100)}%` : `${s.score}%`,
-                        background: displayColor, borderRadius:2, transition:'width 0.3s' }} />
+                      <div style={{ height:'100%', width:`${s.score}%`, background:SCORE_COLOR(s.score), borderRadius:2, transition:'width 0.3s' }} />
                     </div>
-                    <span style={{ fontSize:12, fontWeight:700, fontFamily:'var(--font-mono)', color:displayColor, minWidth:36, textAlign:'right' }}>
-                      {focusSig ? `${focusSig.delta > 0 ? '+' : ''}${focusSig.delta}` : s.score}
+                    <span style={{ fontSize:12, fontWeight:700, fontFamily:'var(--font-mono)', color:SCORE_COLOR(s.score), minWidth:26, textAlign:'right' }}>
+                      {s.score}
                     </span>
                   </div>
                   {/* Strategy badge */}
@@ -8177,9 +7695,8 @@ function OpportunityBoard() {
                   {/* Signal dots */}
                   <div style={{ display:'flex', gap:3, alignItems:'center', flexWrap:'wrap' }}>
                     {activeSignals.slice(0,6).map((sig,i) => (
-                      <span key={i} title={`${sig.label}: ${sig.delta > 0 ? '+' : ''}${sig.delta}pts`}
-                        style={{ width:7, height:7, borderRadius:'50%', background:signalDotColor(sig.direction), display:'inline-block', flexShrink:0,
-                          outline: focusSig && sig.label === signalFilter ? '2px solid white' : 'none' }} />
+                      <span key={i} title={sig.label}
+                        style={{ width:7, height:7, borderRadius:'50%', background:signalDotColor(sig.direction), display:'inline-block', flexShrink:0 }} />
                     ))}
                     {activeSignals.length > 6 && <span style={{ fontSize:9, color:'var(--fg3)' }}>+{activeSignals.length-6}</span>}
                   </div>
@@ -8275,24 +7792,18 @@ function OpportunityBoard() {
           </div>
         )}
       </div>
-        </>
-      ) : (
-        <ScreenerTab />
-      )}
     </div>
   );
 }
 
 function ConvictionPage() {
-  const [ticker,     setTicker]     = React.useState('');
-  const [loading,    setLoading]    = React.useState(false);
-  const [signals,    setSignals]    = React.useState([]);
-  const [score,      setScore]      = React.useState(null);
-  const [aiResult,   setAiResult]   = React.useState(null);
-  const [headlines,  setHeadlines]  = React.useState([]);
-  const [showNews,   setShowNews]   = React.useState(false);
-  const [stockInfo,  setStockInfo]  = React.useState(null);
-  const [watchlist,  setWatchlist]  = React.useState([]);
+  const [ticker,   setTicker]   = React.useState('');
+  const [loading,  setLoading]  = React.useState(false);
+  const [signals,  setSignals]  = React.useState([]);
+  const [score,    setScore]    = React.useState(null);
+  const [aiResult, setAiResult] = React.useState(null);
+  const [aiLoad,   setAiLoad]   = React.useState(false);
+  const [watchlist,setWatchlist]= React.useState([]);
 
   React.useEffect(() => {
     fetch(`${API_URL}/watchlist`).then(r=>r.json()).then(d=>setWatchlist(Array.isArray(d)?d:[])).catch(()=>{});
@@ -8304,7 +7815,7 @@ function ConvictionPage() {
   async function analyze() {
     const t = ticker.trim().toUpperCase();
     if (!t) return;
-    setLoading(true); setSignals([]); setScore(null); setAiResult(null); setHeadlines([]); setStockInfo(null);
+    setLoading(true); setSignals([]); setScore(null); setAiResult(null);
 
     const gathered = [];
     const results = await Promise.allSettled([
@@ -8314,9 +7825,9 @@ function ConvictionPage() {
       fetch(`${API_URL}/short/${t}`).then(r=>r.json()).catch(()=>null),
       // 3. Congressional trades
       fetch(`${API_URL}/congressional?ticker=${t}&days=90`).then(r=>r.json()).catch(()=>null),
-      // 4. Options flow (Yahoo options chain → P/C ratio + unusual activity)
+      // 4. Options flow (legacy)
       fetch(`${API_URL}/options/${t}`).then(r=>r.json()).catch(()=>null),
-      // 5. Insider Form 4 — buy vs sell breakdown
+      // 5. Insider Form 4
       fetch(`${API_URL}/insider/form4/${t}`).then(r=>r.json()).catch(()=>null),
       // 6. Catalysts upcoming
       fetch(`${API_URL}/catalysts?ticker=${t}&from=${new Date().toISOString().slice(0,10)}`).then(r=>r.json()).catch(()=>[]),
@@ -8324,29 +7835,17 @@ function ConvictionPage() {
       fetch(`${API_URL}/stocks/price-target/${t}`).then(r=>r.json()).catch(()=>null),
       // 8. Fundamentals — Finnhub metric+quote+profile
       fetch(`${API_URL}/stocks/fundamentals/${t}`).then(r=>r.json()).catch(()=>null),
-      // 9. Yahoo Finance quoteSummary — analyst targets + short + 52w + earnings + institutional + P/E
+      // 9. Yahoo Finance quoteSummary — analyst targets + short interest + 52w + earnings (no key needed)
       fetch(`${API_URL}/stocks/yahoo-summary/${t}`).then(r=>r.json()).catch(()=>null),
       // 10. Price momentum — actual 1mo/3mo returns from Yahoo chart
       fetch(`${API_URL}/stocks/momentum/${t}`).then(r=>r.json()).catch(()=>null),
-      // 11. News sentiment — keyword scoring on real headlines
+      // 11. News sentiment — keyword scoring on real headlines (no AI key needed)
       fetch(`${API_URL}/stocks/news-sentiment/${t}`).then(r=>r.json()).catch(()=>null),
-      // 12. Alpha Vantage AI news sentiment — real NLP scores per article (free key)
-      fetch(`${API_URL}/stocks/av-news/${t}`).then(r=>r.json()).catch(()=>null),
-      // 13. Alpha Vantage EPS surprise history — beat/miss/avg surprise %
-      fetch(`${API_URL}/stocks/earnings-surprise/${t}`).then(r=>r.json()).catch(()=>null),
-      // 14. Social sentiment — StockTwits bullish/bearish tagged messages
-      fetch(`${API_URL}/stocks/social/${t}`).then(r=>r.json()).catch(()=>null),
-      // 15. Technical analysis — RSI, MAs, Bollinger from Yahoo 1y chart
-      fetch(`${API_URL}/stocks/technicals/${t}`).then(r=>r.json()).catch(()=>null),
     ]);
 
-    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent, avNews, epsSurprise, social, tech] =
-      results.map(r => r.status==='fulfilled' ? r.value : null);
+    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent] = results.map(r => r.status==='fulfilled' ? r.value : null);
     const quote  = fund?.quote  || null;
     const metric = fund?.metric || null;
-
-    // Store stock info for the header display
-    setStockInfo({ name: yf?.name || t, currentPrice: quote?.c || yf?.currentPrice, changePercent: yf?.changePercent });
 
     let total = 50; // base
 
@@ -8462,7 +7961,7 @@ function ConvictionPage() {
       gathered.push({ label:'Short Interest', value: 'No short data available', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
-    // Congressional trading — absence of trades is NEUTRAL, not missing data
+    // Congressional trading
     if (cong && Array.isArray(cong.trades) && cong.trades.length > 0) {
       const buys  = cong.trades.filter(tx => tx.isBuy).length;
       const sells = cong.trades.filter(tx => !tx.isBuy).length;
@@ -8470,305 +7969,73 @@ function ConvictionPage() {
       total += delta;
       gathered.push({ label:'Congressional Trading', value: `${buys} buys / ${sells} sells (90d)`, direction: buys>sells?'bullish':buys<sells?'bearish':'neutral', delta, source:'STOCK Act' });
     } else {
-      // No trades = neutral (0pts) — not missing data, just no congressional interest
-      gathered.push({ label:'Congressional Trading', value: 'No congressional trades in 90d · neutral signal', direction: 'neutral', delta: 0, source:'STOCK Act' });
+      gathered.push({ label:'Congressional Trading', value: 'No trades in 90d', direction: 'neutral', delta: 0, source:'STOCK Act', noData: true });
     }
 
-    // Options flow — yahoo-finance2 options chain (P/C ratio + unusual activity)
+    // Options flow — Yahoo Finance options chain (P/C ratio), legacy endpoint fallback
     const pcRatio = opts?.putCallRatio ?? null;
-    if (pcRatio != null && opts?.totalContracts > 0) {
+    if (pcRatio != null) {
+      // Legacy endpoint format
       const delta = pcRatio < 0.5 ? +10 : pcRatio < 0.7 ? +6 : pcRatio < 0.9 ? +3 : pcRatio < 1.1 ? 0 : pcRatio < 1.3 ? -4 : pcRatio < 1.6 ? -7 : -10;
       total += delta;
-      const unusualNote = opts.unusual?.length > 0 ? ` · ${opts.unusual.length} unusual` : '';
-      const callPut = opts.totalCallVol && opts.totalPutVol ? ` · ${(opts.totalCallVol/1000).toFixed(0)}K calls / ${(opts.totalPutVol/1000).toFixed(0)}K puts` : '';
       gathered.push({ label:'Options Flow',
-        value: `P/C ratio ${pcRatio.toFixed(2)} (${opts.sentiment || (pcRatio<0.8?'bullish':pcRatio>1.2?'bearish':'neutral')})${callPut}${unusualNote}`,
+        value: `P/C ratio ${pcRatio.toFixed(2)} — ${opts.sentiment || (pcRatio<0.8?'bullish':pcRatio>1.2?'bearish':'neutral')}`,
         direction: delta>=4?'bullish':delta<=-4?'bearish':'neutral', delta, source:'Yahoo Finance' });
     } else {
-      // Not optionable or no activity — show as neutral not N/A
-      gathered.push({ label:'Options Flow', value: 'No options listed · not applicable for this security', direction: 'neutral', delta: 0, source:'Yahoo Finance' });
+      gathered.push({ label:'Options Flow', value: 'No options activity or not listed', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
-    // Insider Form 4 — SEC EDGAR primary, Yahoo Finance fallback
-    const yfInsiderBuys  = yf?.insiderBuys  || 0;
-    const yfInsiderSells = yf?.insiderSells || 0;
+    // Insider Form 4 — buy vs sell breakdown
     if (ins && !ins.error && ins.filings?.length > 0) {
       const buys  = ins.filings.filter(f => f.isBuy).length;
       const sells = ins.filings.filter(f => f.isSell).length;
       const net   = buys - sells;
       const delta = net >= 3 ? +12 : net > 0 ? +6 : net <= -3 ? -12 : net < 0 ? -6 : +2;
       total += delta;
-      const dir = delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral';
+      const dir   = delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral';
       gathered.push({ label:'Insider Transactions', value: `${buys} buys / ${sells} sells · ${ins.filings.length} Form 4s (90d)`, direction: dir, delta, source:'SEC EDGAR' });
-    } else if (yfInsiderBuys + yfInsiderSells > 0) {
-      // Yahoo Finance insiderTransactions module (from quoteSummary)
-      const net   = yfInsiderBuys - yfInsiderSells;
-      const delta = net > 2 ? +8 : net > 0 ? +4 : net < -2 ? -8 : net < 0 ? -4 : 0;
-      total += delta;
-      gathered.push({ label:'Insider Transactions',
-        value: `${yfInsiderBuys} buys / ${yfInsiderSells} sells (recent filings)`,
-        direction: net > 0 ? 'bullish' : net < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
     } else {
-      // No insider activity = neutral (directors not buying/selling = no signal)
-      gathered.push({ label:'Insider Transactions', value: 'No insider transactions in 90d · neutral', direction: 'neutral', delta: 0, source:'SEC EDGAR' });
+      gathered.push({ label:'Insider Transactions', value: 'No Form 4s in 90d', direction: 'neutral', delta: 0, source:'SEC EDGAR', noData: true });
     }
 
-    // Upcoming catalysts — MongoDB events + Yahoo earnings date (extended to 90d window)
+    // Upcoming catalysts — MongoDB events + Yahoo earnings date
     const hasMongoCats = Array.isArray(cats) && cats.length > 0;
-    const hasEarnings  = yf?.daysToEarnings != null && yf.daysToEarnings >= 0 && yf.daysToEarnings <= 90;
+    const hasEarnings  = yf?.daysToEarnings != null && yf.daysToEarnings <= 60;
     if (hasMongoCats || hasEarnings) {
       const high  = hasMongoCats ? cats.filter(c => c.impact === 'high').length : 0;
       let catDelta = high >= 2 ? +8 : high === 1 ? +4 : hasMongoCats ? +2 : 0;
       const catParts = [];
       if (hasEarnings) {
         catParts.push(`Earnings in ${yf.daysToEarnings}d`);
-        catDelta += yf.daysToEarnings <= 7 ? +5 : yf.daysToEarnings <= 14 ? +3 : yf.daysToEarnings <= 30 ? +2 : +1;
+        catDelta += yf.daysToEarnings <= 7 ? +5 : yf.daysToEarnings <= 14 ? +3 : +2;
       }
       if (hasMongoCats) catParts.push(`${cats.length} event${cats.length>1?'s':''}${high>0?` (${high} high-impact)`:''}`);
       total += catDelta;
-      gathered.push({ label:'Upcoming Catalysts', value: catParts.join(' · '), direction: catDelta>=3?'bullish':'neutral', delta: catDelta, source:'Yahoo Finance + Calendar' });
+      gathered.push({ label:'Upcoming Catalysts', value: catParts.join(' · '), direction: 'bullish', delta: catDelta, source:'Yahoo Finance + Calendar' });
     } else {
-      // No near-term catalyst = neutral (not missing data)
-      gathered.push({ label:'Upcoming Catalysts', value: 'No earnings catalyst in next 90d · neutral', direction: 'neutral', delta: 0, source:'Yahoo Finance' });
-    }
-
-    // Technical Setup — RSI + Moving Averages (from 1y chart data)
-    if (tech && !tech.error) {
-      const { rsi, aboveMa50, aboveMa200, bollingerPosition, bollingerInterpret, ret1mo, ret3mo } = tech;
-      const techParts = [];
-      let delta = 0;
-      if (rsi != null) {
-        if (rsi < 30) { delta += +6; techParts.push(`RSI ${rsi} (oversold)`); }
-        else if (rsi > 70) { delta += -4; techParts.push(`RSI ${rsi} (overbought)`); }
-        else if (rsi >= 50) { delta += +3; techParts.push(`RSI ${rsi} (bullish trend)`); }
-        else techParts.push(`RSI ${rsi}`);
-      }
-      if (aboveMa200 != null && aboveMa50 != null) {
-        if (aboveMa200 && aboveMa50)  { delta += +3; techParts.push('above MA50 & MA200'); }
-        else if (!aboveMa200 && !aboveMa50) { delta += -3; techParts.push('below MA50 & MA200'); }
-        else techParts.push(aboveMa50 ? 'above MA50' : 'below MA50');
-      }
-      if (bollingerPosition != null) techParts.push(`BB ${bollingerPosition.toFixed(0)}% (${bollingerInterpret})`);
-      total += delta;
-      gathered.push({ label:'Technical Setup',
-        value: techParts.join(' · ') || 'Neutral technical picture',
-        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-    } else if (mom && !mom.error) {
-      // Fallback: use momentum data if technicals endpoint failed
-      const { rsi, aboveMa50, aboveMa200 } = mom;
-      if (rsi != null || aboveMa50 != null) {
-        const techParts = [];
-        let delta = 0;
-        if (rsi) {
-          if (rsi < 30) { delta += +6; techParts.push(`RSI ${rsi} (oversold)`); }
-          else if (rsi > 70) { delta += -4; techParts.push(`RSI ${rsi} (overbought)`); }
-          else if (rsi >= 50) { delta += +3; techParts.push(`RSI ${rsi}`); }
-        }
-        if (aboveMa200 != null) { delta += aboveMa200 ? +2 : -2; techParts.push(aboveMa200 ? 'above MA200' : 'below MA200'); }
-        total += delta;
-        gathered.push({ label:'Technical Setup', value: techParts.join(' · ') || 'No clear signal',
-          direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-      }
-    } else {
-      gathered.push({ label:'Technical Setup', value: 'No price data for analysis', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
-    }
-
-    // Fundamental Quality — Revenue Growth + Profitability (from Yahoo summary)
-    const hasGrowth  = yf?.revenueGrowth != null;
-    const hasMargins = yf?.grossMargins != null || yf?.operatingMargins != null;
-    if (hasGrowth || hasMargins || yf?.returnOnEquity != null) {
-      const { revenueGrowth: rg, grossMargins: gm, operatingMargins: om, returnOnEquity: roe } = yf || {};
-      let delta = 0;
-      const fundParts = [];
-      if (rg != null) {
-        if (rg > 25) { delta += +5; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
-        else if (rg > 10) { delta += +3; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
-        else if (rg > 0)  { delta += +1; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
-        else if (rg < -10){ delta += -4; fundParts.push(`Rev ${rg.toFixed(0)}% YoY`); }
-        else              { delta += -1; fundParts.push(`Rev ${rg.toFixed(0)}% YoY`); }
-      }
-      if (gm != null) {
-        if (gm > 60) { delta += +3; fundParts.push(`GM ${gm.toFixed(0)}%`); }
-        else if (gm > 40) { delta += +2; fundParts.push(`GM ${gm.toFixed(0)}%`); }
-        else if (gm > 20) { delta += +1; fundParts.push(`GM ${gm.toFixed(0)}%`); }
-        else if (gm < 0)  { delta += -3; fundParts.push(`GM ${gm.toFixed(0)}%`); }
-      }
-      if (om != null && om < 0) { delta += -2; fundParts.push(`OpM ${om.toFixed(0)}% (loss)`); }
-      else if (om != null && om > 25) { delta += +2; fundParts.push(`OpM ${om.toFixed(0)}%`); }
-      if (roe != null && roe > 30) delta += +2;
-      else if (roe != null && roe < 0) delta += -2;
-      total += delta;
-      gathered.push({ label:'Fundamental Quality', value: fundParts.join(' · ') || `ROE ${roe?.toFixed(0)}%`,
-        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-    } else {
-      gathered.push({ label:'Fundamental Quality', value:'No fundamental data available', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
-    }
-
-    // Valuation — P/E, forward P/E, PEG ratio
-    if (yf?.peRatio != null && yf.peRatio > 0) {
-      const { peRatio: pe, fwdPE, revenueGrowth: rg } = yf;
-      let delta = 0;
-      const valParts = [];
-      if (pe > 0 && rg > 5) {
-        const peg = pe / rg;
-        if (peg < 0.75) { delta += +5; valParts.push(`PEG ${peg.toFixed(2)} (attractive)`); }
-        else if (peg < 1.5) { delta += +2; valParts.push(`PEG ${peg.toFixed(2)}`); }
-        else if (peg > 4)   { delta += -4; valParts.push(`PEG ${peg.toFixed(2)} (stretched)`); }
-        else valParts.push(`PEG ${peg.toFixed(2)}`);
-      }
-      if (pe < 10)      { delta += +3; valParts.push(`P/E ${pe.toFixed(1)} (value)`); }
-      else if (pe < 20) { delta += +1; valParts.push(`P/E ${pe.toFixed(1)}`); }
-      else if (pe < 40) { valParts.push(`P/E ${pe.toFixed(1)}`); }
-      else if (pe > 80) { delta += -3; valParts.push(`P/E ${pe.toFixed(1)} (expensive)`); }
-      else              { delta += -1; valParts.push(`P/E ${pe.toFixed(1)}`); }
-      if (fwdPE != null && fwdPE > 0) {
-        if (fwdPE < pe * 0.85) { delta += +2; valParts.push(`Fwd P/E ${fwdPE.toFixed(1)} ↓`); }
-        else valParts.push(`Fwd P/E ${fwdPE.toFixed(1)}`);
-      }
-      total += delta;
-      gathered.push({ label:'Valuation', value: valParts.join(' · '),
-        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-    } else if (yf?.peRatio != null && yf.peRatio <= 0) {
-      // Loss-making company — negative P/E is bearish, but check for path to profitability
-      const valParts = ['Loss-making (negative P/E)'];
-      let delta = -5;
-      if (yf.fwdPE != null && yf.fwdPE > 0 && yf.fwdPE < 30) {
-        delta += 3; // Expected to turn profitable soon
-        valParts.push(`Fwd P/E ${yf.fwdPE.toFixed(1)} (path to profit)`);
-      } else if (yf.fwdPE != null && yf.fwdPE > 0) {
-        valParts.push(`Fwd P/E ${yf.fwdPE.toFixed(1)}`);
-      }
-      if (yf.revenueGrowth != null && yf.revenueGrowth > 30) {
-        delta += 2; // High-growth loss-maker → less bearish
-        valParts.push(`Rev +${yf.revenueGrowth.toFixed(0)}% (growth premium)`);
-      }
-      total += delta;
-      gathered.push({ label:'Valuation', value: valParts.join(' · '),
-        direction: delta >= -2 ? 'neutral' : 'bearish', delta, source:'Yahoo Finance' });
-    } else if (yf?.fwdPE != null && yf.fwdPE > 0) {
-      // No trailing P/E but has forward P/E (pre-revenue or non-standard)
-      const fpe = yf.fwdPE;
-      const delta = fpe < 15 ? +3 : fpe < 25 ? +1 : fpe > 50 ? -2 : 0;
-      total += delta;
-      gathered.push({ label:'Valuation', value: `Fwd P/E ${fpe.toFixed(1)} · no trailing P/E`,
-        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-    } else {
-      gathered.push({ label:'Valuation', value: 'No valuation data available', direction:'neutral', delta:0, source:'Yahoo Finance' });
-    }
-
-    // Social Sentiment — StockTwits tagged messages (Da et al. 2011, Chen et al. 2014)
-    if (social && !social.error && social.tagged >= 3) {
-      const { bull: sBull, bear: sBear, bullPct, watcherCount } = social;
-      const delta = bullPct > 75 ? +5 : bullPct > 60 ? +3 : bullPct < 35 ? -5 : bullPct < 45 ? -3 : 0;
-      total += delta;
-      const watcherNote = watcherCount ? ` · ${(watcherCount/1000).toFixed(1)}k watchers` : '';
-      gathered.push({ label:'Social Sentiment',
-        value: `${bullPct.toFixed(0)}% bullish · ${sBull} bull / ${sBear} bear${watcherNote}`,
-        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'StockTwits' });
-    } else {
-      gathered.push({ label:'Social Sentiment', value:'No StockTwits data / insufficient tagged messages', direction:'neutral', delta:0, source:'StockTwits', noData:true });
-    }
-
-    // EPS Surprise — Yahoo Finance primary (via epsHistory from quoteSummary), AV route secondary
-    if (epsSurprise && !epsSurprise.error && epsSurprise.total >= 2) {
-      const { beats, total: epsTotal, avgSurprisePct, mostRecentBeat, mostRecentSurprisePct } = epsSurprise;
-      const beatPct = beats / epsTotal;
-      let delta = 0;
-      if (beatPct >= 0.75 && avgSurprisePct > 5)  delta = +8;
-      else if (beatPct >= 0.5 && avgSurprisePct > 0) delta = +4;
-      else if (beatPct < 0.25)                     delta = -6;
-      else if (avgSurprisePct < -5)                delta = -4;
-      if (mostRecentBeat && mostRecentSurprisePct > 10)  delta = Math.min(delta + 3, 10);
-      if (!mostRecentBeat && mostRecentSurprisePct < -10) delta = Math.max(delta - 3, -8);
-      total += delta;
-      const recentStr = mostRecentSurprisePct != null
-        ? `· most recent: ${mostRecentBeat ? '✓ beat' : '✗ miss'} (${mostRecentSurprisePct > 0 ? '+' : ''}${mostRecentSurprisePct.toFixed(1)}%)` : '';
-      gathered.push({ label:'EPS Surprise',
-        value: `${beats}/${epsTotal} beats (last 4Q) · avg ${avgSurprisePct > 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% ${recentStr}`,
-        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Alpha Vantage' });
-    } else if (yf?.epsHistory?.length >= 2) {
-      // Fallback: Yahoo Finance epsHistory from quoteSummary (surprise is a decimal, e.g. 0.05 = 5%)
-      const yfHist = yf.epsHistory.filter(q => q.surprise != null);
-      if (yfHist.length >= 2) {
-        const beats = yfHist.filter(q => q.surprise > 0).length;
-        const avgSurprisePct = (yfHist.reduce((s, q) => s + q.surprise, 0) / yfHist.length) * 100;
-        const beatPct = beats / yfHist.length;
-        const lastQ = yfHist[yfHist.length - 1];
-        const mostRecentBeat = lastQ.surprise > 0;
-        const mostRecentSurprisePct = lastQ.surprise * 100;
-        let delta = 0;
-        if (beatPct >= 0.75 && avgSurprisePct > 5)  delta = +8;
-        else if (beatPct >= 0.5 && avgSurprisePct > 0) delta = +4;
-        else if (beatPct < 0.25)                     delta = -6;
-        else if (avgSurprisePct < -5)                delta = -4;
-        if (mostRecentBeat && mostRecentSurprisePct > 10)  delta = Math.min(delta + 3, 10);
-        if (!mostRecentBeat && mostRecentSurprisePct < -10) delta = Math.max(delta - 3, -8);
-        total += delta;
-        const recentStr = `· most recent: ${mostRecentBeat ? '✓ beat' : '✗ miss'} (${mostRecentSurprisePct > 0 ? '+' : ''}${mostRecentSurprisePct.toFixed(1)}%)`;
-        gathered.push({ label:'EPS Surprise',
-          value: `${beats}/${yfHist.length} beats · avg ${avgSurprisePct > 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% ${recentStr}`,
-          direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-      } else {
-        gathered.push({ label:'EPS Surprise', value: 'Earnings loaded · no estimate comparison available', direction:'neutral', delta:0, source:'Yahoo Finance' });
-      }
-    } else {
-      gathered.push({ label:'EPS Surprise', value: 'No earnings history with estimates available', direction:'neutral', delta:0, source:'Yahoo Finance' });
-    }
-
-    // Institutional Ownership — Yahoo Finance (smart money validation signal)
-    if (yf?.instPctHeld != null) {
-      const inst    = yf.instPctHeld;
-      const insider = yf.insiderPctHeld;
-      let delta = inst > 80 ? +4 : inst > 60 ? +3 : inst > 40 ? +2 : inst < 10 ? -2 : 0;
-      if (insider && insider > 15) delta += 2;
-      total += delta;
-      const insiderNote = insider != null ? ` · ${insider.toFixed(1)}% insider owned` : '';
-      const topHolders  = yf.instOwners?.length > 0 ? ` · top: ${yf.instOwners[0].name}` : '';
-      gathered.push({ label:'Institutional Ownership',
-        value: `${inst.toFixed(1)}% institutional${insiderNote}${topHolders}`,
-        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
-    } else {
-      gathered.push({ label:'Institutional Ownership', value:'No institutional data available', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
-    }
-
-    // Alpha Vantage AI News Sentiment — NLP-scored articles (upgraded from keyword matching)
-    // Falls back to keyword newsSent if AV not available or rate-limited
-    const useAvNews = avNews && !avNews.error && avNews.total >= 3;
-    const sentObj   = useAvNews ? avNews : null;
-    if (useAvNews) {
-      const { bull: avBull, bear: avBear, neutral: avNeutral, total: avTotal, avgScore, label: avLabel } = avNews;
-      const sentimentPct = avTotal > 0 ? ((avBull - avBear) / avTotal) * 100 : 0;
-      const delta = avBull - avBear > 2 ? (sentimentPct > 40 ? +8 : +5) : avBear - avBull > 2 ? (sentimentPct < -40 ? -8 : -5) : 0;
-      total += delta;
-      gathered.push({ label:'News Sentiment (AI)',
-        value: `${avLabel} · ${avBull} positive / ${avBear} negative / ${avNeutral} neutral articles (avg score ${avgScore > 0 ? '+' : ''}${avgScore.toFixed(2)})`,
-        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'Alpha Vantage AI' });
-      // Store headlines for the news panel
-      if (avNews.headlines?.length) setHeadlines(avNews.headlines.map(h => typeof h === 'string' ? { title:h } : h));
-    } else if (newsSent && !newsSent.error && newsSent.total >= 3) {
-      const { bull, bear, total: nTotal, label: sentLabel, source: sentSrc } = newsSent;
-      const netSentiment = bull - bear;
-      const sentimentPct = nTotal > 0 ? (netSentiment / nTotal) * 100 : 0;
-      const delta = sentimentPct > 40 ? +8 : sentimentPct > 20 ? +5 : sentimentPct > 0 ? +2
-        : sentimentPct < -40 ? -8 : sentimentPct < -20 ? -5 : sentimentPct < 0 ? -2 : 0;
-      total += delta;
-      gathered.push({ label:'News Sentiment',
-        value: `${sentLabel} · ${bull} bullish / ${bear} bearish / ${nTotal-bull-bear} neutral (${nTotal} articles)`,
-        direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: sentSrc || 'Yahoo News' });
-      if (newsSent.headlines?.length) setHeadlines(newsSent.headlines.map(h => typeof h === 'string' ? { title:h } : h));
-    } else {
-      gathered.push({ label:'News Sentiment', value: 'No recent news found', direction: 'neutral', delta: 0, source:'Yahoo News', noData: true });
+      gathered.push({ label:'Upcoming Catalysts', value: 'No earnings or events in next 60d', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
     total = Math.min(100, Math.max(0, Math.round(total)));
     setSignals(gathered);
     setScore(total);
     setLoading(false);
+  }
 
-    // Auto-generate narrative (no button needed — fires automatically)
-    const narBody = { ticker: t, score: total, rating: total>=80?'STRONG BUY':total>=65?'BUY':total>=45?'NEUTRAL':total>=30?'SELL':'STRONG SELL', signals: gathered };
-    fetch(`${API_URL}/scores/narrative`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(narBody) })
-      .then(r=>r.json()).then(nar => { if (nar?.narrative) setAiResult(nar); }).catch(()=>{});
+  async function runAI() {
+    setAiLoad(true);
+    const payload = signals.map(s => ({ label: s.label, value: s.value, direction: s.direction }));
+    const r = await fetch(`${API_URL}/sentiment/regime`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ticker, signals: payload, score }),
+    }).catch(()=>null);
+    // Fallback: use macro regime endpoint with custom prompt
+    const res = await fetch(`${API_URL}/macro/regime`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ indicators: signals.map(s => ({ label: s.label, value: s.value, unit:'' })) }),
+    }).then(r2=>r2.json()).catch(()=>null);
+    setAiResult(res);
+    setAiLoad(false);
   }
 
   const SCORE_COLOR = score == null ? 'var(--fg3)' : score >= 70 ? 'var(--green)' : score >= 40 ? '#f59e0b' : 'var(--red-loss)';
@@ -8780,7 +8047,7 @@ function ConvictionPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Conviction Score</h1>
-          <p className="page-sub">13-signal AI analysis · news · earnings · momentum · short · options · insider · congress · institutional</p>
+          <p className="page-sub">Aggregate all signals → AI investment score · thesis · short · options · congress · insider</p>
         </div>
       </div>
 
@@ -8821,54 +8088,36 @@ function ConvictionPage() {
         <div>
           {/* Score hero */}
           <div style={{ display:'grid', gridTemplateColumns:'auto 1fr', gap:14, marginBottom:14 }}>
-            <div className="card" style={{ textAlign:'center', minWidth:210, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:4 }}>
-              <div style={{ fontSize:64, fontWeight:900, fontFamily:'var(--font-mono)', color: SCORE_COLOR, lineHeight:1 }}>{score}</div>
-              <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>/ 100</div>
-              <div style={{ fontSize:13, fontWeight:800, letterSpacing:'0.1em', color: SCORE_COLOR }}>{RATING}</div>
-              <div style={{ width:'80%', height:5, background:'var(--surf)', borderRadius:3, overflow:'hidden', margin:'6px 0' }}>
-                <div style={{ height:'100%', width:`${score}%`, background: SCORE_COLOR, borderRadius:3, transition:'width 0.6s' }} />
+            <div className="card" style={{ textAlign:'center', minWidth:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+              <div style={{ fontSize:72, fontWeight:900, fontFamily:'var(--font-mono)', color: SCORE_COLOR, lineHeight:1 }}>{score}</div>
+              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', marginBottom:8 }}>/ 100</div>
+              <div style={{ fontSize:14, fontWeight:800, letterSpacing:'0.1em', color: SCORE_COLOR }}>{RATING}</div>
+              <div style={{ marginTop:10, width:'80%', height:6, background:'var(--surf)', borderRadius:3, overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${score}%`, background: SCORE_COLOR, borderRadius:3, transition:'width 0.5s' }} />
               </div>
-              <div style={{ fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg)', fontWeight:800 }}>{stockInfo?.name || ticker}</div>
-              {stockInfo?.currentPrice && (
-                <div style={{ fontSize:11, color:'var(--fg3)' }}>
-                  ${stockInfo.currentPrice.toFixed(2)}
-                  {stockInfo.changePercent != null && (
-                    <span style={{ marginLeft:6, color: stockInfo.changePercent >= 0 ? 'var(--green)' : 'var(--red-loss)', fontWeight:700 }}>
-                      {stockInfo.changePercent >= 0 ? '+' : ''}{stockInfo.changePercent.toFixed(2)}%
-                    </span>
-                  )}
-                </div>
-              )}
-              <div style={{ marginTop:6, fontSize:10, color:'var(--fg3)' }}>
-                {signals.filter(s=>!s.noData).length}/{signals.length} signals active
-              </div>
-              {/* Mini signal bar */}
-              <div style={{ display:'flex', gap:3, marginTop:4 }}>
-                {signals.map((s,i) => (
-                  <div key={i} style={{ width:8, height:8, borderRadius:2, background: s.noData ? 'var(--bdr)' : DIR_COLOR[s.direction]||'var(--fg3)', opacity: s.noData ? 0.3 : 1 }} title={s.label} />
-                ))}
-              </div>
+              <div style={{ marginTop:8, fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg)', fontWeight:700 }}>{ticker}</div>
             </div>
 
-            <div className="card" style={{ overflow:'hidden' }}>
-              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:10 }}>
-                Signal Breakdown · {signals.filter(s=>s.direction==='bullish'&&!s.noData).length} bullish · {signals.filter(s=>s.direction==='bearish'&&!s.noData).length} bearish
+            <div className="card">
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', flex:1 }}>Signal Breakdown</span>
+                <button onClick={runAI} disabled={aiLoad}
+                  style={{ padding:'5px 12px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                  {aiLoad ? '✦ Thinking…' : '✦ AI Narrative'}
+                </button>
               </div>
               {signals.map((sig, i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none', opacity: sig.noData ? 0.4 : 1 }}>
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none', opacity: sig.noData ? 0.45 : 1 }}>
                   <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: sig.noData ? 'var(--bdr)' : DIR_COLOR[sig.direction]||'var(--fg3)' }} />
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:11, fontWeight:700 }}>{sig.label}</div>
-                    <div style={{ fontSize:10, color:'var(--fg3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                      {sig.value}
-                      <span style={{ marginLeft:6, fontFamily:'var(--font-mono)', fontSize:9, opacity:0.6 }}>{sig.source}</span>
-                    </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:12, fontWeight:600 }}>{sig.label}</div>
+                    <div style={{ fontSize:11, color:'var(--fg3)' }}>{sig.value} · <span style={{ fontFamily:'var(--font-mono)', fontSize:10 }}>{sig.source}</span></div>
                   </div>
-                  <div style={{ textAlign:'right', flexShrink:0 }}>
+                  <div style={{ textAlign:'right' }}>
                     {!sig.noData && (
-                      <div style={{ fontSize:10, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
+                      <span style={{ fontSize:11, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
                         {sig.direction.toUpperCase()}
-                      </div>
+                      </span>
                     )}
                     <div style={{ fontSize:10, fontFamily:'var(--font-mono)', color: sig.delta>0?'var(--green)':sig.delta<0?'var(--red-loss)':'var(--fg3)' }}>
                       {sig.noData ? 'N/A' : `${sig.delta>0?'+':''}${sig.delta}pts`}
@@ -8877,44 +8126,23 @@ function ConvictionPage() {
                 </div>
               ))}
               {signals.length === 0 && (
-                <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:16 }}>No signals — click ANALYZE above</div>
+                <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:16 }}>No signals gathered — check your API connections</div>
               )}
             </div>
           </div>
 
-          {/* Auto-generated Investment Narrative */}
-          {aiResult?.narrative && (
-            <div className="card" style={{ marginBottom:14, borderLeft:'3px solid var(--red)', padding:'14px 16px' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
-                <span style={{ fontSize:10, color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em' }}>✦ Investment Thesis</span>
-                <div style={{ display:'flex', gap:6 }}>
-                  {aiResult.bullCount > 0 && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:3, background:'rgba(34,197,94,0.12)', color:'var(--green)', fontFamily:'var(--font-mono)', fontWeight:700 }}>{aiResult.bullCount} BULL</span>}
-                  {aiResult.bearCount > 0 && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:3, background:'rgba(239,68,68,0.12)', color:'var(--red-loss)', fontFamily:'var(--font-mono)', fontWeight:700 }}>{aiResult.bearCount} BEAR</span>}
-                </div>
+          {/* AI Narrative */}
+          {aiResult && (
+            <div className="card" style={{ borderLeft:'3px solid var(--red)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                <span style={{ fontSize:11, color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em' }}>✦ AI Assessment</span>
+                {aiResult.regime && (
+                  <span style={{ fontSize:10, padding:'2px 8px', borderRadius:4, background:'rgba(239,68,68,0.12)', color:'var(--red)', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                    {aiResult.regime.toUpperCase()}
+                  </span>
+                )}
               </div>
-              <p style={{ margin:0, fontSize:13, color:'var(--fg)', lineHeight:1.75, fontWeight:400 }}>{aiResult.narrative}</p>
-            </div>
-          )}
-
-          {/* News Headlines Panel */}
-          {headlines.length > 0 && (
-            <div className="card" style={{ marginBottom:14 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom: showNews ? 10 : 0, cursor:'pointer' }} onClick={() => setShowNews(!showNews)}>
-                <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', flex:1 }}>Recent Headlines ({headlines.length})</span>
-                <span style={{ fontSize:11, color:'var(--fg3)' }}>{showNews ? '▲' : '▼'}</span>
-              </div>
-              {showNews && headlines.map((h, i) => (
-                <div key={i} style={{ padding:'7px 0', borderTop:'1px solid var(--bdr)', display:'flex', alignItems:'flex-start', gap:8 }}>
-                  {h.score != null && (
-                    <div style={{ width:6, height:6, borderRadius:'50%', flexShrink:0, marginTop:4,
-                      background: h.score > 0.15 ? 'var(--green)' : h.score < -0.15 ? 'var(--red-loss)' : 'var(--fg3)' }} />
-                  )}
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:11, color:'var(--fg2)', lineHeight:1.4 }}>{h.title || h}</div>
-                    {h.source && <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>{h.source} {h.label ? `· ${h.label}` : ''}</div>}
-                  </div>
-                </div>
-              ))}
+              <p style={{ margin:0, fontSize:13, color:'var(--fg2)', lineHeight:1.7 }}>{aiResult.summary}</p>
             </div>
           )}
         </div>
@@ -8923,177 +8151,11 @@ function ConvictionPage() {
       {score === null && !loading && (
         <div className="card" style={{ textAlign:'center', padding:'48px 20px', color:'var(--fg3)' }}>
           <div style={{ fontSize:64, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--bdr)', marginBottom:12 }}>∑</div>
-          <div style={{ fontSize:14, marginBottom:8, color:'var(--fg2)' }}>Enter a ticker to compute conviction score</div>
-          <div style={{ fontSize:11, fontFamily:'var(--font-mono)', lineHeight:2, color:'var(--fg3)' }}>
-            13 signals · thesis · news (AI) · EPS surprise · momentum<br/>
-            short interest · options flow · insider · congressional · institutional<br/>
-            analyst consensus · upcoming catalysts · auto narrative
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── BacktestPage ─────────────────────────────────────────────────────────────
-// Shows how well each score bucket predicted subsequent returns.
-// Data accumulates over time as ScoreSnapshot records mature.
-function BacktestPage() {
-  const [data,    setData]    = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error,   setError]   = React.useState(null);
-  const [period,  setPeriod]  = React.useState('30d');
-
-  async function load() {
-    setLoading(true); setError(null);
-    const r = await fetch(`${API_URL}/scores/backtest`).catch(() => null);
-    if (!r?.ok) { setError('Failed to load backtest data'); setLoading(false); return; }
-    const d = await r.json();
-    setData(d);
-    setLoading(false);
-  }
-
-  React.useEffect(() => { load(); }, []);
-
-  const RATING_COLORS = {
-    'Strong Buy (80-100)': 'var(--green)',
-    'Buy (65-79)':         '#86efac',
-    'Neutral (45-64)':     '#f59e0b',
-    'Sell (30-44)':        '#f87171',
-    'Strong Sell (0-29)': 'var(--red-loss)',
-  };
-  const PERIOD_FIELD = { '30d': 'avgRet30d', '90d': 'avgRet90d', '180d': 'avgRet180d' };
-  const WINRATE_FIELD = { '30d': 'winRate30d', '90d': 'winRate90d', '180d': 'winRate180d' };
-  const N_FIELD = { '30d': 'n30', '90d': 'n90', '180d': 'n180' };
-
-  const buckets = data?.bucketStats || [];
-  const maxAbsRet = Math.max(...buckets.map(b => Math.abs(b[PERIOD_FIELD[period]] || 0)), 10);
-
-  return (
-    <div className="page-root">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Algorithm Backtest</h1>
-          <p className="page-sub">Score bucket → forward return · signal accuracy · algorithm v4 · {data?.totalSnapshots || 0} total snapshots</p>
-        </div>
-        <button onClick={load} disabled={loading}
-          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)' }}>
-          {loading ? 'LOADING…' : '↻ REFRESH'}
-        </button>
-      </div>
-
-      {error && <div className="card" style={{ color:'var(--red-loss)', fontSize:13 }}>{error}</div>}
-
-      {!data && !loading && !error && (
-        <div className="card" style={{ textAlign:'center', padding:'48px 20px', color:'var(--fg3)' }}>
-          <div style={{ fontSize:48, marginBottom:12 }}>📊</div>
-          <div style={{ fontSize:14, color:'var(--fg2)', marginBottom:8 }}>No backtest data yet</div>
+          <div style={{ fontSize:14, marginBottom:6, color:'var(--fg2)' }}>Enter a ticker to compute conviction score</div>
           <div style={{ fontSize:11, fontFamily:'var(--font-mono)', lineHeight:1.8 }}>
-            Run SCORES on the Opportunity Board to start capturing snapshots.<br/>
-            Return here after 7+ days to see how score predictions performed.
+            Aggregates: thesis status · news sentiment · short interest<br/>
+            congressional trades · options flow · insider filings · catalysts
           </div>
-        </div>
-      )}
-
-      {data && (
-        <div>
-          {/* Summary stats */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:16 }}>
-            {[
-              { label:'Total Snapshots', val: data.totalSnapshots },
-              { label:'With 30d Return', val: data.totalWithRet30 },
-              { label:'With 90d Return', val: data.totalWithRet90 },
-              { label:'With 180d Return', val: data.totalWithRet180 },
-            ].map((s, i) => (
-              <div key={i} className="card" style={{ textAlign:'center' }}>
-                <div style={{ fontSize:24, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--fg)' }}>{s.val}</div>
-                <div style={{ fontSize:10, color:'var(--fg3)', marginTop:4 }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Period selector */}
-          <div style={{ display:'flex', gap:8, marginBottom:14 }}>
-            {['30d','90d','180d'].map(p => (
-              <button key={p} onClick={() => setPeriod(p)}
-                style={{ padding:'6px 14px', fontSize:11, fontFamily:'var(--font-mono)', fontWeight:700,
-                  background: period===p ? 'var(--red)' : 'transparent',
-                  color: period===p ? '#fff' : 'var(--fg3)',
-                  border:'1px solid var(--bdr)', borderRadius:4, cursor:'pointer' }}>
-                {p} FORWARD
-              </button>
-            ))}
-          </div>
-
-          {/* Score bucket chart */}
-          <div className="card" style={{ marginBottom:14 }}>
-            <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:14 }}>
-              Average Forward Return by Score Bucket ({period})
-            </div>
-            {buckets.map((b, i) => {
-              const ret   = b[PERIOD_FIELD[period]];
-              const wr    = b[WINRATE_FIELD[period]];
-              const n     = b[N_FIELD[period]];
-              const color = RATING_COLORS[b.label] || 'var(--fg3)';
-              const barW  = ret != null ? Math.abs(ret) / maxAbsRet * 100 : 0;
-              return (
-                <div key={i} style={{ marginBottom:14 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:5 }}>
-                    <div style={{ width:10, height:10, borderRadius:2, background:color, flexShrink:0 }} />
-                    <div style={{ flex:1, fontSize:12, fontWeight:700 }}>{b.label}</div>
-                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', color: ret == null ? 'var(--fg3)' : ret >= 0 ? 'var(--green)' : 'var(--red-loss)', fontWeight:700 }}>
-                      {ret == null ? `${b.count} snaps, no data yet` : `${ret >= 0 ? '+' : ''}${ret.toFixed(1)}% avg · ${wr?.toFixed(0)}% win rate · n=${n}`}
-                    </div>
-                  </div>
-                  {ret != null && (
-                    <div style={{ height:10, background:'var(--surf)', borderRadius:4, overflow:'hidden', display:'flex', alignItems:'center' }}>
-                      {ret >= 0
-                        ? <div style={{ height:'100%', width:`${barW}%`, background:color, marginLeft:'50%', transform:'translateX(-100%)', borderRadius:4 }} />
-                        : <div style={{ height:'100%', width:`${barW}%`, background:color, marginLeft:`${50-barW}%`, borderRadius:4 }} />
-                      }
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {buckets.every(b => b[N_FIELD[period]] === 0) && (
-              <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:'20px 0' }}>
-                No {period} return data yet. Run SCORES daily and check back after {period === '30d' ? '30' : period === '90d' ? '90' : '180'} days.
-              </div>
-            )}
-          </div>
-
-          {/* Signal accuracy table */}
-          {data.signalAccuracy?.length > 0 && (
-            <div className="card">
-              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>
-                Signal-Level Accuracy (30d forward return, bullish prediction)
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr auto auto auto', gap:'8px 16px', alignItems:'center' }}>
-                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)' }}>SIGNAL</div>
-                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', textAlign:'right' }}>SAMPLES</div>
-                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', textAlign:'right' }}>WIN RATE</div>
-                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', textAlign:'right' }}>AVG RET</div>
-                {data.signalAccuracy.slice(0, 15).map((s, i) => (
-                  <React.Fragment key={i}>
-                    <div style={{ fontSize:11 }}>{s.label}</div>
-                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', textAlign:'right', color:'var(--fg3)' }}>{s.bullSamples}</div>
-                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', textAlign:'right',
-                      color: s.bullWinRate == null ? 'var(--fg3)' : s.bullWinRate > 55 ? 'var(--green)' : s.bullWinRate < 45 ? 'var(--red-loss)' : 'var(--fg)' }}>
-                      {s.bullWinRate != null ? `${s.bullWinRate.toFixed(0)}%` : '—'}
-                    </div>
-                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', textAlign:'right',
-                      color: s.avgBullRet30d == null ? 'var(--fg3)' : s.avgBullRet30d > 0 ? 'var(--green)' : 'var(--red-loss)' }}>
-                      {s.avgBullRet30d != null ? `${s.avgBullRet30d > 0 ? '+' : ''}${s.avgBullRet30d.toFixed(1)}%` : '—'}
-                    </div>
-                  </React.Fragment>
-                ))}
-              </div>
-              <div style={{ marginTop:12, fontSize:10, color:'var(--fg3)', lineHeight:1.6 }}>
-                Win rate: % of times a bullish signal led to positive 30d return. Min 3 samples shown. Grow the dataset by running SCORES daily.
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -9107,5 +8169,5 @@ Object.assign(window, {
   JournalPage, SentimentPage, ScenarioPage,
   MacroPage, WatchlistIntelPage, InsiderPage, AttributionPage, ResearchPage,
   CalendarPage, CongressPage, OptionsPage, ShortPage, ValuationPage, LPPage, DiligencePage, ConvictionPage,
-  OpportunityBoard, BacktestPage,
+  OpportunityBoard,
 });

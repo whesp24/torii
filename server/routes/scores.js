@@ -1,8 +1,6 @@
 import express from 'express';
 import Score from '../models/Score.js';
-import ScoreSnapshot from '../models/ScoreSnapshot.js';
 import { scoreAllWatchlist, scoreTicker } from '../services/scoringService.js';
-import { computeBacktestSummary, fillForwardReturns } from '../services/backtestService.js';
 
 const router = express.Router();
 
@@ -87,95 +85,6 @@ router.post('/run', async (req, res) => {
   }
 });
 
-// POST /api/scores/narrative — generate investment thesis narrative from signal data
-// Rules-based engine: no AI key required. Takes signals[], score, ticker → returns narrative text.
-router.post('/narrative', (req, res) => {
-  const { ticker, score, rating, signals } = req.body;
-  if (!ticker || score == null || !Array.isArray(signals)) {
-    return res.status(400).json({ error: 'ticker, score, signals[] required' });
-  }
-
-  const active  = signals.filter(s => !s.noData && s.delta !== 0);
-  const bull    = active.filter(s => s.direction === 'bullish');
-  const bear    = active.filter(s => s.direction === 'bearish');
-
-  const get = (label) => active.find(s => s.label && s.label.toLowerCase().includes(label.toLowerCase()));
-  const momentum = get('Momentum');
-  const analyst  = get('Analyst');
-  const short    = get('Short Interest');
-  const options  = get('Options Flow');
-  const news     = get('News Sentiment');
-  const insider  = get('Insider');
-  const congress = get('Congressional');
-  const catalyst = get('Catalyst');
-  const thesis   = get('Investment Thesis');
-  const eps      = get('EPS');
-
-  // Build human-readable strings for positives and risks
-  function summarize(sig) {
-    if (!sig) return null;
-    const v = sig.value || '';
-    if (sig.label.includes('Momentum'))     return `price momentum is ${v.split('·')[0].trim()}`;
-    if (sig.label.includes('Analyst'))      return `analyst target implies ${v.split('upside')[0].trim() + ' upside'}`.replace('  ', ' ');
-    if (sig.label.includes('Options'))      return `options flow is bullish (${v.split('·')[0].trim()})`;
-    if (sig.label.includes('News'))         return `news sentiment is ${v.split('·')[0].trim().toLowerCase()}`;
-    if (sig.label.includes('Insider'))      { const parts = v.split('/'); return `insiders are net ${parseInt(parts[0]) > parseInt(parts[1]) ? 'buyers' : 'sellers'}`; }
-    if (sig.label.includes('Congressional')) return `congressional trading favors ${sig.direction === 'bullish' ? 'buying' : 'selling'}`;
-    if (sig.label.includes('EPS'))          return `earnings ${v.includes('beat') ? 'beat' : 'missed'} estimates recently (${v.split('avg')[1]?.split('·')[0]?.trim() || ''})`;
-    if (sig.label.includes('Short'))        return `short interest is elevated (${v.split('·')[0].trim()})`;
-    return sig.label.toLowerCase();
-  }
-
-  function summarizeRisk(sig) {
-    if (!sig) return null;
-    const v = sig.value || '';
-    if (sig.label.includes('Short'))    return `high short interest (${v.split('·')[0].trim()}) creates squeeze risk`;
-    if (sig.label.includes('Analyst'))  return `analyst consensus is negative`;
-    if (sig.label.includes('Momentum')) return `price momentum is declining`;
-    if (sig.label.includes('News'))     return `negative news flow`;
-    if (sig.label.includes('Options'))  return `put-heavy options flow`;
-    if (sig.label.includes('EPS'))      return `recent earnings disappointment`;
-    return sig.label.toLowerCase();
-  }
-
-  const positives  = bull.map(s => summarize(s)).filter(Boolean);
-  const risks      = bear.map(s => summarizeRisk(s)).filter(Boolean);
-  const catNote    = catalyst && !catalyst.noData ? catalyst.value + '. ' : '';
-  const thesisNote = thesis?.direction === 'bullish' ? 'Investment thesis is valid. ' : '';
-
-  let narrative = '';
-
-  if (score >= 80) {
-    const top2 = positives.slice(0, 2).join(' and ');
-    const rsk  = risks.length > 0 ? ` Key risk: ${risks[0]}.` : '';
-    narrative = `${ticker} shows broad-based conviction across ${bull.length}/${active.length} signals — ${top2 || 'strong across the board'}. ${catNote}${thesisNote}${rsk}`;
-  } else if (score >= 65) {
-    const top  = positives[0] || 'a constructive technical setup';
-    const rest = positives.length > 1 ? `, alongside ${positives.length - 1} other positive signal${positives.length > 2 ? 's' : ''}` : '';
-    const rsk  = risks.length > 0 ? ` Watch: ${risks.slice(0, 2).join(' and ')}.` : '';
-    narrative = `${ticker} has a favorable risk/reward: ${top}${rest}. ${catNote}${rsk}`;
-  } else if (score >= 45) {
-    const bullStr = positives.length > 0 ? `Positives: ${positives.slice(0, 2).join(' and ')}` : 'Few clear positives';
-    const bearStr = risks.length > 0 ? `Risks: ${risks.slice(0, 2).join(' and ')}` : 'no major red flags';
-    narrative = `${ticker} presents a mixed picture. ${bullStr}. ${bearStr}. ${catNote}A clear catalyst is needed for conviction.`;
-  } else if (score >= 30) {
-    const bearStr = risks.slice(0, 2).join(' and ') || 'weak technical setup';
-    const posNote = positives.length > 0 ? ` Potential bright spot: ${positives[0]}.` : '';
-    narrative = `Risk-off on ${ticker}: ${bearStr}.${posNote} ${catNote}Would need a material positive catalyst to revisit.`;
-  } else {
-    const bearStr = risks.slice(0, 3).join(', ') || 'deteriorating fundamentals across the board';
-    narrative = `${ticker} faces significant headwinds: ${bearStr}. ${catNote}Avoid until there is a fundamental improvement.`;
-  }
-
-  res.json({
-    ticker, score, rating,
-    narrative:    narrative.replace(/\s{2,}/g, ' ').trim(),
-    bullCount:    bull.length,
-    bearCount:    bear.length,
-    totalActive:  active.length,
-  });
-});
-
 // POST /api/scores/single — score a single ticker on demand and cache it
 router.post('/single', async (req, res) => {
   const { symbol } = req.body;
@@ -188,29 +97,6 @@ router.post('/single', async (req, res) => {
       { upsert: true, new: true }
     );
     res.json(saved);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/scores/backtest — compute signal accuracy + return distribution
-router.get('/backtest', async (req, res) => {
-  try {
-    // First, fill any forward returns that are now mature
-    const filled = await fillForwardReturns();
-    const summary = await computeBacktestSummary(req.query.version || null);
-    res.json({ ...summary, filledThisRun: filled.updated });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/scores/snapshots/:symbol — all historical snapshots for a ticker
-router.get('/snapshots/:symbol', async (req, res) => {
-  try {
-    const sym = req.params.symbol.toUpperCase();
-    const snaps = await ScoreSnapshot.find({ symbol: sym }).sort({ scoredAt: -1 }).limit(100).lean();
-    res.json(snaps);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
