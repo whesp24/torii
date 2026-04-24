@@ -71,6 +71,60 @@ router.get('/fundamentals/:symbol', async (req, res) => {
   }
 });
 
+// Yahoo Finance quoteSummary — analyst targets + short interest + 52w (no API key needed)
+// Works for small caps and micro-caps that Finnhub doesn't cover
+// Must be before /:symbol wildcard
+router.get('/yahoo-summary/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const YF_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Referer': 'https://finance.yahoo.com/',
+    };
+    const modules = 'summaryDetail,financialData,defaultKeyStatistics,price';
+    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${encodeURIComponent(modules)}`;
+    const r = await fetch(url, { headers: YF_HEADERS });
+    if (!r.ok) return res.status(404).json({ error: `Yahoo Finance ${r.status}` });
+    const data = await r.json();
+    const result = data?.quoteSummary?.result?.[0];
+    if (!result) return res.status(404).json({ error: 'No data' });
+
+    const price = result.price             || {};
+    const sumD  = result.summaryDetail     || {};
+    const finD  = result.financialData     || {};
+    const defKS = result.defaultKeyStatistics || {};
+
+    const currentPrice = price.regularMarketPrice?.raw ?? sumD.previousClose?.raw ?? null;
+    const prevClose    = price.regularMarketPreviousClose?.raw ?? sumD.previousClose?.raw ?? null;
+    const changePercent = currentPrice && prevClose && prevClose > 0
+      ? ((currentPrice - prevClose) / prevClose) * 100 : null;
+
+    res.json({
+      symbol,
+      name:          price.shortName || price.longName || symbol,
+      currentPrice,
+      changePercent,
+      high52:        sumD.fiftyTwoWeekHigh?.raw    ?? defKS.fiftyTwoWeekHigh?.raw    ?? null,
+      low52:         sumD.fiftyTwoWeekLow?.raw     ?? defKS.fiftyTwoWeekLow?.raw     ?? null,
+      targetMean:    finD.targetMeanPrice?.raw     ?? null,
+      targetHigh:    finD.targetHighPrice?.raw     ?? null,
+      targetLow:     finD.targetLowPrice?.raw      ?? null,
+      numAnalysts:   finD.numberOfAnalystOpinions?.raw ?? 0,
+      shortPct:      defKS.shortPercentOfFloat?.raw != null
+        ? defKS.shortPercentOfFloat.raw * 100 : null,
+      shortRatio:    defKS.shortRatio?.raw         ?? null,
+      recMean:       finD.recommendationMean?.raw  ?? null,
+      recKey:        finD.recommendationKey        ?? null,
+      marketCap:     price.marketCap?.raw          ?? null,
+      beta:          defKS.beta?.raw               ?? null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Analyst price target + recommendation consensus
 // Must be before /:symbol wildcard
 router.get('/price-target/:symbol', async (req, res) => {

@@ -7833,14 +7833,16 @@ function ConvictionPage() {
       fetch(`${API_URL}/insider/form4/${t}`).then(r=>r.json()).catch(()=>null),
       // 7. Catalysts upcoming
       fetch(`${API_URL}/catalysts?ticker=${t}&from=${new Date().toISOString().slice(0,10)}`).then(r=>r.json()).catch(()=>[]),
-      // 8. Analyst price target
+      // 8. Analyst price target (Finnhub — optional, used when key is set)
       fetch(`${API_URL}/stocks/price-target/${t}`).then(r=>r.json()).catch(()=>null),
-      // 9. Fundamentals (for quote + 52w high/low)
+      // 9. Fundamentals — Finnhub metric+quote+profile
       fetch(`${API_URL}/stocks/fundamentals/${t}`).then(r=>r.json()).catch(()=>null),
+      // 10. Yahoo Finance quoteSummary — analyst targets + short interest + 52w (no key needed)
+      fetch(`${API_URL}/stocks/yahoo-summary/${t}`).then(r=>r.json()).catch(()=>null),
     ]);
 
-    const [wl, sent, shi, cong, opts, ins, cats, pt, fund] = results.map(r => r.status==='fulfilled' ? r.value : null);
-    const quote = fund?.quote || null;
+    const [wl, sent, shi, cong, opts, ins, cats, pt, fund, yf] = results.map(r => r.status==='fulfilled' ? r.value : null);
+    const quote  = fund?.quote  || null;
     const metric = fund?.metric || null;
 
     let total = 50; // base
@@ -7858,30 +7860,40 @@ function ConvictionPage() {
       }
     }
 
-    // Analyst Price Target
-    if (pt && pt.targetMean && quote?.c) {
-      const upside = ((pt.targetMean - quote.c) / quote.c) * 100;
+    // Analyst Price Target — Finnhub first, Yahoo Finance fallback (works for small caps)
+    const currentPrice = quote?.c || yf?.currentPrice;
+    const targetMean   = pt?.targetMean || yf?.targetMean;
+    const targetSource = pt?.targetMean ? 'Finnhub' : 'Yahoo Finance';
+    if (targetMean && currentPrice) {
+      const upside = ((targetMean - currentPrice) / currentPrice) * 100;
       const delta = upside > 30 ? +15 : upside > 15 ? +10 : upside > 5 ? +5 : upside < -15 ? -12 : upside < -5 ? -6 : 0;
       total += delta;
-      const rec = pt.recommendation;
-      const recLabel = rec ? ` · ${rec.strongBuy}SB/${rec.buy}B/${rec.hold}H/${rec.sell}S` : '';
-      gathered.push({ label:'Analyst Consensus', value: `$${pt.targetMean.toFixed(0)} target · ${upside>0?'+':''}${upside.toFixed(0)}% upside${recLabel}`, direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source:'Finnhub' });
+      const rec = pt?.recommendation;
+      const recLabel = rec ? ` · ${rec.strongBuy}SB/${rec.buy}B/${rec.hold}H/${rec.sell}S`
+        : yf?.recKey ? ` · consensus: ${yf.recKey}` : '';
+      const nAnalysts = yf?.numAnalysts > 0 ? ` · ${yf.numAnalysts} analysts` : '';
+      gathered.push({ label:'Analyst Consensus',
+        value: `$${targetMean.toFixed(2)} target · ${upside>0?'+':''}${upside.toFixed(0)}% upside${nAnalysts}${recLabel}`,
+        direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: targetSource });
     } else {
-      gathered.push({ label:'Analyst Consensus', value: 'No data available', direction: 'neutral', delta: 0, source:'Finnhub', noData: true });
+      gathered.push({ label:'Analyst Consensus', value: 'No analyst coverage', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
-    // Price Momentum (52w position)
-    if (quote?.c && metric?.['52WeekHigh'] && metric?.['52WeekLow']) {
-      const high52 = metric['52WeekHigh'];
-      const low52  = metric['52WeekLow'];
-      const pctFromHigh = ((quote.c - high52) / high52) * 100;
+    // Price Momentum — Finnhub metric first, Yahoo Finance fallback
+    const high52 = metric?.['52WeekHigh'] || yf?.high52;
+    const low52  = metric?.['52WeekLow']  || yf?.low52;
+    const livePrice = quote?.c || yf?.currentPrice;
+    if (livePrice && high52 && low52) {
+      const pctFromHigh = ((livePrice - high52) / high52) * 100;
       const range = high52 - low52;
-      const posInRange = range > 0 ? ((quote.c - low52) / range) * 100 : 50;
+      const posInRange = range > 0 ? ((livePrice - low52) / range) * 100 : 50;
       const delta = pctFromHigh > -8 ? +8 : pctFromHigh > -20 ? +4 : pctFromHigh > -35 ? 0 : pctFromHigh > -50 ? -5 : -10;
       total += delta;
-      gathered.push({ label:'Price Momentum', value: `${pctFromHigh.toFixed(1)}% from 52w high · ${posInRange.toFixed(0)}% of range`, direction: delta>=4?'bullish':delta<=-5?'bearish':'neutral', delta, source:'Finnhub' });
+      gathered.push({ label:'Price Momentum',
+        value: `${pctFromHigh.toFixed(1)}% from 52w high · ${posInRange.toFixed(0)}% of range`,
+        direction: delta>=4?'bullish':delta<=-5?'bearish':'neutral', delta, source:'Yahoo Finance' });
     } else {
-      gathered.push({ label:'Price Momentum', value: 'No quote data', direction: 'neutral', delta: 0, source:'Finnhub', noData: true });
+      gathered.push({ label:'Price Momentum', value: 'No price data', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
     // Sentiment
@@ -7893,13 +7905,13 @@ function ConvictionPage() {
       gathered.push({ label:'News Sentiment', value: 'No news data', direction: 'neutral', delta: 0, source:'AI', noData: true });
     }
 
-    // Short interest
+    // Short interest — Finnhub/FINRA first, Yahoo Finance fallback
     if (shi && !shi.error) {
-      const sp = shi.shortInterestPct ?? shi.finra?.shortPct;
+      const sp = shi.shortInterestPct ?? shi.finra?.shortPct ?? yf?.shortPct;
       if (sp != null) {
         const delta = sp > 20 ? -10 : sp > 10 ? -5 : sp < 3 ? +5 : 0;
         total += delta;
-        gathered.push({ label:'Short Interest', value: `${sp.toFixed(1)}% of float`, direction: sp>20?'bearish':sp>10?'neutral':'bullish', delta, source:'FINRA/Finnhub' });
+        gathered.push({ label:'Short Interest', value: `${sp.toFixed(1)}% of float`, direction: sp>20?'bearish':sp>10?'neutral':'bullish', delta, source:'FINRA/Yahoo' });
       } else {
         gathered.push({ label:'Short Interest', value: 'No data', direction: 'neutral', delta: 0, source:'FINRA/Finnhub', noData: true });
       }
