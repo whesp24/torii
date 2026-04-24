@@ -38,9 +38,11 @@ async function fetchStooqQuote(stooqSymbol) {
 }
 
 // ── yahoo-finance2 quote for Japan stocks ─────────────────────────────────────
-// Uses the npm package which handles sessions, crumbs, and retries internally.
+// Uses quoteSummary (price module) — yahooFinance.quote() is not exported by
+// the npm package; quoteSummary with the price module gives identical data.
 async function fetchYahooFinance2Quote(symbol) {
-  const q = await yahooFinance.quote(symbol, {}, { validateResult: false });
+  const r = await yahooFinance.quoteSummary(symbol, { modules: ['price'] }, { validateResult: false });
+  const q = r?.price;
   if (!q) throw new Error('yahoo-finance2: no result');
   const price = q.regularMarketPrice || q.previousClose || 0;
   if (!price || price <= 0) throw new Error('yahoo-finance2: no price');

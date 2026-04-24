@@ -7484,6 +7484,12 @@ function ScreenerTab() {
   const [loading, setLoading] = React.useState(false);
   const [totalResults, setTotalResults] = React.useState(0);
   const [savedScreens, setSavedScreens] = React.useState([]);
+  const [hasSearched, setHasSearched] = React.useState(false);
+
+  // Universe scoring state
+  const [universeStatus, setUniverseStatus] = React.useState({ total: 0, scored: 0, lastRunAt: null, running: false });
+  const [universeProgress, setUniverseProgress] = React.useState(null); // { done, total, symbol }
+  const [universeRunStatus, setUniverseRunStatus] = React.useState('');
 
   // Filter state
   const [filters, setFilters] = React.useState({
@@ -7497,22 +7503,74 @@ function ScreenerTab() {
   const [savingScreen, setSavingScreen] = React.useState(false);
   const [screenName, setScreenName] = React.useState('');
 
-  // Load metadata and saved screens on mount
+  // Load metadata, saved screens, and universe status on mount
   React.useEffect(() => {
     (async () => {
       try {
-        const [metaRes, screensRes] = await Promise.all([
+        const [metaRes, screensRes, statusRes] = await Promise.all([
           fetch(`${API_URL}/screener/metadata`).then(r => r.json()),
           fetch(`${API_URL}/screener/screens`).then(r => r.json()),
+          fetch(`${API_URL}/screener/status`).then(r => r.json()),
         ]);
         setMetadata(metaRes);
         setSavedScreens(Array.isArray(screensRes) ? screensRes : []);
+        setUniverseStatus(statusRes);
       } catch (e) { console.error(e); }
     })();
   }, []);
 
+  async function triggerUniverseScore() {
+    if (universeStatus.running) return;
+    setUniverseStatus(s => ({ ...s, running: true }));
+    setUniverseRunStatus('Starting…');
+    setUniverseProgress({ done: 0, total: universeStatus.total || '?' });
+    try {
+      const resp = await fetch(`${API_URL}/screener/run`, { method: 'POST' });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        setUniverseRunStatus(err.error || `Error ${resp.status}`);
+        setUniverseStatus(s => ({ ...s, running: false }));
+        return;
+      }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === 'progress') {
+              setUniverseProgress({ done: ev.done, total: ev.total, symbol: ev.symbol });
+              setUniverseRunStatus(`Scoring ${ev.symbol}… (${ev.done}/${ev.total})`);
+              setUniverseStatus(s => ({ ...s, scored: ev.done }));
+            } else if (ev.type === 'complete') {
+              setUniverseRunStatus(`✓ Done — ${ev.scored} stocks scored`);
+              setUniverseStatus(s => ({ ...s, running: false, scored: ev.scored, lastRunAt: ev.lastRunAt }));
+              setUniverseProgress(null);
+            } else if (ev.type === 'error') {
+              setUniverseRunStatus(`Error: ${ev.message}`);
+              setUniverseStatus(s => ({ ...s, running: false }));
+              setUniverseProgress(null);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      setUniverseRunStatus(`Connection error: ${e.message}`);
+      setUniverseStatus(s => ({ ...s, running: false }));
+      setUniverseProgress(null);
+    }
+  }
+
   async function runSearch() {
     setLoading(true);
+    setHasSearched(true);
     try {
       const searchBody = {
         ...filters,
@@ -7718,8 +7776,42 @@ function ScreenerTab() {
 
       {/* Right: results table */}
       <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+
+        {/* Universe status banner */}
+        <div style={{ padding:'10px 14px', background:'var(--bg)', borderRadius:8, border:'1px solid var(--bdr)',
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'var(--fg)' }}>
+              Stock Universe
+              <span style={{ marginLeft:8, fontFamily:'var(--font-mono)', color: universeStatus.scored === universeStatus.total && universeStatus.total > 0 ? 'var(--green)' : 'var(--fg3)' }}>
+                {universeStatus.scored}/{universeStatus.total} scored
+              </span>
+            </div>
+            {universeProgress ? (
+              <div style={{ marginTop:4 }}>
+                <div style={{ height:4, background:'var(--bdr)', borderRadius:2, width:200, overflow:'hidden' }}>
+                  <div style={{ height:'100%', background:'var(--red)', borderRadius:2, width: universeProgress.total > 0 ? `${(universeProgress.done/universeProgress.total)*100}%` : '0%', transition:'width 0.3s' }} />
+                </div>
+                <div style={{ fontSize:10, color:'var(--fg3)', marginTop:3 }}>{universeRunStatus}</div>
+              </div>
+            ) : universeRunStatus ? (
+              <div style={{ fontSize:11, color: universeRunStatus.startsWith('✓') ? 'var(--green)' : 'var(--fg3)', marginTop:2 }}>{universeRunStatus}</div>
+            ) : universeStatus.lastRunAt ? (
+              <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>Last run: {new Date(universeStatus.lastRunAt).toLocaleDateString()}</div>
+            ) : (
+              <div style={{ fontSize:10, color:'var(--fg3)', marginTop:2 }}>Not yet scored — run to populate the screener</div>
+            )}
+          </div>
+          <button onClick={triggerUniverseScore}
+            disabled={universeStatus.running}
+            style={{ padding:'7px 14px', background: universeStatus.running ? 'var(--bdr)' : 'var(--red)', color: universeStatus.running ? 'var(--fg3)' : '#fff',
+              border:'none', borderRadius:6, fontSize:11, fontWeight:700, cursor: universeStatus.running ? 'not-allowed' : 'pointer', whiteSpace:'nowrap' }}>
+            {universeStatus.running ? '⏳ Scoring…' : universeStatus.scored === 0 ? '▶ Score Universe' : '↺ Re-score Universe'}
+          </button>
+        </div>
+
         <div style={{ fontSize:13, color:'var(--fg3)', fontWeight:600 }}>
-          {totalResults} results {sortBy && `· sorted by ${sortBy}`}
+          {hasSearched ? `${totalResults} results` : 'Set filters and click Run Search'} {hasSearched && sortBy ? `· sorted by ${sortBy}` : ''}
         </div>
         <div className="card" style={{ padding:0, overflow:'hidden', flex:1, display:'flex', flexDirection:'column' }}>
           {/* Table header */}
@@ -7731,10 +7823,23 @@ function ScreenerTab() {
           </div>
 
           {loading ? (
-            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading…</div>
+            <div style={{ padding:40, textAlign:'center' }}>
+              <div style={{ fontSize:24, marginBottom:8 }}>🔍</div>
+              <div style={{ color:'var(--fg3)', fontSize:13 }}>Searching stocks…</div>
+            </div>
+          ) : !hasSearched ? (
+            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>
+              {universeStatus.scored === 0
+                ? <><div style={{ fontSize:22, marginBottom:10 }}>📊</div><div>Score the universe first, then run a search to find opportunities</div></>
+                : <><div style={{ fontSize:22, marginBottom:10 }}>🎯</div><div>Set your filters and click <strong>Run Search</strong></div></>
+              }
+            </div>
           ) : results.length === 0 ? (
             <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>
-              {totalResults === 0 ? 'Click Run Search to find stocks' : 'No results match your filters'}
+              {universeStatus.scored === 0
+                ? <><div style={{ fontSize:22, marginBottom:10 }}>📊</div><div>No stocks scored yet. Click <strong>Score Universe</strong> above to build the database, then search again.</div></>
+                : <><div style={{ fontSize:22, marginBottom:8 }}>🔎</div><div>No results match your filters — try widening the score range or removing some filters</div></>
+              }
             </div>
           ) : (
             <div style={{ overflowY:'auto', flex:1 }}>
