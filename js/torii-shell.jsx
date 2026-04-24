@@ -13,7 +13,6 @@ const NAV = [
   { id:'watchlist',  label:'Watchlist',  icon:'watchlist'  },
   { id:'alerts',     label:'Alerts',     icon:'alerts'     },
   { id:'calendar',   label:'Calendar',   icon:'calendar'   },
-  { id:'earnings',   label:'Earnings',   icon:'earnings'   },
   { id:'tools',      label:'Tools',      icon:'tools'      },
   { id:'analytics',  label:'Analytics',  icon:'analytics'  },
   { id:'push',       label:'Notify',     icon:'push'       },
@@ -25,7 +24,6 @@ const NAV = [
   { id:'sentiment',  label:'Sentiment',  icon:'sentiment'  },
   { id:'scenario',   label:'Scenario',   icon:'scenario'   },
   { id:'macro',      label:'Macro',      icon:'macro'      },
-  { id:'watchintel', label:'WL Intel',   icon:'watchintel' },
   { id:'insider',    label:'Insider',    icon:'insider'    },
   { id:'attribution',label:'Attribution',icon:'attribution'},
   { id:'research',   label:'Research',   icon:'research'   },
@@ -40,7 +38,7 @@ const NAV = [
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','calendar','earnings','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','watchintel','insider','attribution','research','congress','options','short','valuation','lp','diligence','conviction'];
+const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','calendar','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','insider','attribution','research','congress','options','short','valuation','lp','diligence','conviction'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -737,10 +735,11 @@ function App() {
         {page==='voices'     && <VoicesPage />}
         {page==='network'    && <NetworkingPage />}
         {page==='watchlist'  && <WatchlistPage />}
+        {page==='watchintel' && <WatchlistPage defaultTab="intel" />}
         {page==='alerts'     && <AlertsPanel />}
         {page==='calendar'    && <CalendarPage />}
-        {page==='earnings'    && <EarningsPage defaultTab="earnings" />}
-        {page==='ecocal'      && <EarningsPage defaultTab="ecocal" />}
+        {page==='earnings'    && <CalendarPage defaultTab="earnings" />}
+        {page==='ecocal'      && <CalendarPage defaultTab="ecocal" />}
         {page==='tools'       && <ToolsPage />}
         {page==='analytics'   && <AnalyticsPage />}
         {page==='push'        && <PushSettingsPage />}

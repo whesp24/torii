@@ -931,7 +931,8 @@ function StockPage({ ticker, onBack }) {
 
 // ─── WATCHLIST PAGE ───────────────────────────────────────────────────────────
 
-function WatchlistPage({ onNav }) {
+function WatchlistPage({ onNav, defaultTab }) {
+  const [tab,      setTab]      = React.useState(defaultTab || 'watchlist');
   const [watchlist, setWatchlist] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [filter, setFilter] = React.useState('all');
@@ -997,13 +998,29 @@ function WatchlistPage({ onNav }) {
       <div className="page-header">
         <div>
           <h1 className="page-title">Watchlist</h1>
-          <p className="page-sub">Track securities · alerts · notes</p>
+          <p className="page-sub">Track securities · alerts · intelligence</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowAdd(!showAdd)} style={{padding:'8px 16px',fontSize:13}}>
-          {showAdd ? '✕' : '+ Add'} Security
-        </button>
+        {tab === 'watchlist' && (
+          <button className="btn-primary" onClick={() => setShowAdd(!showAdd)} style={{padding:'8px 16px',fontSize:13}}>
+            {showAdd ? '✕' : '+ Add'} Security
+          </button>
+        )}
       </div>
 
+      {/* Tabs */}
+      <div style={{ display:'flex', gap:4, marginBottom:16, background:'var(--surf)', borderRadius:10, padding:4, width:'fit-content' }}>
+        {[['watchlist','Watchlist'],['intel','WL Intelligence']].map(([id,label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            style={{ padding:'7px 18px', borderRadius:7, border:'none', cursor:'pointer', fontSize:13, fontWeight:600,
+              background: tab===id?'var(--surf2)':'transparent', color: tab===id?'var(--fg)':'var(--fg3)', transition:'all 0.15s' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'intel' && <WatchlistIntelPage />}
+
+      {tab === 'watchlist' && <>
       {/* Add Form */}
       {showAdd && (
         <div className="card" style={{marginBottom:16}}>
@@ -1108,6 +1125,7 @@ function WatchlistPage({ onNav }) {
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 }
@@ -5911,18 +5929,36 @@ function BriefingPage() {
 
 // ─── CATALYST CALENDAR ───────────────────────────────────────────────────────
 
-function CalendarPage() {
-  const now = new Date();
+function CalendarPage({ defaultTab }) {
+  const now   = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const [view,    setView]    = React.useState(defaultTab || 'grid'); // 'grid' | 'earnings' | 'ecocal'
+  // Grid state
   const [year,    setYear]    = React.useState(now.getFullYear());
   const [month,   setMonth]   = React.useState(now.getMonth());
   const [events,  setEvents]  = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  const [filters, setFilters] = React.useState({ catalyst: true, earnings: true, meetings: true });
-  const [selected,setSelected]= React.useState(null);   // { date, events[] }
+  const [filters, setFilters] = React.useState({ catalyst:true, earnings:true, ecocal:true, meetings:true });
+  const [selected,setSelected]= React.useState(null);
   const [showAdd, setShowAdd] = React.useState(false);
   const [form,    setForm]    = React.useState({ ticker:'', title:'', type:'other', date:'', impact:'medium', notes:'' });
   const [saving,  setSaving]  = React.useState(false);
+  // Earnings list state
+  const [earnData,  setEarnData]  = React.useState([]);
+  const [earnLoad,  setEarnLoad]  = React.useState(false);
+  const [earnFetch, setEarnFetch] = React.useState(false);
 
+  const MONTH_NAMES  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const TYPE_OPTIONS = ['earnings','fda','lockup','analyst_day','spin_off','index_rebal','conference','product_launch','dividend','split','macro','other'];
+
+  const TYPE_COLOR = {
+    earnings:'#f59e0b', fda:'#ef4444', lockup:'#8b5cf6', analyst_day:'#3b82f6',
+    spin_off:'#10b981', conference:'#06b6d4', product_launch:'#ec4899',
+    dividend:'#84cc16', split:'#f97316', macro:'#6366f1', index_rebal:'#0ea5e9',
+    ecocal:'#10b981', meeting:'#64748b', other:'var(--fg3)',
+  };
+
+  // ── Fetch grid events ──────────────────────────────────────────────────────
   function load() {
     setLoading(true);
     Promise.all([
@@ -5933,49 +5969,53 @@ function CalendarPage() {
         _id: m._id, title: m.title || m.subject || 'Meeting', type: 'meeting',
         date: m.date || m.startTime, ticker: '', impact: 'medium', source: 'meeting',
       }));
-      setEvents([...(Array.isArray(cats) ? cats : []), ...meetEvents]);
+      // Add hardcoded eco-cal events that fall in this month
+      const ecoEvents = ECOCAL_2026
+        .filter(e => {
+          const d = new Date(e.date + 'T12:00:00Z');
+          return d.getFullYear() === year && d.getMonth() === month;
+        })
+        .map(e => ({ _id: `eco-${e.date}-${e.name}`, title: e.name, type: 'ecocal', date: e.date, ticker: '', impact: e.priority, source: 'ecocal', desc: e.desc }));
+      setEvents([...(Array.isArray(cats) ? cats : []), ...meetEvents, ...ecoEvents]);
       setLoading(false);
     });
   }
   React.useEffect(load, [year, month]);
 
+  // ── Fetch earnings list (lazy) ─────────────────────────────────────────────
+  React.useEffect(() => {
+    if (view !== 'earnings' || earnFetch) return;
+    setEarnFetch(true);
+    setEarnLoad(true);
+    fetch(`${API_URL}/earnings/calendar`)
+      .then(r => r.ok ? r.json() : { earningsCalendar: [] })
+      .then(d => { setEarnData(d.earningsCalendar || []); setEarnLoad(false); })
+      .catch(() => setEarnLoad(false));
+  }, [view]);
+
   function prevMonth() { if (month === 0) { setYear(y => y-1); setMonth(11); } else setMonth(m => m-1); }
   function nextMonth() { if (month === 11) { setYear(y => y+1); setMonth(0); } else setMonth(m => m+1); }
 
   async function addCatalyst(e) {
-    e.preventDefault();
-    setSaving(true);
+    e.preventDefault(); setSaving(true);
     await fetch(`${API_URL}/catalysts`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) }).catch(() => {});
-    setSaving(false);
-    setShowAdd(false);
+    setSaving(false); setShowAdd(false);
     setForm({ ticker:'', title:'', type:'other', date:'', impact:'medium', notes:'' });
     load();
   }
 
   async function deleteEvent(id) {
     await fetch(`${API_URL}/catalysts/${id}`, { method:'DELETE' }).catch(() => {});
-    load();
-    setSelected(null);
+    load(); setSelected(null);
   }
 
-  const TYPE_COLOR = {
-    earnings:'#f59e0b', fda:'#ef4444', lockup:'#8b5cf6', analyst_day:'#3b82f6',
-    spin_off:'#10b981', conference:'#06b6d4', product_launch:'#ec4899',
-    dividend:'#84cc16', split:'#f97316', macro:'#6366f1', index_rebal:'#0ea5e9',
-    meeting:'#64748b', other:'var(--fg3)',
-  };
-  const IMPACT_DOT = { high:'#ef4444', medium:'#f59e0b', low:'#22c55e' };
-
   // Build calendar grid
-  const firstDay = new Date(year, month, 1).getDay();
+  const firstDay    = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
+  const cells       = [];
   for (let i = 0; i < firstDay; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   while (cells.length % 7 !== 0) cells.push(null);
-
-  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const TYPE_OPTIONS = ['earnings','fda','lockup','analyst_day','spin_off','index_rebal','conference','product_launch','dividend','split','macro','other'];
 
   function eventsForDay(d) {
     if (!d) return [];
@@ -5984,94 +6024,218 @@ function CalendarPage() {
       if (!ev.date) return false;
       const evDate = new Date(ev.date).toISOString().slice(0,10);
       if (evDate !== key) return false;
-      if (ev.source === 'meeting' || ev.type === 'meeting') return filters.meetings;
+      if (ev.source === 'meeting'  || ev.type === 'meeting')  return filters.meetings;
       if (ev.source === 'earnings' || ev.type === 'earnings') return filters.earnings;
+      if (ev.source === 'ecocal'   || ev.type === 'ecocal')   return filters.ecocal;
       return filters.catalyst;
     });
   }
 
-  const today = new Date();
+  // Earnings list helpers
+  const earnGrouped = {};
+  for (const e of earnData) {
+    if (!earnGrouped[e.date]) earnGrouped[e.date] = [];
+    earnGrouped[e.date].push(e);
+  }
+  const earnDates = Object.keys(earnGrouped).sort();
+
+  // Eco cal upcoming
+  const ecoUpcoming = ECOCAL_2026.filter(e => e.date >= today).sort((a,b) => a.date.localeCompare(b.date));
+
+  const tagStyle = tag => {
+    const map = { fed:'#F59E0B', boj:'#EF4444', macro:'#8B5CF6', event:'#10B981' };
+    return { background: (map[tag]||'#666') + '22', color: map[tag]||'#999', border: `1px solid ${(map[tag]||'#666')}44`, borderRadius:4, padding:'2px 7px', fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em' };
+  };
+  const priBadge = p => {
+    const c = p==='high'?'#EF4444':p==='medium'?'#F59E0B':'#6B7280';
+    return { width:6, height:6, borderRadius:'50%', background:c, flexShrink:0 };
+  };
 
   return (
     <div className="page-root">
       <div className="page-header">
         <div>
           <h1 className="page-title">Calendar</h1>
-          <p className="page-sub">Catalyst events · earnings · meetings</p>
+          <p className="page-sub">Catalyst events · earnings reports · economic calendar · meetings</p>
         </div>
-        <button onClick={() => setShowAdd(true)}
-          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
-          + Add Catalyst
-        </button>
-      </div>
-
-      {/* Filters */}
-      <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
-        {[['catalyst','Catalysts','#ef4444'],['earnings','Earnings','#f59e0b'],['meetings','Meetings','#64748b']].map(([k,label,color]) => (
-          <button key={k} onClick={() => setFilters(f => ({ ...f, [k]: !f[k] }))}
-            style={{ padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:600, cursor:'pointer', transition:'all 0.15s',
-              background: filters[k] ? color : 'transparent',
-              border: `1.5px solid ${filters[k] ? color : 'var(--bdr)'}`,
-              color: filters[k] ? '#fff' : 'var(--fg3)' }}>
-            {label}
+        {view === 'grid' && (
+          <button onClick={() => setShowAdd(true)}
+            style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+            + Add Event
           </button>
-        ))}
-        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
-          <button onClick={prevMonth} style={{ padding:'6px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, cursor:'pointer', color:'var(--fg)', fontSize:14 }}>‹</button>
-          <span style={{ fontWeight:700, fontSize:14, minWidth:160, textAlign:'center' }}>{MONTH_NAMES[month]} {year}</span>
-          <button onClick={nextMonth} style={{ padding:'6px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, cursor:'pointer', color:'var(--fg)', fontSize:14 }}>›</button>
-        </div>
-      </div>
-
-      {/* Calendar grid */}
-      <div className="card" style={{ padding:0, overflow:'hidden' }}>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', borderBottom:'1px solid var(--bdr)' }}>
-          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
-            <div key={d} style={{ padding:'8px 4px', textAlign:'center', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)', fontWeight:700, letterSpacing:'0.05em' }}>{d}</div>
-          ))}
-        </div>
-        {loading ? (
-          <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading…</div>
-        ) : (
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)' }}>
-            {cells.map((d, i) => {
-              const dayEvents = eventsForDay(d);
-              const isToday = d && today.getDate()===d && today.getMonth()===month && today.getFullYear()===year;
-              return (
-                <div key={i} onClick={() => d && setSelected({ day: d, events: dayEvents })}
-                  style={{ minHeight:80, padding:'6px 8px', borderRight: (i+1)%7===0?'none':'1px solid var(--bdr)', borderBottom:'1px solid var(--bdr)',
-                    background: isToday?'rgba(239,68,68,0.06)':'transparent', cursor: d?'pointer':'default',
-                    opacity: d?1:0.2, transition:'background 0.1s' }}
-                  onMouseEnter={e => d && (e.currentTarget.style.background = isToday?'rgba(239,68,68,0.1)':'var(--surf)')}
-                  onMouseLeave={e => e.currentTarget.style.background = isToday?'rgba(239,68,68,0.06)':'transparent'}>
-                  <div style={{ fontSize:11, fontWeight: isToday?800:400, color: isToday?'var(--red)':'var(--fg2)', marginBottom:4, fontFamily:'var(--font-mono)' }}>{d}</div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-                    {dayEvents.slice(0,3).map((ev,j) => (
-                      <div key={j} style={{ fontSize:9, padding:'1px 4px', borderRadius:3, fontWeight:600, lineHeight:1.4,
-                        background:`${TYPE_COLOR[ev.type]||'#64748b'}22`,
-                        color: TYPE_COLOR[ev.type]||'var(--fg3)',
-                        whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                        {ev.ticker?`${ev.ticker} `:''}
-                        {(ev.title||'').slice(0,18)}
-                      </div>
-                    ))}
-                    {dayEvents.length > 3 && (
-                      <div style={{ fontSize:9, color:'var(--fg3)', paddingLeft:4 }}>+{dayEvents.length-3} more</div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         )}
       </div>
 
-      {/* Day detail panel */}
+      {/* View tabs */}
+      <div style={{ display:'flex', gap:4, marginBottom:16, background:'var(--surf)', borderRadius:10, padding:4, width:'fit-content' }}>
+        {[['grid','📅 Calendar'],['earnings','📊 Earnings'],['ecocal','🌐 Eco Calendar']].map(([id, label]) => (
+          <button key={id} onClick={() => setView(id)}
+            style={{ padding:'7px 18px', borderRadius:7, border:'none', cursor:'pointer', fontSize:13, fontWeight:600,
+              background: view===id ? 'var(--surf2)' : 'transparent',
+              color: view===id ? 'var(--fg)' : 'var(--fg3)', transition:'all 0.15s' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── CALENDAR GRID VIEW ── */}
+      {view === 'grid' && (
+        <>
+          {/* Filter toggles + month nav */}
+          <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap', alignItems:'center' }}>
+            {[['catalyst','Catalysts','#ef4444'],['earnings','Earnings','#f59e0b'],['ecocal','Eco Cal','#10b981'],['meetings','Meetings','#64748b']].map(([k,label,color]) => (
+              <button key={k} onClick={() => setFilters(f => ({ ...f, [k]: !f[k] }))}
+                style={{ padding:'5px 12px', borderRadius:20, fontSize:11, fontWeight:600, cursor:'pointer', transition:'all 0.15s',
+                  background: filters[k] ? color : 'transparent', border: `1.5px solid ${filters[k] ? color : 'var(--bdr)'}`,
+                  color: filters[k] ? '#fff' : 'var(--fg3)' }}>
+                {label}
+              </button>
+            ))}
+            <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
+              <button onClick={prevMonth} style={{ padding:'6px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, cursor:'pointer', color:'var(--fg)', fontSize:14 }}>‹</button>
+              <span style={{ fontWeight:700, fontSize:14, minWidth:160, textAlign:'center' }}>{MONTH_NAMES[month]} {year}</span>
+              <button onClick={nextMonth} style={{ padding:'6px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, cursor:'pointer', color:'var(--fg)', fontSize:14 }}>›</button>
+            </div>
+          </div>
+
+          <div className="card" style={{ padding:0, overflow:'hidden' }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', borderBottom:'1px solid var(--bdr)' }}>
+              {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                <div key={d} style={{ padding:'8px 4px', textAlign:'center', fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)', fontWeight:700, letterSpacing:'0.05em' }}>{d}</div>
+              ))}
+            </div>
+            {loading ? (
+              <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading…</div>
+            ) : (
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)' }}>
+                {cells.map((d, i) => {
+                  const dayEvents = eventsForDay(d);
+                  const isToday = d && now.getDate()===d && now.getMonth()===month && now.getFullYear()===year;
+                  return (
+                    <div key={i} onClick={() => d && setSelected({ day: d, events: dayEvents })}
+                      style={{ minHeight:88, padding:'6px 8px', borderRight:(i+1)%7===0?'none':'1px solid var(--bdr)', borderBottom:'1px solid var(--bdr)',
+                        background: isToday?'rgba(239,68,68,0.06)':'transparent', cursor: d?'pointer':'default',
+                        opacity: d?1:0.15, transition:'background 0.1s' }}
+                      onMouseEnter={e => d && (e.currentTarget.style.background = isToday?'rgba(239,68,68,0.1)':'var(--surf)')}
+                      onMouseLeave={e => e.currentTarget.style.background = isToday?'rgba(239,68,68,0.06)':'transparent'}>
+                      <div style={{ fontSize:11, fontWeight: isToday?800:400, color: isToday?'var(--red)':'var(--fg2)', marginBottom:4, fontFamily:'var(--font-mono)' }}>{d}</div>
+                      <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                        {dayEvents.slice(0,3).map((ev,j) => (
+                          <div key={j} style={{ fontSize:9, padding:'1px 4px', borderRadius:3, fontWeight:600, lineHeight:1.4,
+                            background:`${TYPE_COLOR[ev.type]||'#64748b'}22`, color: TYPE_COLOR[ev.type]||'var(--fg3)',
+                            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                            {ev.ticker?`${ev.ticker} `:''}
+                            {(ev.title||'').slice(0,16)}
+                          </div>
+                        ))}
+                        {dayEvents.length > 3 && <div style={{ fontSize:9, color:'var(--fg3)', paddingLeft:4 }}>+{dayEvents.length-3}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── EARNINGS LIST VIEW ── */}
+      {view === 'earnings' && (
+        <div>
+          {earnLoad ? (
+            <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)' }}>Loading earnings calendar…</div>
+          ) : earnData.length === 0 ? (
+            <div className="card" style={{ textAlign:'center', padding:40 }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>📅</div>
+              <div style={{ color:'var(--fg3)', fontSize:14 }}>No earnings data — requires Finnhub API key</div>
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+              {earnDates.map(date => {
+                const d      = new Date(date + 'T12:00:00Z');
+                const isPast = date < today;
+                return (
+                  <div key={date}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--fg3)', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:8, fontFamily:'var(--font-mono)' }}>
+                      {d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}
+                      {date === today && <span style={{ marginLeft:8, color:'var(--red)', fontSize:10 }}>TODAY</span>}
+                    </div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                      {earnGrouped[date].map(e => (
+                        <div key={e.symbol} className="card"
+                          style={{ padding:'12px 16px', display:'flex', alignItems:'center', gap:12, opacity:isPast?0.55:1 }}>
+                          <div style={{ width:40, height:40, borderRadius:8, background:'var(--red-dim)', display:'flex', alignItems:'center', justifyContent:'center',
+                            color:'var(--red)', fontWeight:800, fontSize:13, fontFamily:'var(--font-mono)', flexShrink:0 }}>
+                            {e.symbol.slice(0,3)}
+                          </div>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontWeight:700, fontSize:14, color:'var(--fg)' }}>{e.symbol}</div>
+                            <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>
+                              {e.hour==='bmo'?'pre-market':e.hour==='amc'?'after-close':''}
+                              {e.epsEstimate != null && ` · EPS est: $${e.epsEstimate}`}
+                              {e.revenueEstimate != null && ` · Rev est: $${(e.revenueEstimate/1e9).toFixed(1)}B`}
+                            </div>
+                          </div>
+                          <span style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', background:'var(--surf)', padding:'4px 10px', borderRadius:5 }}>
+                            {e.hour==='bmo'?'🌅 Pre':e.hour==='amc'?'🌆 Post':'📊'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ECO CALENDAR VIEW ── */}
+      {view === 'ecocal' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {ecoUpcoming.length === 0 && <div className="card" style={{ textAlign:'center', padding:40, color:'var(--fg3)' }}>No upcoming events</div>}
+          {ecoUpcoming.map((evt, i) => {
+            const d        = new Date(evt.date + 'T12:00:00Z');
+            const isToday  = evt.date === today;
+            const daysAway = Math.round((new Date(evt.date) - new Date(today)) / 86400000);
+            return (
+              <div key={i} className="card" style={{ padding:'14px 18px', display:'flex', gap:14, alignItems:'center' }}>
+                <div style={{ width:52, textAlign:'center', flexShrink:0 }}>
+                  <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase' }}>
+                    {d.toLocaleDateString('en-US',{month:'short'})}
+                  </div>
+                  <div style={{ fontSize:22, fontWeight:800, color:isToday?'var(--red)':'var(--fg)', lineHeight:1.1 }}>{d.getUTCDate()}</div>
+                  <div style={{ fontSize:9, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                    {isToday?'TODAY':daysAway<=7?`${daysAway}d`:''}
+                  </div>
+                </div>
+                <div style={{ borderLeft:'2px solid var(--bdr)', paddingLeft:14, flex:1 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                    <div style={priBadge(evt.priority)} />
+                    <span style={{ fontWeight:700, fontSize:14, color:'var(--fg)' }}>{evt.name}</span>
+                    <span style={tagStyle(evt.tag)}>{evt.tag}</span>
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--fg3)' }}>{evt.desc}</div>
+                </div>
+                <div>
+                  <span style={{ borderRadius:4, background:evt.priority==='high'?'#EF444422':evt.priority==='medium'?'#F59E0B22':'#6B728022',
+                    color:evt.priority==='high'?'#EF4444':evt.priority==='medium'?'#F59E0B':'#6B7280',
+                    padding:'3px 8px', fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em' }}>
+                    {evt.priority}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Day detail bottom sheet */}
       {selected && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200, display:'flex', alignItems:'flex-end', justifyContent:'center' }}
           onClick={() => setSelected(null)}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background:'var(--bg)', borderRadius:'16px 16px 0 0', padding:20, width:'100%', maxWidth:600, maxHeight:'60vh', overflowY:'auto' }}>
+            style={{ background:'var(--bg)', borderRadius:'16px 16px 0 0', padding:20, width:'100%', maxWidth:600, maxHeight:'65vh', overflowY:'auto' }}>
             <div style={{ fontWeight:800, fontSize:16, marginBottom:12 }}>
               {MONTH_NAMES[month]} {selected.day}, {year}
               <span style={{ marginLeft:8, fontFamily:'var(--font-mono)', fontSize:11, color:'var(--fg3)', fontWeight:400 }}>
@@ -6080,37 +6244,37 @@ function CalendarPage() {
             </div>
             {selected.events.length === 0 ? (
               <div style={{ color:'var(--fg3)', fontSize:13 }}>No events this day</div>
-            ) : (
-              selected.events.map((ev,i) => (
-                <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'10px 0', borderBottom:'1px solid var(--bdr)' }}>
-                  <div style={{ width:10, height:10, borderRadius:'50%', marginTop:3, flexShrink:0, background: TYPE_COLOR[ev.type]||'var(--fg3)' }} />
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontWeight:600, fontSize:13 }}>{ev.ticker ? <strong style={{ color:'var(--red)' }}>{ev.ticker}</strong> : null}{ev.ticker ? ' · ' : ''}{ev.title}</div>
-                    <div style={{ fontSize:11, color:'var(--fg3)', marginTop:2 }}>{ev.type?.replace('_',' ')} · {ev.impact} impact</div>
-                    {ev.notes && <div style={{ fontSize:11, color:'var(--fg2)', marginTop:4 }}>{ev.notes}</div>}
+            ) : selected.events.map((ev,i) => (
+              <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'10px 0', borderBottom:'1px solid var(--bdr)' }}>
+                <div style={{ width:10, height:10, borderRadius:'50%', marginTop:3, flexShrink:0, background: TYPE_COLOR[ev.type]||'var(--fg3)' }} />
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:600, fontSize:13 }}>
+                    {ev.ticker ? <><strong style={{ color:'var(--red)' }}>{ev.ticker}</strong> · </> : null}{ev.title}
                   </div>
-                  {ev.source === 'catalyst' && (
-                    <button onClick={() => deleteEvent(ev._id)}
-                      style={{ background:'none', border:'none', color:'var(--fg3)', cursor:'pointer', fontSize:16 }}>×</button>
-                  )}
+                  <div style={{ fontSize:11, color:'var(--fg3)', marginTop:2 }}>{ev.type?.replace(/_/g,' ')} · {ev.impact} impact</div>
+                  {ev.desc && <div style={{ fontSize:11, color:'var(--fg2)', marginTop:4 }}>{ev.desc}</div>}
+                  {ev.notes && <div style={{ fontSize:11, color:'var(--fg2)', marginTop:4 }}>{ev.notes}</div>}
                 </div>
-              ))
-            )}
+                {ev.source === 'catalyst' && (
+                  <button onClick={() => deleteEvent(ev._id)} style={{ background:'none', border:'none', color:'var(--fg3)', cursor:'pointer', fontSize:18 }}>×</button>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Add catalyst modal */}
+      {/* Add event modal */}
       {showAdd && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
           onClick={() => setShowAdd(false)}>
           <form onSubmit={addCatalyst} onClick={e => e.stopPropagation()}
             style={{ background:'var(--bg)', borderRadius:16, padding:24, width:'100%', maxWidth:440, display:'flex', flexDirection:'column', gap:12 }}>
-            <h2 style={{ margin:0, fontSize:16, fontWeight:800 }}>Add Catalyst</h2>
-            {[['ticker','Ticker','text','NVDA'],['title','Title','text','FDA Decision'],['date','Date','date','']].map(([k,label,type,ph]) => (
+            <h2 style={{ margin:0, fontSize:16, fontWeight:800 }}>Add Calendar Event</h2>
+            {[['ticker','Ticker (optional)','text','NVDA'],['title','Title','text','FDA Decision'],['date','Date','date','']].map(([k,label,type,ph]) => (
               <div key={k}>
                 <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:4 }}>{label}</label>
-                <input value={form[k]} onChange={e => setForm(f => ({...f,[k]:e.target.value}))} type={type} placeholder={ph} required={k!=='ticker'}
+                <input value={form[k]} onChange={e => setForm(f => ({...f,[k]:e.target.value}))} type={type} placeholder={ph} required={k==='title'||k==='date'}
                   style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, color:'var(--fg)', boxSizing:'border-box' }} />
               </div>
             ))}
@@ -6119,7 +6283,7 @@ function CalendarPage() {
                 <label style={{ fontSize:11, color:'var(--fg3)', display:'block', marginBottom:4 }}>Type</label>
                 <select value={form.type} onChange={e => setForm(f => ({...f,type:e.target.value}))}
                   style={{ width:'100%', padding:'8px 10px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, color:'var(--fg)' }}>
-                  {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t.replace('_',' ')}</option>)}
+                  {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
                 </select>
               </div>
               <div>
@@ -6552,27 +6716,65 @@ function ShortPage() {
 // ─── VALUATION WORKBENCH ──────────────────────────────────────────────────────
 
 function ValuationPage() {
-  const [ticker,  setTicker]  = React.useState('');
-  const [loading, setLoading] = React.useState(false);
-  const [inputs,  setInputs]  = React.useState({
+  const [ticker,        setTicker]        = React.useState('');
+  const [loading,       setLoading]       = React.useState(false);
+  const [inputs,        setInputs]        = React.useState({
     revenue: 1000, revenueGrowth: 15, ebitdaMargin: 20, capexPct: 5, daPct: 5,
     taxRate: 21, wacc: 10, terminalGrowth: 2.5, netDebt: 0, shares: 100,
   });
-  const [dcf,     setDcf]     = React.useState(null);
-  const [comps,   setComps]   = React.useState(null);
+  const [dcf,           setDcf]           = React.useState(null);
+  const [analystData,   setAnalystData]   = React.useState(null);
+  const [currentPrice,  setCurrentPrice]  = React.useState(null);
+  const [loadNote,      setLoadNote]      = React.useState('');
 
   function inp(k, v) { setInputs(p => ({ ...p, [k]: parseFloat(v)||0 })); }
 
-  function fetchFundamentals() {
-    if (!ticker.trim()) return;
-    setLoading(true);
-    fetch(`${API_URL}/stocks/${ticker.trim().toUpperCase()}`)
-      .then(r => r.json())
-      .then(d => {
-        if (d.price) setInputs(p => ({ ...p, shares: p.shares }));
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+  async function fetchFundamentals() {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return;
+    setLoading(true); setLoadNote(''); setAnalystData(null); setCurrentPrice(null);
+    try {
+      const [fundRes, ptRes] = await Promise.all([
+        fetch(`${API_URL}/stocks/fundamentals/${t}`).then(r=>r.json()).catch(()=>null),
+        fetch(`${API_URL}/stocks/price-target/${t}`).then(r=>r.json()).catch(()=>null),
+      ]);
+      const m = fundRes?.metric || {};
+      const q = fundRes?.quote  || {};
+      const p = fundRes?.profile || {};
+      // Auto-populate DCF inputs from Finnhub metrics
+      const newInputs = { ...inputs };
+      // Revenue (TTM, reported in millions)
+      if (m.revenueTTM)            newInputs.revenue       = parseFloat((m.revenueTTM / 1e6).toFixed(0));
+      else if (p.marketCapitalization && m['epsNormalizedAnnual'])
+                                   newInputs.revenue       = inputs.revenue; // fallback: keep
+      // Revenue growth — use 3yr CAGR or YoY
+      if (m['revenueGrowth3Y'])    newInputs.revenueGrowth = parseFloat(m['revenueGrowth3Y'].toFixed(1));
+      else if (m['revenueGrowthTTMYoy']) newInputs.revenueGrowth = parseFloat(m['revenueGrowthTTMYoy'].toFixed(1));
+      // EBITDA margin
+      if (m['ebitdaMarginTTM'])    newInputs.ebitdaMargin  = parseFloat(m['ebitdaMarginTTM'].toFixed(1));
+      // CapEx (approx from capexTTM vs revenue)
+      if (m['capitalExpenditureTTM'] && m.revenueTTM)
+        newInputs.capexPct = parseFloat(Math.abs(m['capitalExpenditureTTM'] / m.revenueTTM * 100).toFixed(1));
+      // Net debt
+      if (m['netDebtAnnual'])      newInputs.netDebt       = parseFloat((m['netDebtAnnual'] / 1e6).toFixed(0));
+      // Shares outstanding (in millions)
+      if (p.shareOutstanding)      newInputs.shares        = parseFloat(p.shareOutstanding.toFixed(1));
+      else if (m['totalSharesOutstanding']) newInputs.shares = parseFloat((m['totalSharesOutstanding'] / 1e6).toFixed(1));
+      setInputs(newInputs);
+      if (q.c) setCurrentPrice(q.c);
+      if (ptRes && !ptRes.error)   setAnalystData(ptRes);
+      // Build load note
+      const populated = [];
+      if (m.revenueTTM)            populated.push('Revenue');
+      if (m['ebitdaMarginTTM'])    populated.push('EBITDA margin');
+      if (m['revenueGrowth3Y'] || m['revenueGrowthTTMYoy']) populated.push('Rev growth');
+      if (m['netDebtAnnual'] !== undefined) populated.push('Net debt');
+      if (p.shareOutstanding)      populated.push('Shares');
+      setLoadNote(populated.length > 0 ? `Auto-filled: ${populated.join(', ')}` : 'No Finnhub fundamentals found — using manual inputs');
+    } catch(e) {
+      setLoadNote('Error fetching fundamentals');
+    }
+    setLoading(false);
   }
 
   // DCF calculation
@@ -6615,14 +6817,26 @@ function ValuationPage() {
         {/* Left: inputs */}
         <div>
           <div className="card" style={{ marginBottom:12 }}>
-            <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>Ticker (optional)</div>
+            <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>Auto-populate from ticker</div>
             <div style={{ display:'flex', gap:8 }}>
               <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
                 onKeyDown={e => e.key==='Enter' && fetchFundamentals()}
                 placeholder="NVDA" style={{ flex:1, padding:'8px 10px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:13, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }} />
               <button onClick={fetchFundamentals} disabled={loading}
-                style={{ padding:'8px 12px', background:'var(--surf)', border:'1px solid var(--bdr)', borderRadius:6, fontSize:12, cursor:'pointer', color:'var(--fg)' }}>Load</button>
+                style={{ padding:'8px 16px', background:'var(--red)', border:'none', borderRadius:6, fontSize:12, cursor:'pointer', color:'#fff', fontWeight:700, opacity:loading?0.7:1 }}>
+                {loading ? '…' : 'LOAD'}
+              </button>
             </div>
+            {loadNote && (
+              <div style={{ marginTop:8, fontSize:11, color: loadNote.startsWith('Auto') ? 'var(--green)' : 'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                {loadNote.startsWith('Auto') ? '✓ ' : ''}{loadNote}
+              </div>
+            )}
+            {currentPrice && (
+              <div style={{ marginTop:4, fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)' }}>
+                Current price: <strong style={{ color:'var(--fg)' }}>${currentPrice.toFixed(2)}</strong>
+              </div>
+            )}
           </div>
 
           <div className="card">
@@ -6655,12 +6869,76 @@ function ValuationPage() {
         <div>
           {dcf && (
             <>
-              <div className="card" style={{ marginBottom:12, textAlign:'center' }}>
-                <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>Implied Price Target</div>
-                <div style={{ fontSize:48, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--green)', marginBottom:4 }}>
-                  ${dcf.priceTarget > 0 ? dcf.priceTarget.toFixed(2) : '—'}
+              <div className="card" style={{ marginBottom:12 }}>
+                <div style={{ display:'grid', gridTemplateColumns: analystData?.targetMean ? '1fr 1fr' : '1fr', gap:12, textAlign:'center' }}>
+                  {/* DCF price target */}
+                  <div>
+                    <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>DCF Implied Target</div>
+                    <div style={{ fontSize:40, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--green)', lineHeight:1 }}>
+                      ${dcf.priceTarget > 0 ? dcf.priceTarget.toFixed(0) : '—'}
+                    </div>
+                    {currentPrice && dcf.priceTarget > 0 && (
+                      <div style={{ fontSize:11, fontFamily:'var(--font-mono)', marginTop:4, color: dcf.priceTarget > currentPrice ? 'var(--green)' : 'var(--red-loss)', fontWeight:700 }}>
+                        {((dcf.priceTarget - currentPrice)/currentPrice*100).toFixed(0)}% vs current ${currentPrice.toFixed(0)}
+                      </div>
+                    )}
+                    <div style={{ fontSize:10, color:'var(--fg3)', marginTop:4 }}>{inputs.wacc}% WACC · {inputs.terminalGrowth}% TG</div>
+                  </div>
+                  {/* Analyst consensus target */}
+                  {analystData?.targetMean && (
+                    <div style={{ borderLeft:'1px solid var(--bdr)', paddingLeft:12 }}>
+                      <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6 }}>Analyst Consensus</div>
+                      <div style={{ fontSize:40, fontWeight:900, fontFamily:'var(--font-mono)', color:'#f59e0b', lineHeight:1 }}>
+                        ${analystData.targetMean.toFixed(0)}
+                      </div>
+                      {currentPrice && (
+                        <div style={{ fontSize:11, fontFamily:'var(--font-mono)', marginTop:4, color: analystData.targetMean > currentPrice ? 'var(--green)' : 'var(--red-loss)', fontWeight:700 }}>
+                          {((analystData.targetMean - currentPrice)/currentPrice*100).toFixed(0)}% upside
+                        </div>
+                      )}
+                      <div style={{ fontSize:10, color:'var(--fg3)', marginTop:4 }}>
+                        ${analystData.targetLow?.toFixed(0)} – ${analystData.targetHigh?.toFixed(0)} range
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontSize:11, color:'var(--fg3)' }}>5-year DCF · {inputs.wacc}% WACC · {inputs.terminalGrowth}% terminal growth</div>
+                {/* Analyst buy/sell/hold breakdown */}
+                {analystData?.recommendation && (
+                  <div style={{ marginTop:12, paddingTop:10, borderTop:'1px solid var(--bdr)' }}>
+                    {(() => {
+                      const r = analystData.recommendation;
+                      const total = (r.strongBuy||0)+(r.buy||0)+(r.hold||0)+(r.sell||0)+(r.strongSell||0);
+                      const bars = [
+                        { label:'Strong Buy', count:r.strongBuy||0, color:'#22c55e' },
+                        { label:'Buy',        count:r.buy||0,       color:'#86efac' },
+                        { label:'Hold',       count:r.hold||0,      color:'#f59e0b' },
+                        { label:'Sell',       count:r.sell||0,      color:'#f87171' },
+                        { label:'Str Sell',   count:r.strongSell||0,color:'#ef4444' },
+                      ];
+                      return (
+                        <div>
+                          <div style={{ fontSize:10, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:8 }}>
+                            Analyst Ratings · {total} analysts · {analystData.lastUpdated}
+                          </div>
+                          <div style={{ display:'flex', gap:2, height:24, borderRadius:4, overflow:'hidden' }}>
+                            {bars.filter(b=>b.count>0).map(b => (
+                              <div key={b.label} title={`${b.label}: ${b.count}`} style={{ flex:b.count, background:b.color, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                                <span style={{ fontSize:9, color:'#fff', fontWeight:700, fontFamily:'var(--font-mono)' }}>{b.count}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ display:'flex', gap:10, marginTop:6, flexWrap:'wrap' }}>
+                            {bars.filter(b=>b.count>0).map(b => (
+                              <span key={b.label} style={{ fontSize:10, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>
+                                <span style={{ color:b.color, fontWeight:700 }}>■</span> {b.label} {b.count}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
 
               <div className="card" style={{ marginBottom:12 }}>
@@ -7230,9 +7508,15 @@ function ConvictionPage() {
       fetch(`${API_URL}/insider/form4/${t}`).then(r=>r.json()).catch(()=>null),
       // 7. Catalysts upcoming
       fetch(`${API_URL}/catalysts?ticker=${t}&from=${new Date().toISOString().slice(0,10)}`).then(r=>r.json()).catch(()=>[]),
+      // 8. Analyst price target
+      fetch(`${API_URL}/stocks/price-target/${t}`).then(r=>r.json()).catch(()=>null),
+      // 9. Fundamentals (for quote + 52w high/low)
+      fetch(`${API_URL}/stocks/fundamentals/${t}`).then(r=>r.json()).catch(()=>null),
     ]);
 
-    const [wl, sent, shi, cong, opts, ins, cats] = results.map(r => r.status==='fulfilled' ? r.value : null);
+    const [wl, sent, shi, cong, opts, ins, cats, pt, fund] = results.map(r => r.status==='fulfilled' ? r.value : null);
+    const quote = fund?.quote || null;
+    const metric = fund?.metric || null;
 
     let total = 50; // base
 
@@ -7249,11 +7533,39 @@ function ConvictionPage() {
       }
     }
 
+    // Analyst Price Target
+    if (pt && pt.targetMean && quote?.c) {
+      const upside = ((pt.targetMean - quote.c) / quote.c) * 100;
+      const delta = upside > 30 ? +15 : upside > 15 ? +10 : upside > 5 ? +5 : upside < -15 ? -12 : upside < -5 ? -6 : 0;
+      total += delta;
+      const rec = pt.recommendation;
+      const recLabel = rec ? ` · ${rec.strongBuy}SB/${rec.buy}B/${rec.hold}H/${rec.sell}S` : '';
+      gathered.push({ label:'Analyst Consensus', value: `$${pt.targetMean.toFixed(0)} target · ${upside>0?'+':''}${upside.toFixed(0)}% upside${recLabel}`, direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source:'Finnhub' });
+    } else {
+      gathered.push({ label:'Analyst Consensus', value: 'No data available', direction: 'neutral', delta: 0, source:'Finnhub', noData: true });
+    }
+
+    // Price Momentum (52w position)
+    if (quote?.c && metric?.['52WeekHigh'] && metric?.['52WeekLow']) {
+      const high52 = metric['52WeekHigh'];
+      const low52  = metric['52WeekLow'];
+      const pctFromHigh = ((quote.c - high52) / high52) * 100;
+      const range = high52 - low52;
+      const posInRange = range > 0 ? ((quote.c - low52) / range) * 100 : 50;
+      const delta = pctFromHigh > -8 ? +8 : pctFromHigh > -20 ? +4 : pctFromHigh > -35 ? 0 : pctFromHigh > -50 ? -5 : -10;
+      total += delta;
+      gathered.push({ label:'Price Momentum', value: `${pctFromHigh.toFixed(1)}% from 52w high · ${posInRange.toFixed(0)}% of range`, direction: delta>=4?'bullish':delta<=-5?'bearish':'neutral', delta, source:'Finnhub' });
+    } else {
+      gathered.push({ label:'Price Momentum', value: 'No quote data', direction: 'neutral', delta: 0, source:'Finnhub', noData: true });
+    }
+
     // Sentiment
     if (sent && !sent.error && sent.score != null) {
       const delta = sent.score > 60 ? +10 : sent.score < 40 ? -10 : 0;
       total += delta;
       gathered.push({ label:'News Sentiment', value: `${sent.score?.toFixed(0)}% positive`, direction: sent.score>60?'bullish':sent.score<40?'bearish':'neutral', delta, source:'AI' });
+    } else {
+      gathered.push({ label:'News Sentiment', value: 'No news data', direction: 'neutral', delta: 0, source:'AI', noData: true });
     }
 
     // Short interest
@@ -7263,16 +7575,22 @@ function ConvictionPage() {
         const delta = sp > 20 ? -10 : sp > 10 ? -5 : sp < 3 ? +5 : 0;
         total += delta;
         gathered.push({ label:'Short Interest', value: `${sp.toFixed(1)}% of float`, direction: sp>20?'bearish':sp>10?'neutral':'bullish', delta, source:'FINRA/Finnhub' });
+      } else {
+        gathered.push({ label:'Short Interest', value: 'No data', direction: 'neutral', delta: 0, source:'FINRA/Finnhub', noData: true });
       }
+    } else {
+      gathered.push({ label:'Short Interest', value: 'No data', direction: 'neutral', delta: 0, source:'FINRA/Finnhub', noData: true });
     }
 
     // Congressional trading
     if (cong && Array.isArray(cong.trades) && cong.trades.length > 0) {
-      const buys  = cong.trades.filter(t => t.isBuy).length;
-      const sells = cong.trades.filter(t => !t.isBuy).length;
-      const delta = buys > sells ? +8 : buys < sells ? -8 : 0;
+      const buys  = cong.trades.filter(tx => tx.isBuy).length;
+      const sells = cong.trades.filter(tx => !tx.isBuy).length;
+      const delta = buys > sells + 1 ? +8 : buys < sells - 1 ? -8 : 0;
       total += delta;
-      gathered.push({ label:'Congressional Trading', value: `${buys} buys / ${sells} sells`, direction: buys>sells?'bullish':buys<sells?'bearish':'neutral', delta, source:'STOCK Act' });
+      gathered.push({ label:'Congressional Trading', value: `${buys} buys / ${sells} sells (90d)`, direction: buys>sells?'bullish':buys<sells?'bearish':'neutral', delta, source:'STOCK Act' });
+    } else {
+      gathered.push({ label:'Congressional Trading', value: 'No trades in 90d', direction: 'neutral', delta: 0, source:'STOCK Act', noData: true });
     }
 
     // Options flow
@@ -7280,20 +7598,32 @@ function ConvictionPage() {
       const pcr = opts.putCallRatio;
       const delta = pcr < 0.7 ? +8 : pcr > 1.2 ? -8 : 0;
       total += delta;
-      gathered.push({ label:'Options Flow (P/C)', value: `${pcr.toFixed(2)} — ${opts.sentiment}`, direction: opts.sentiment==='bullish'?'bullish':opts.sentiment==='bearish'?'bearish':'neutral', delta, source:'Yahoo Finance' });
+      gathered.push({ label:'Options Flow (P/C ratio)', value: `${pcr.toFixed(2)} — ${opts.sentiment}`, direction: opts.sentiment==='bullish'?'bullish':opts.sentiment==='bearish'?'bearish':'neutral', delta, source:'Yahoo Finance' });
+    } else {
+      gathered.push({ label:'Options Flow (P/C ratio)', value: 'No options data', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }
 
-    // Insider Form 4
+    // Insider Form 4 — buy vs sell breakdown
     if (ins && !ins.error && ins.filings?.length > 0) {
-      gathered.push({ label:'Insider Transactions', value: `${ins.filings.length} filings (90d)`, direction: 'neutral', delta: +3, source:'SEC EDGAR' });
-      total += 3;
+      const buys  = ins.filings.filter(f => f.isBuy).length;
+      const sells = ins.filings.filter(f => f.isSell).length;
+      const net   = buys - sells;
+      const delta = net >= 3 ? +12 : net > 0 ? +6 : net <= -3 ? -12 : net < 0 ? -6 : +2;
+      total += delta;
+      const dir   = delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral';
+      gathered.push({ label:'Insider Transactions', value: `${buys} buys / ${sells} sells · ${ins.filings.length} Form 4s (90d)`, direction: dir, delta, source:'SEC EDGAR' });
+    } else {
+      gathered.push({ label:'Insider Transactions', value: 'No Form 4s in 90d', direction: 'neutral', delta: 0, source:'SEC EDGAR', noData: true });
     }
 
     // Upcoming catalysts
     if (Array.isArray(cats) && cats.length > 0) {
       const high = cats.filter(c => c.impact === 'high').length;
-      gathered.push({ label:'Upcoming Catalysts', value: `${cats.length} events (${high} high impact)`, direction: 'bullish', delta: +5, source:'Calendar' });
-      total += 5;
+      const delta = high >= 2 ? +8 : high === 1 ? +4 : +2;
+      total += delta;
+      gathered.push({ label:'Upcoming Catalysts', value: `${cats.length} events · ${high} high impact`, direction: 'bullish', delta, source:'Calendar' });
+    } else {
+      gathered.push({ label:'Upcoming Catalysts', value: 'No upcoming events', direction: 'neutral', delta: 0, source:'Calendar', noData: true });
     }
 
     total = Math.min(100, Math.max(0, Math.round(total)));
@@ -7387,18 +7717,20 @@ function ConvictionPage() {
                 </button>
               </div>
               {signals.map((sig, i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none' }}>
-                  <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: DIR_COLOR[sig.direction]||'var(--fg3)' }} />
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i<signals.length-1?'1px solid var(--bdr)':'none', opacity: sig.noData ? 0.45 : 1 }}>
+                  <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: sig.noData ? 'var(--bdr)' : DIR_COLOR[sig.direction]||'var(--fg3)' }} />
                   <div style={{ flex:1 }}>
                     <div style={{ fontSize:12, fontWeight:600 }}>{sig.label}</div>
                     <div style={{ fontSize:11, color:'var(--fg3)' }}>{sig.value} · <span style={{ fontFamily:'var(--font-mono)', fontSize:10 }}>{sig.source}</span></div>
                   </div>
                   <div style={{ textAlign:'right' }}>
-                    <span style={{ fontSize:11, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
-                      {sig.direction.toUpperCase()}
-                    </span>
+                    {!sig.noData && (
+                      <span style={{ fontSize:11, fontWeight:700, color: DIR_COLOR[sig.direction]||'var(--fg3)' }}>
+                        {sig.direction.toUpperCase()}
+                      </span>
+                    )}
                     <div style={{ fontSize:10, fontFamily:'var(--font-mono)', color: sig.delta>0?'var(--green)':sig.delta<0?'var(--red-loss)':'var(--fg3)' }}>
-                      {sig.delta>0?'+':''}{sig.delta}pts
+                      {sig.noData ? 'N/A' : `${sig.delta>0?'+':''}${sig.delta}pts`}
                     </div>
                   </div>
                 </div>
