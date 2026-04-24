@@ -1,7 +1,8 @@
 import Stock from '../models/Stock.js';
+import yahooFinance from 'yahoo-finance2';
 
-// ── Stooq quote (free, no API key, works from datacenter IPs) ─────────────────
-// Used as primary source for Japanese stocks (.T) and indices
+// ── Stooq quote (free, no API key) ────────────────────────────────────────────
+// Reliable for TSE stocks from datacenter IPs. Used as first-attempt for Japan.
 async function fetchStooqQuote(stooqSymbol) {
   const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`;
   const r = await fetch(url, {
@@ -13,12 +14,17 @@ async function fetchStooqQuote(stooqSymbol) {
   });
   if (!r.ok) throw new Error(`Stooq HTTP ${r.status}`);
   const text = await r.text();
-  if (text.includes('No data') || text.trim() === '') throw new Error('Stooq: no data');
+
+  // Detect HTML error page (Stooq blocks with 200 + HTML when rate-limited)
+  if (text.trim().startsWith('<') || text.includes('<html') || text.includes('No data') || text.trim() === '') {
+    throw new Error('Stooq: blocked or no data');
+  }
 
   const lines = text.trim().split('\n').filter(l => l && !l.toLowerCase().startsWith('date'));
   if (lines.length < 1) throw new Error('Stooq: empty response');
 
   const parseRow = (line) => {
+    // Stooq CSV: Date,Open,High,Low,Close,Volume
     const p = line.split(',');
     return { close: parseFloat(p[4]) || 0, vol: parseFloat(p[5]) || 0 };
   };
@@ -29,6 +35,25 @@ async function fetchStooqQuote(stooqSymbol) {
   const change = current.close - prevClose;
   const changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0;
   return { price: current.close, change, changePercent, volume: current.vol };
+}
+
+// ── yahoo-finance2 quote for Japan stocks ─────────────────────────────────────
+// Uses the npm package which handles sessions, crumbs, and retries internally.
+async function fetchYahooFinance2Quote(symbol) {
+  const q = await yahooFinance.quote(symbol, {}, { validateResult: false });
+  if (!q) throw new Error('yahoo-finance2: no result');
+  const price = q.regularMarketPrice || q.previousClose || 0;
+  if (!price || price <= 0) throw new Error('yahoo-finance2: no price');
+  const prev = q.regularMarketPreviousClose || q.previousClose || price;
+  const change = q.regularMarketChange ?? (price - prev);
+  const changePercent = q.regularMarketChangePercent ?? (prev > 0 ? (change / prev) * 100 : 0);
+  return {
+    price,
+    change,
+    changePercent,
+    volume: q.regularMarketVolume || 0,
+    name: q.shortName || q.longName || symbol,
+  };
 }
 
 // Convert Yahoo .T symbol to Stooq .jp format (TSE stocks)
@@ -75,13 +100,14 @@ export async function fetchLiveQuote(symbol) {
     }
   }
 
-  // ── Japan .T stocks: use Stooq (reliable, no rate limits) ───────────────────
+  // ── Japan .T stocks: Stooq → yahoo-finance2 → DB cache ─────────────────────
   if (sym.endsWith('.T')) {
     const stooqSym = toStooqJapan(sym);
+
+    // 1️⃣ Try Stooq first (fast, no auth required)
     try {
       const q = await fetchStooqQuote(stooqSym);
       if (q.price > 0) {
-        // Cache result in DB for chart lookups
         try {
           await Stock.findOneAndUpdate(
             { symbol: sym },
@@ -101,7 +127,28 @@ export async function fetchLiveQuote(symbol) {
       console.warn(`Stooq failed for ${stooqSym}: ${err.message}`);
     }
 
-    // Stooq failed — serve DB cache regardless of age (beats showing "—")
+    // 2️⃣ Stooq failed — use yahoo-finance2 npm package (handles sessions internally)
+    try {
+      const q = await fetchYahooFinance2Quote(sym);
+      if (q.price > 0) {
+        try {
+          await Stock.findOneAndUpdate(
+            { symbol: sym },
+            { symbol: sym, name: q.name || sym, price: q.price, change: q.change,
+              changePercent: q.changePercent, volume: q.volume || 0,
+              avgVolume: 0, lastUpdated: new Date() },
+            { upsert: true }
+          );
+        } catch (_) {}
+        console.log(`✓ ${sym} from yahoo-finance2 @ ${q.price}`);
+        return { symbol: sym, name: q.name || sym, price: q.price, change: q.change,
+                 changePercent: q.changePercent, volume: q.volume || 0, lastUpdated: new Date() };
+      }
+    } catch (err) {
+      console.warn(`yahoo-finance2 failed for ${sym}: ${err.message}`);
+    }
+
+    // 3️⃣ DB cache — serve stale data rather than showing "—"
     try {
       const cached = await Stock.findOne({ symbol: sym });
       if (cached?.price > 0) {
@@ -114,10 +161,7 @@ export async function fetchLiveQuote(symbol) {
       }
     } catch (_) {}
 
-    // Last resort: Yahoo Finance
-    try { return await fetchYahooQuote(sym); } catch (e) {
-      throw new Error(`All sources failed for ${sym}: ${e.message}`);
-    }
+    throw new Error(`All sources failed for ${sym}`);
   }
 
   // Fallback for other symbols: Yahoo Finance chart API with session cookie
@@ -275,8 +319,8 @@ export async function fetchAndUpdateStocks({ force = false } = {}) {
         );
         console.log(`✓ Updated ${symbol} @ ${data.price}`);
       }
-      // Stooq requests are fast — short delay to be polite
-      const delay = symbol.endsWith('.T') ? 600 : 400;
+      // Japan stocks may hit multiple sources — give them more breathing room
+      const delay = symbol.endsWith('.T') ? 1200 : 400;
       await new Promise(r => setTimeout(r, delay));
     } catch (err) {
       console.error(`Error fetching ${symbol}:`, err.message);
