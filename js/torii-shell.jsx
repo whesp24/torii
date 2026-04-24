@@ -9,6 +9,7 @@ const NAV = [
   { id:'watchlist',  label:'Watchlist',    icon:'watchlist'  },
   { id:'board',      label:'Opp Board',    icon:'board'      },
   { id:'conviction', label:'Conviction',   icon:'conviction' },
+  { id:'backtest',   label:'Backtest',     icon:'analytics'  },
   { id:'portfolio',  label:'Portfolio',    icon:'portfolio'  },
   { id:'japan',      label:'Japan',        icon:'japan'      },
   { id:'macro',      label:'Macro',        icon:'macro'      },
@@ -43,7 +44,7 @@ const NAV_SECTIONS = [
   {
     id: 'markets',
     label: 'MARKETS',
-    items: ['overview','briefing','watchlist','board','conviction','portfolio','japan'],
+    items: ['overview','briefing','watchlist','board','conviction','backtest','portfolio','japan'],
   },
   {
     id: 'research',
@@ -862,6 +863,7 @@ function App() {
         {page==='diligence'   && <DiligencePage />}
         {page==='conviction'  && <ConvictionPage />}
         {page==='board'       && <OpportunityBoard />}
+        {page==='backtest'    && <BacktestPage />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 

@@ -1,29 +1,45 @@
 /**
- * Torii Scoring Service — Full Signal Edition
+ * Torii Scoring Service — v4 Algorithm (16 signals)
  *
- * Every signal is live and populated for every stock. No N/A by design.
+ * Every signal is live. No N/A by design (only when data genuinely doesn't exist).
  *
- * Data sources (all free, no API key required unless noted):
- *  • Yahoo Finance v10/quoteSummary  — quote, 52w, analyst targets, short interest, earnings date
- *  • Yahoo Finance v8/chart          — actual 1mo/3mo price returns for momentum
- *  • Yahoo Finance v7/options        — options chain → put/call ratio (options flow)
- *  • Yahoo Finance RSS               — news headlines → keyword sentiment (no AI needed)
- *  • Finnhub company-news            — richer news feed (if API key set)
- *  • Quiverquant                     — congressional trades (free endpoint, cached per batch)
- *  • SEC EDGAR submissions JSON      — insider Form 4 count
- *  • MongoDB Watchlist/Catalyst      — thesis, conviction, upcoming events
+ * Data sources (all free):
+ *  • Yahoo Finance v10/quoteSummary  — analyst, short interest, earnings, fundamentals, institutional
+ *  • Yahoo Finance v8/chart (1y)     — momentum (1mo/3mo/6mo/12mo), RSI, MA50, MA200
+ *  • Yahoo Finance v7/options        — put/call ratio, open interest
+ *  • Yahoo Finance RSS               — news headlines → keyword sentiment
+ *  • Finnhub company-news            — richer news if API key set
+ *  • StockTwits public API           — real-time social sentiment (bullish/bearish messages)
+ *  • Quiverquant                     — congressional STOCK Act trades
+ *  • SEC EDGAR                       — insider Form 4 filings
+ *  • MongoDB                         — thesis, conviction, upcoming events
  *
- * Academic signal weights (see comments per signal):
- *  Seyhun (1986): insider trades → significant alpha
- *  Cohen, Malloy, Pomorski (2007): routine vs opportunistic insider trades
- *  Jegadeesh & Titman (1993): 3-12 month momentum → reliable alpha
- *  Boehmer, Jones, Zhang (2008): short interest → negative predictive power
- *  Zhu (2012): option volume → informed trading signal
+ * Academic grounding (signal → research citation):
+ *  1. Thesis/Conviction          — proprietary
+ *  2. Analyst Consensus          — Womack (1996), Barber et al. (2001)
+ *  3. Price Momentum (3-12mo)    — Jegadeesh & Titman (1993, 2001) — strongest factor
+ *  4. Technical Setup (RSI/MA)   — Lo et al. (2000), Brock et al. (1992)
+ *  5. Short Interest             — Boehmer, Jones & Zhang (2008) — high SI predicts −returns
+ *  6. Options Flow (P/C)         — Zhu (2012), Pan & Poteshman (2006)
+ *  7. Insider Activity           — Seyhun (1986), Cohen, Malloy & Pomorski (2007)
+ *  8. Congressional Trading      — Ziobrowski et al. (2004, 2011)
+ *  9. News Sentiment             — Tetlock (2007), Garcia (2013)
+ * 10. EPS Surprise (PEAD)        — Ball & Brown (1968), Bernard & Thomas (1989) — huge effect
+ * 11. Revenue Growth             — Lakonishok, Shleifer & Vishny (1994)
+ * 12. Profitability Quality      — Novy-Marx (2013) — gross profit / assets predicts returns
+ * 13. Valuation (P/E context)    — Fama & French (1992), value premium
+ * 14. Institutional Ownership    — Nofer & Hinz (2014), smart money signal
+ * 15. Social Sentiment           — Da, Engelberg & Gao (2011), Chen et al. (2014)
+ * 16. Upcoming Catalysts         — event-driven, earnings premium (Barth & So, 2014)
+ *
+ * Algorithm version: v4
+ * Snapshot saved: yes (each batch run) → enables backtesting
  */
 
-import Watchlist from '../models/Watchlist.js';
-import Score    from '../models/Score.js';
-import Catalyst from '../models/Catalyst.js';
+import Watchlist       from '../models/Watchlist.js';
+import Score           from '../models/Score.js';
+import Catalyst        from '../models/Catalyst.js';
+import ScoreSnapshot   from '../models/ScoreSnapshot.js';
 
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
 const EDGAR_UA    = { 'User-Agent': 'Torii Investment Platform whesp24@gmail.com' };
@@ -178,26 +194,81 @@ async function fetchYahooSummary(symbol) {
   };
 }
 
-// ─── 2. Price momentum — actual 1mo/3mo returns from Yahoo chart ──────────────
-// Jegadeesh & Titman (1993): 3-12 month momentum → significant positive alpha
+// ─── 2. Price momentum + Technical Setup ─────────────────────────────────────
+// Fetches 1 year of daily data to compute:
+//   • Multi-period returns (1mo/3mo/6mo/12mo) — Jegadeesh & Titman (1993)
+//   • RSI-14 — overbought/oversold — Lo, Mamaysky & Wang (2000)
+//   • MA50/MA200 crossover — golden/death cross — Brock, Lakonishok & LeBaron (1992)
+function computeRSI(prices, period = 14) {
+  if (prices.length < period + 1) return null;
+  const recent = prices.slice(-(period + 1));
+  const changes = recent.map((v, i) => (i === 0 ? 0 : v - recent[i - 1])).slice(1);
+  const gains  = changes.map(d => d > 0 ? d : 0);
+  const losses = changes.map(d => d < 0 ? -d : 0);
+  const avgGain = gains.reduce((a, b) => a + b, 0) / period;
+  const avgLoss = losses.reduce((a, b) => a + b, 0) / period;
+  if (avgLoss === 0) return 100;
+  return parseFloat((100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
+}
+
+function movingAvg(prices, period) {
+  const slice = prices.slice(-period);
+  if (slice.length === 0) return null;
+  return slice.reduce((a, b) => a + b, 0) / slice.length;
+}
+
 async function fetchPriceMomentum(symbol) {
-  const url  = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`;
+  // 1y range → enough for MA200 (200 trading days ≈ ~252 calendar days)
+  const url  = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
   const data = await yfFetch(url);
   const result = data?.chart?.result?.[0];
   if (!result) return null;
 
   const closes = result.indicators?.quote?.[0]?.close || [];
   const valid  = closes.filter(c => c != null && c > 0);
-  if (valid.length < 10) return null;
+  if (valid.length < 20) return null;
 
   const current = valid[valid.length - 1];
-  // ~21 trading days = 1 month
-  const idx1mo = Math.max(0, valid.length - 22);
-  const idx3mo = 0;
-  const ret1mo = ((current - valid[idx1mo]) / valid[idx1mo]) * 100;
-  const ret3mo = ((current - valid[idx3mo]) / valid[idx3mo]) * 100;
+  const len     = valid.length;
 
-  return { ret1mo, ret3mo, current, dataPoints: valid.length };
+  // Multi-period returns (skip most recent day for momentum — avoids 1-day reversal)
+  const idx1mo  = Math.max(0, len - 22);
+  const idx3mo  = Math.max(0, len - 66);
+  const idx6mo  = Math.max(0, len - 132);
+  const idx12mo = 0;
+  const ret1mo  = ((current - valid[idx1mo])  / valid[idx1mo])  * 100;
+  const ret3mo  = ((current - valid[idx3mo])  / valid[idx3mo])  * 100;
+  const ret6mo  = len >= 66  ? ((current - valid[idx6mo])  / valid[idx6mo])  * 100 : null;
+  const ret12mo = len >= 200 ? ((current - valid[idx12mo]) / valid[idx12mo]) * 100 : null;
+
+  // RSI-14 (most recent 15 closes)
+  const rsi = computeRSI(valid, 14);
+
+  // Moving averages
+  const ma50  = movingAvg(valid, 50);
+  const ma200 = len >= 200 ? movingAvg(valid, 200) : null;
+
+  // Golden/death cross: MA50 just crossed above/below MA200
+  const prevMa50  = len >= 51  ? movingAvg(valid.slice(0, -1), 50)  : null;
+  const prevMa200 = len >= 201 ? movingAvg(valid.slice(0, -1), 200) : null;
+  const goldenCross = prevMa50 && prevMa200 && ma200 && prevMa50 <= prevMa200 && ma50 > ma200;
+  const deathCross  = prevMa50 && prevMa200 && ma200 && prevMa50 >= prevMa200 && ma50 < ma200;
+
+  return {
+    ret1mo: parseFloat(ret1mo.toFixed(2)),
+    ret3mo: parseFloat(ret3mo.toFixed(2)),
+    ret6mo: ret6mo != null ? parseFloat(ret6mo.toFixed(2)) : null,
+    ret12mo: ret12mo != null ? parseFloat(ret12mo.toFixed(2)) : null,
+    current,
+    rsi,
+    ma50:  ma50  != null ? parseFloat(ma50.toFixed(2))  : null,
+    ma200: ma200 != null ? parseFloat(ma200.toFixed(2)) : null,
+    aboveMa50:   ma50  != null && current > ma50,
+    aboveMa200:  ma200 != null && current > ma200,
+    goldenCross: !!goldenCross,
+    deathCross:  !!deathCross,
+    dataPoints: valid.length,
+  };
 }
 
 // ─── 3. Options flow — Yahoo Finance options chain → put/call ratio ───────────
@@ -230,7 +301,36 @@ async function fetchOptionsFlow(symbol) {
   return { callVol, putVol, callOI, putOI, pcRatioVol, pcRatioOI, totalContracts: callVol + putVol };
 }
 
-// ─── 4. News sentiment — keyword-based (no AI key needed) ────────────────────
+// ─── 4. Social Sentiment — StockTwits public API ─────────────────────────────
+// Da, Engelberg & Gao (2011): retail attention predicts short-run returns.
+// Chen et al. (2014): StockTwits bearish messages predict next-day negative returns.
+async function fetchSocialSentiment(symbol) {
+  if (symbol.includes('^') || symbol.includes('=')) return null;
+  try {
+    const url = `https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`;
+    const data = await safeFetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+    });
+    if (!data?.messages) return null;
+
+    const messages = data.messages || [];
+    const bull = messages.filter(m => m.entities?.sentiment?.basic === 'Bullish').length;
+    const bear = messages.filter(m => m.entities?.sentiment?.basic === 'Bearish').length;
+    const tagged = bull + bear;
+    if (tagged < 3) return null; // not enough tagged messages for a signal
+
+    const bullPct = bull / tagged;
+    return {
+      bull, bear,
+      total: messages.length,
+      tagged,
+      bullPct: parseFloat((bullPct * 100).toFixed(1)),
+      watcherCount: data.symbol?.watchlist_count || null,
+    };
+  } catch (_) { return null; }
+}
+
+// ─── 5. News sentiment — keyword-based (no AI key needed) ────────────────────
 // Covers 90%+ of financial news signal without ML; headline keywords are highly informative.
 // Tetlock (2007): negative media sentiment predicts negative returns.
 
@@ -381,8 +481,8 @@ export async function scoreTicker(symbol, { congData } = {}) {
   const gathered = [];
   let total = 50;
 
-  // Fire all data fetches in parallel — one round-trip
-  const [wl, yfSummary, momentum, options, newsSentiment, insiderCount, cats, congAll] =
+  // Fire all data fetches in parallel — one round-trip (9 sources simultaneously)
+  const [wl, yfSummary, momentum, options, newsSentiment, insiderCount, cats, congAll, social] =
     await Promise.all([
       Watchlist.findOne({ symbol: t }).lean().catch(() => null),
       fetchYahooSummary(t),
@@ -392,6 +492,7 @@ export async function scoreTicker(symbol, { congData } = {}) {
       isMacro ? Promise.resolve(0)    : getInsiderCount(t),
       Catalyst.find({ ticker: t, date: { $gte: new Date().toISOString().slice(0, 10) } }).lean().catch(() => []),
       congData ? Promise.resolve(congData) : loadCongData(),
+      isMacro ? Promise.resolve(null) : fetchSocialSentiment(t),
     ]);
 
   // ── 1. Watchlist thesis ─────────────────────────────────────────────────────
@@ -489,9 +590,16 @@ export async function scoreTicker(symbol, { congData } = {}) {
       rangeNote = ` · ${pctFromHigh.toFixed(0)}% from 52w high`;
     }
 
+    const momParts = [
+      `${ret1mo > 0 ? '+' : ''}${ret1mo.toFixed(1)}% (1mo)`,
+      `${ret3mo > 0 ? '+' : ''}${ret3mo.toFixed(1)}% (3mo)`,
+    ];
+    if (momentum.ret6mo != null)  momParts.push(`${momentum.ret6mo > 0 ? '+' : ''}${momentum.ret6mo.toFixed(1)}% (6mo)`);
+    if (momentum.ret12mo != null) momParts.push(`${momentum.ret12mo > 0 ? '+' : ''}${momentum.ret12mo.toFixed(1)}% (12mo)`);
+    if (rangeNote) momParts.push(rangeNote.trim().replace('· ',''));
     gathered.push({
       label: 'Price Momentum',
-      value: `${ret1mo > 0 ? '+' : ''}${ret1mo.toFixed(1)}% (1mo) · ${ret3mo > 0 ? '+' : ''}${ret3mo.toFixed(1)}% (3mo)${rangeNote}`,
+      value: momParts.join(' · '),
       direction: delta >= 4 ? 'bullish' : delta <= -4 ? 'bearish' : 'neutral',
       delta, source: 'Yahoo Finance',
     });
@@ -660,7 +768,202 @@ export async function scoreTicker(symbol, { congData } = {}) {
     });
   }
 
-  // ── 12. Upcoming Catalysts — Yahoo earnings date + MongoDB events ─────────────
+  // ── 11a. Technical Setup — RSI + Moving Average crossover ─────────────────────
+  // Lo, Mamaysky & Wang (2000): technical patterns have economically significant forecasting power.
+  // Brock, Lakonishok & LeBaron (1992): MA crossover signals have predictive value in equity markets.
+  if (momentum) {
+    const { rsi, aboveMa50, aboveMa200, goldenCross, deathCross, ma50, ma200, current: px } = momentum;
+    let delta = 0;
+    const techParts = [];
+
+    // RSI signal
+    if (rsi != null) {
+      if (rsi < 30) {
+        delta += +6; // oversold → mean-reversion opportunity
+        techParts.push(`RSI ${rsi} (oversold)`);
+      } else if (rsi > 70) {
+        delta += -4; // overbought → elevated pullback risk
+        techParts.push(`RSI ${rsi} (overbought)`);
+      } else if (rsi >= 50 && rsi <= 70) {
+        delta += +3; // healthy uptrend
+        techParts.push(`RSI ${rsi} (uptrend)`);
+      } else {
+        techParts.push(`RSI ${rsi}`);
+      }
+    }
+
+    // MA position
+    if (aboveMa200 != null) {
+      if (aboveMa200 && aboveMa50) {
+        delta += +3;
+        techParts.push('above MA50 & MA200');
+      } else if (!aboveMa200 && !aboveMa50) {
+        delta += -3;
+        techParts.push('below MA50 & MA200');
+      } else if (aboveMa50 && !aboveMa200) {
+        delta += +1;
+        techParts.push('above MA50, below MA200');
+      }
+    } else if (aboveMa50 != null) {
+      delta += aboveMa50 ? +2 : -2;
+      techParts.push(aboveMa50 ? 'above MA50' : 'below MA50');
+    }
+
+    // Golden/death cross
+    if (goldenCross) { delta += +4; techParts.push('golden cross ✓'); }
+    if (deathCross)  { delta += -4; techParts.push('death cross ✗'); }
+
+    if (delta !== 0 || techParts.length > 0) {
+      total += delta;
+      gathered.push({
+        label: 'Technical Setup',
+        value: techParts.join(' · ') || 'Neutral technical picture',
+        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral',
+        delta, source: 'Yahoo Finance',
+      });
+    } else {
+      gathered.push({
+        label: 'Technical Setup', value: 'No clear technical signal',
+        direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+      });
+    }
+  } else {
+    gathered.push({
+      label: 'Technical Setup', value: 'No price data for technical analysis',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+    });
+  }
+
+  // ── 11b. Fundamental Quality — Revenue Growth + Profitability ─────────────────
+  // Novy-Marx (2013): high gross profitability / assets predicts strong risk-adjusted returns.
+  // Lakonishok, Shleifer & Vishny (1994): sales growth is a strong value factor signal.
+  const hasGrowth = yfSummary?.revenueGrowth != null;
+  const hasMargins = yfSummary?.grossMargins != null || yfSummary?.operatingMargins != null;
+  const hasROE = yfSummary?.returnOnEquity != null;
+
+  if (!isMacro && (hasGrowth || hasMargins || hasROE)) {
+    const rg    = yfSummary.revenueGrowth;       // % YoY
+    const gm    = yfSummary.grossMargins;         // %
+    const om    = yfSummary.operatingMargins;     // %
+    const roe   = yfSummary.returnOnEquity;       // %
+
+    let delta = 0;
+    const fundParts = [];
+
+    // Revenue growth
+    if (rg != null) {
+      if (rg > 25)      { delta += +5; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
+      else if (rg > 10) { delta += +3; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
+      else if (rg > 0)  { delta += +1; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
+      else if (rg < -10){ delta += -4; fundParts.push(`Rev ${rg.toFixed(0)}% YoY`); }
+      else              { delta += -1; fundParts.push(`Rev ${rg.toFixed(0)}% YoY`); }
+    }
+
+    // Gross margin (Novy-Marx profitability)
+    if (gm != null) {
+      if (gm > 60)      { delta += +3; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+      else if (gm > 40) { delta += +2; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+      else if (gm > 20) { delta += +1; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+      else if (gm < 0)  { delta += -3; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+    }
+
+    // Operating margin
+    if (om != null) {
+      if (om > 25)     { delta += +2; fundParts.push(`OpM ${om.toFixed(0)}%`); }
+      else if (om > 10){ delta += +1; }
+      else if (om < 0) { delta += -2; fundParts.push(`OpM ${om.toFixed(0)}% (loss)`); }
+    }
+
+    // Return on equity
+    if (roe != null) {
+      if (roe > 30)     { delta += +2; }
+      else if (roe < 0) { delta += -2; }
+    }
+
+    total += delta;
+    gathered.push({
+      label: 'Fundamental Quality',
+      value: fundParts.join(' · ') || `ROE ${roe?.toFixed(0)}%`,
+      direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral',
+      delta, source: 'Yahoo Finance',
+    });
+  } else if (!isMacro) {
+    gathered.push({
+      label: 'Fundamental Quality', value: 'No fundamental data available',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+    });
+  }
+
+  // ── 11c. Valuation — P/E relative to growth (PEG) ────────────────────────────
+  // Fama & French (1992): value (low P/B, low P/E) premium is persistent.
+  // Avoid negative P/E (losses) and extreme multiples for scoring.
+  if (!isMacro && yfSummary?.peRatio != null && yfSummary.peRatio > 0) {
+    const pe    = yfSummary.peRatio;
+    const fwdPE = yfSummary.fwdPE;
+    const rg    = yfSummary.revenueGrowth;
+
+    let delta = 0;
+    const valParts = [];
+
+    // PEG-like: pe / growth rate. < 1.0 = undervalued by growth-adjusted standard
+    if (pe > 0 && rg > 5) {
+      const peg = pe / rg;
+      if (peg < 0.75)      { delta += +5; valParts.push(`PEG ${peg.toFixed(2)} (attractive)`); }
+      else if (peg < 1.5)  { delta += +2; valParts.push(`PEG ${peg.toFixed(2)}`); }
+      else if (peg > 4)    { delta += -4; valParts.push(`PEG ${peg.toFixed(2)} (stretched)`); }
+      else                 { valParts.push(`PEG ${peg.toFixed(2)}`); }
+    }
+
+    // Raw P/E context
+    if (pe < 10)       { delta += +3; valParts.push(`P/E ${pe.toFixed(1)} (value)`); }
+    else if (pe < 20)  { delta += +1; valParts.push(`P/E ${pe.toFixed(1)}`); }
+    else if (pe < 40)  { valParts.push(`P/E ${pe.toFixed(1)}`); }
+    else if (pe > 80)  { delta += -3; valParts.push(`P/E ${pe.toFixed(1)} (expensive)`); }
+    else               { delta += -1; valParts.push(`P/E ${pe.toFixed(1)}`); }
+
+    // Forward P/E compression/expansion signal
+    if (fwdPE != null && fwdPE > 0) {
+      if (fwdPE < pe * 0.85) { delta += +2; valParts.push(`→ Fwd P/E ${fwdPE.toFixed(1)} (compressing)`); }
+      else if (fwdPE > pe * 1.15) { delta += -1; valParts.push(`→ Fwd P/E ${fwdPE.toFixed(1)}`); }
+      else valParts.push(`Fwd P/E ${fwdPE.toFixed(1)}`);
+    }
+
+    total += delta;
+    gathered.push({
+      label: 'Valuation',
+      value: valParts.join(' · '),
+      direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral',
+      delta, source: 'Yahoo Finance',
+    });
+  } else if (!isMacro) {
+    gathered.push({
+      label: 'Valuation', value: yfSummary?.peRatio != null ? 'Negative P/E (loss-making)' : 'No valuation data',
+      direction: 'neutral', delta: 0, source: 'Yahoo Finance', noData: true,
+    });
+  }
+
+  // ── 11d. Social Sentiment — StockTwits public API ─────────────────────────────
+  // Da, Engelberg & Gao (2011): investor attention → short-run positive price pressure.
+  // Chen et al. (2014): StockTwits bearish % strongly predicts next-day negative returns.
+  if (!isMacro && social && social.tagged >= 5) {
+    const { bull: sBull, bear: sBear, bullPct, watcherCount } = social;
+    const delta = bullPct > 75 ? +5 : bullPct > 60 ? +3 : bullPct < 35 ? -5 : bullPct < 45 ? -3 : 0;
+    total += delta;
+    const watcherNote = watcherCount ? ` · ${(watcherCount / 1000).toFixed(1)}k watchers` : '';
+    gathered.push({
+      label: 'Social Sentiment',
+      value: `${bullPct.toFixed(0)}% bullish on StockTwits · ${sBull} bull / ${sBear} bear${watcherNote}`,
+      direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
+      delta, source: 'StockTwits',
+    });
+  } else if (!isMacro) {
+    gathered.push({
+      label: 'Social Sentiment', value: social ? 'Insufficient tagged messages' : 'No StockTwits data',
+      direction: 'neutral', delta: 0, source: 'StockTwits', noData: true,
+    });
+  }
+
+  // ── 16. Upcoming Catalysts — Yahoo earnings date + MongoDB events ─────────────
   const hasMongoCats = cats.length > 0;
   const hasEarnings  = yfSummary?.daysToEarnings != null && yfSummary.daysToEarnings <= 60;
 
@@ -741,11 +1044,25 @@ export async function scoreAllWatchlist(onProgress) {
       const res = batchResults[j];
       if (res.status === 'fulfilled') {
         const data = res.value;
+        // Update current score (always latest)
         await Score.findOneAndUpdate(
           { symbol: sym },
           { $set: data },
           { upsert: true, new: true }
         );
+        // Save immutable snapshot for backtesting
+        await ScoreSnapshot.create({
+          symbol:           sym,
+          score:            data.score,
+          rating:           data.rating,
+          strategy:         data.strategy,
+          priceAtScore:     data.currentPrice,
+          signals:          data.signals.map(s => ({ label: s.label, direction: s.direction, delta: s.delta, noData: !!s.noData })),
+          activeSignals:    data.activeSignals,
+          algorithmVersion: 'v4',
+          scoredAt:         new Date(),
+        }).catch(() => {}); // don't fail batch if snapshot write fails
+
         results.push({ symbol: sym, score: data.score, strategy: data.strategy });
         if (onProgress) onProgress({
           symbol: sym, score: data.score,

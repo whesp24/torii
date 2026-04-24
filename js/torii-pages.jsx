@@ -7847,9 +7847,13 @@ function ConvictionPage() {
       fetch(`${API_URL}/stocks/av-news/${t}`).then(r=>r.json()).catch(()=>null),
       // 13. Alpha Vantage EPS surprise history — beat/miss/avg surprise %
       fetch(`${API_URL}/stocks/earnings-surprise/${t}`).then(r=>r.json()).catch(()=>null),
+      // 14. Social sentiment — StockTwits bullish/bearish tagged messages
+      fetch(`${API_URL}/stocks/social/${t}`).then(r=>r.json()).catch(()=>null),
+      // 15. Technical analysis — RSI, MAs, Bollinger from Yahoo 1y chart
+      fetch(`${API_URL}/stocks/technicals/${t}`).then(r=>r.json()).catch(()=>null),
     ]);
 
-    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent, avNews, epsSurprise] =
+    const [wl, shi, cong, opts, ins, cats, pt, fund, yf, mom, newsSent, avNews, epsSurprise, social, tech] =
       results.map(r => r.status==='fulfilled' ? r.value : null);
     const quote  = fund?.quote  || null;
     const metric = fund?.metric || null;
@@ -8024,6 +8028,119 @@ function ConvictionPage() {
       gathered.push({ label:'Upcoming Catalysts', value: catParts.join(' · '), direction: 'bullish', delta: catDelta, source:'Yahoo Finance + Calendar' });
     } else {
       gathered.push({ label:'Upcoming Catalysts', value: 'No earnings or events in next 60d', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
+    }
+
+    // Technical Setup — RSI + Moving Averages (from 1y chart data)
+    if (tech && !tech.error) {
+      const { rsi, aboveMa50, aboveMa200, bollingerPosition, bollingerInterpret, ret1mo, ret3mo } = tech;
+      const techParts = [];
+      let delta = 0;
+      if (rsi != null) {
+        if (rsi < 30) { delta += +6; techParts.push(`RSI ${rsi} (oversold)`); }
+        else if (rsi > 70) { delta += -4; techParts.push(`RSI ${rsi} (overbought)`); }
+        else if (rsi >= 50) { delta += +3; techParts.push(`RSI ${rsi} (bullish trend)`); }
+        else techParts.push(`RSI ${rsi}`);
+      }
+      if (aboveMa200 != null && aboveMa50 != null) {
+        if (aboveMa200 && aboveMa50)  { delta += +3; techParts.push('above MA50 & MA200'); }
+        else if (!aboveMa200 && !aboveMa50) { delta += -3; techParts.push('below MA50 & MA200'); }
+        else techParts.push(aboveMa50 ? 'above MA50' : 'below MA50');
+      }
+      if (bollingerPosition != null) techParts.push(`BB ${bollingerPosition.toFixed(0)}% (${bollingerInterpret})`);
+      total += delta;
+      gathered.push({ label:'Technical Setup',
+        value: techParts.join(' · ') || 'Neutral technical picture',
+        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+    } else if (mom && !mom.error) {
+      // Fallback: use momentum data if technicals endpoint failed
+      const { rsi, aboveMa50, aboveMa200 } = mom;
+      if (rsi != null || aboveMa50 != null) {
+        const techParts = [];
+        let delta = 0;
+        if (rsi) {
+          if (rsi < 30) { delta += +6; techParts.push(`RSI ${rsi} (oversold)`); }
+          else if (rsi > 70) { delta += -4; techParts.push(`RSI ${rsi} (overbought)`); }
+          else if (rsi >= 50) { delta += +3; techParts.push(`RSI ${rsi}`); }
+        }
+        if (aboveMa200 != null) { delta += aboveMa200 ? +2 : -2; techParts.push(aboveMa200 ? 'above MA200' : 'below MA200'); }
+        total += delta;
+        gathered.push({ label:'Technical Setup', value: techParts.join(' · ') || 'No clear signal',
+          direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+      }
+    } else {
+      gathered.push({ label:'Technical Setup', value: 'No price data for analysis', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
+    }
+
+    // Fundamental Quality — Revenue Growth + Profitability (from Yahoo summary)
+    const hasGrowth  = yf?.revenueGrowth != null;
+    const hasMargins = yf?.grossMargins != null || yf?.operatingMargins != null;
+    if (hasGrowth || hasMargins || yf?.returnOnEquity != null) {
+      const { revenueGrowth: rg, grossMargins: gm, operatingMargins: om, returnOnEquity: roe } = yf || {};
+      let delta = 0;
+      const fundParts = [];
+      if (rg != null) {
+        if (rg > 25) { delta += +5; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
+        else if (rg > 10) { delta += +3; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
+        else if (rg > 0)  { delta += +1; fundParts.push(`Rev +${rg.toFixed(0)}% YoY`); }
+        else if (rg < -10){ delta += -4; fundParts.push(`Rev ${rg.toFixed(0)}% YoY`); }
+        else              { delta += -1; fundParts.push(`Rev ${rg.toFixed(0)}% YoY`); }
+      }
+      if (gm != null) {
+        if (gm > 60) { delta += +3; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+        else if (gm > 40) { delta += +2; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+        else if (gm > 20) { delta += +1; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+        else if (gm < 0)  { delta += -3; fundParts.push(`GM ${gm.toFixed(0)}%`); }
+      }
+      if (om != null && om < 0) { delta += -2; fundParts.push(`OpM ${om.toFixed(0)}% (loss)`); }
+      else if (om != null && om > 25) { delta += +2; fundParts.push(`OpM ${om.toFixed(0)}%`); }
+      if (roe != null && roe > 30) delta += +2;
+      else if (roe != null && roe < 0) delta += -2;
+      total += delta;
+      gathered.push({ label:'Fundamental Quality', value: fundParts.join(' · ') || `ROE ${roe?.toFixed(0)}%`,
+        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+    } else {
+      gathered.push({ label:'Fundamental Quality', value:'No fundamental data available', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
+    }
+
+    // Valuation — P/E, forward P/E, PEG ratio
+    if (yf?.peRatio != null && yf.peRatio > 0) {
+      const { peRatio: pe, fwdPE, revenueGrowth: rg } = yf;
+      let delta = 0;
+      const valParts = [];
+      if (pe > 0 && rg > 5) {
+        const peg = pe / rg;
+        if (peg < 0.75) { delta += +5; valParts.push(`PEG ${peg.toFixed(2)} (attractive)`); }
+        else if (peg < 1.5) { delta += +2; valParts.push(`PEG ${peg.toFixed(2)}`); }
+        else if (peg > 4)   { delta += -4; valParts.push(`PEG ${peg.toFixed(2)} (stretched)`); }
+        else valParts.push(`PEG ${peg.toFixed(2)}`);
+      }
+      if (pe < 10)      { delta += +3; valParts.push(`P/E ${pe.toFixed(1)} (value)`); }
+      else if (pe < 20) { delta += +1; valParts.push(`P/E ${pe.toFixed(1)}`); }
+      else if (pe < 40) { valParts.push(`P/E ${pe.toFixed(1)}`); }
+      else if (pe > 80) { delta += -3; valParts.push(`P/E ${pe.toFixed(1)} (expensive)`); }
+      else              { delta += -1; valParts.push(`P/E ${pe.toFixed(1)}`); }
+      if (fwdPE != null && fwdPE > 0) {
+        if (fwdPE < pe * 0.85) { delta += +2; valParts.push(`Fwd P/E ${fwdPE.toFixed(1)} ↓`); }
+        else valParts.push(`Fwd P/E ${fwdPE.toFixed(1)}`);
+      }
+      total += delta;
+      gathered.push({ label:'Valuation', value: valParts.join(' · '),
+        direction: delta >= 3 ? 'bullish' : delta <= -3 ? 'bearish' : 'neutral', delta, source:'Yahoo Finance' });
+    } else {
+      gathered.push({ label:'Valuation', value: yf?.peRatio != null ? 'Loss-making (negative P/E)' : 'No valuation data', direction:'neutral', delta:0, source:'Yahoo Finance', noData:true });
+    }
+
+    // Social Sentiment — StockTwits tagged messages (Da et al. 2011, Chen et al. 2014)
+    if (social && !social.error && social.tagged >= 3) {
+      const { bull: sBull, bear: sBear, bullPct, watcherCount } = social;
+      const delta = bullPct > 75 ? +5 : bullPct > 60 ? +3 : bullPct < 35 ? -5 : bullPct < 45 ? -3 : 0;
+      total += delta;
+      const watcherNote = watcherCount ? ` · ${(watcherCount/1000).toFixed(1)}k watchers` : '';
+      gathered.push({ label:'Social Sentiment',
+        value: `${bullPct.toFixed(0)}% bullish · ${sBull} bull / ${sBear} bear${watcherNote}`,
+        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral', delta, source:'StockTwits' });
+    } else {
+      gathered.push({ label:'Social Sentiment', value:'No StockTwits data / insufficient tagged messages', direction:'neutral', delta:0, source:'StockTwits', noData:true });
     }
 
     // EPS Surprise — Alpha Vantage EARNINGS (beat/miss history = strong forward-looking signal)
@@ -8267,6 +8384,171 @@ function ConvictionPage() {
   );
 }
 
+// ─── BacktestPage ─────────────────────────────────────────────────────────────
+// Shows how well each score bucket predicted subsequent returns.
+// Data accumulates over time as ScoreSnapshot records mature.
+function BacktestPage() {
+  const [data,    setData]    = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error,   setError]   = React.useState(null);
+  const [period,  setPeriod]  = React.useState('30d');
+
+  async function load() {
+    setLoading(true); setError(null);
+    const r = await fetch(`${API_URL}/scores/backtest`).catch(() => null);
+    if (!r?.ok) { setError('Failed to load backtest data'); setLoading(false); return; }
+    const d = await r.json();
+    setData(d);
+    setLoading(false);
+  }
+
+  React.useEffect(() => { load(); }, []);
+
+  const RATING_COLORS = {
+    'Strong Buy (80-100)': 'var(--green)',
+    'Buy (65-79)':         '#86efac',
+    'Neutral (45-64)':     '#f59e0b',
+    'Sell (30-44)':        '#f87171',
+    'Strong Sell (0-29)': 'var(--red-loss)',
+  };
+  const PERIOD_FIELD = { '30d': 'avgRet30d', '90d': 'avgRet90d', '180d': 'avgRet180d' };
+  const WINRATE_FIELD = { '30d': 'winRate30d', '90d': 'winRate90d', '180d': 'winRate180d' };
+  const N_FIELD = { '30d': 'n30', '90d': 'n90', '180d': 'n180' };
+
+  const buckets = data?.bucketStats || [];
+  const maxAbsRet = Math.max(...buckets.map(b => Math.abs(b[PERIOD_FIELD[period]] || 0)), 10);
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Algorithm Backtest</h1>
+          <p className="page-sub">Score bucket → forward return · signal accuracy · algorithm v4 · {data?.totalSnapshots || 0} total snapshots</p>
+        </div>
+        <button onClick={load} disabled={loading}
+          style={{ padding:'8px 16px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--font-mono)' }}>
+          {loading ? 'LOADING…' : '↻ REFRESH'}
+        </button>
+      </div>
+
+      {error && <div className="card" style={{ color:'var(--red-loss)', fontSize:13 }}>{error}</div>}
+
+      {!data && !loading && !error && (
+        <div className="card" style={{ textAlign:'center', padding:'48px 20px', color:'var(--fg3)' }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>📊</div>
+          <div style={{ fontSize:14, color:'var(--fg2)', marginBottom:8 }}>No backtest data yet</div>
+          <div style={{ fontSize:11, fontFamily:'var(--font-mono)', lineHeight:1.8 }}>
+            Run SCORES on the Opportunity Board to start capturing snapshots.<br/>
+            Return here after 7+ days to see how score predictions performed.
+          </div>
+        </div>
+      )}
+
+      {data && (
+        <div>
+          {/* Summary stats */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:16 }}>
+            {[
+              { label:'Total Snapshots', val: data.totalSnapshots },
+              { label:'With 30d Return', val: data.totalWithRet30 },
+              { label:'With 90d Return', val: data.totalWithRet90 },
+              { label:'With 180d Return', val: data.totalWithRet180 },
+            ].map((s, i) => (
+              <div key={i} className="card" style={{ textAlign:'center' }}>
+                <div style={{ fontSize:24, fontWeight:900, fontFamily:'var(--font-mono)', color:'var(--fg)' }}>{s.val}</div>
+                <div style={{ fontSize:10, color:'var(--fg3)', marginTop:4 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Period selector */}
+          <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+            {['30d','90d','180d'].map(p => (
+              <button key={p} onClick={() => setPeriod(p)}
+                style={{ padding:'6px 14px', fontSize:11, fontFamily:'var(--font-mono)', fontWeight:700,
+                  background: period===p ? 'var(--red)' : 'transparent',
+                  color: period===p ? '#fff' : 'var(--fg3)',
+                  border:'1px solid var(--bdr)', borderRadius:4, cursor:'pointer' }}>
+                {p} FORWARD
+              </button>
+            ))}
+          </div>
+
+          {/* Score bucket chart */}
+          <div className="card" style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:14 }}>
+              Average Forward Return by Score Bucket ({period})
+            </div>
+            {buckets.map((b, i) => {
+              const ret   = b[PERIOD_FIELD[period]];
+              const wr    = b[WINRATE_FIELD[period]];
+              const n     = b[N_FIELD[period]];
+              const color = RATING_COLORS[b.label] || 'var(--fg3)';
+              const barW  = ret != null ? Math.abs(ret) / maxAbsRet * 100 : 0;
+              return (
+                <div key={i} style={{ marginBottom:14 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:5 }}>
+                    <div style={{ width:10, height:10, borderRadius:2, background:color, flexShrink:0 }} />
+                    <div style={{ flex:1, fontSize:12, fontWeight:700 }}>{b.label}</div>
+                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', color: ret == null ? 'var(--fg3)' : ret >= 0 ? 'var(--green)' : 'var(--red-loss)', fontWeight:700 }}>
+                      {ret == null ? `${b.count} snaps, no data yet` : `${ret >= 0 ? '+' : ''}${ret.toFixed(1)}% avg · ${wr?.toFixed(0)}% win rate · n=${n}`}
+                    </div>
+                  </div>
+                  {ret != null && (
+                    <div style={{ height:10, background:'var(--surf)', borderRadius:4, overflow:'hidden', display:'flex', alignItems:'center' }}>
+                      {ret >= 0
+                        ? <div style={{ height:'100%', width:`${barW}%`, background:color, marginLeft:'50%', transform:'translateX(-100%)', borderRadius:4 }} />
+                        : <div style={{ height:'100%', width:`${barW}%`, background:color, marginLeft:`${50-barW}%`, borderRadius:4 }} />
+                      }
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {buckets.every(b => b[N_FIELD[period]] === 0) && (
+              <div style={{ color:'var(--fg3)', fontSize:12, textAlign:'center', padding:'20px 0' }}>
+                No {period} return data yet. Run SCORES daily and check back after {period === '30d' ? '30' : period === '90d' ? '90' : '180'} days.
+              </div>
+            )}
+          </div>
+
+          {/* Signal accuracy table */}
+          {data.signalAccuracy?.length > 0 && (
+            <div className="card">
+              <div style={{ fontSize:11, color:'var(--fg3)', fontFamily:'var(--font-mono)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>
+                Signal-Level Accuracy (30d forward return, bullish prediction)
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr auto auto auto', gap:'8px 16px', alignItems:'center' }}>
+                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)' }}>SIGNAL</div>
+                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', textAlign:'right' }}>SAMPLES</div>
+                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', textAlign:'right' }}>WIN RATE</div>
+                <div style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', textAlign:'right' }}>AVG RET</div>
+                {data.signalAccuracy.slice(0, 15).map((s, i) => (
+                  <React.Fragment key={i}>
+                    <div style={{ fontSize:11 }}>{s.label}</div>
+                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', textAlign:'right', color:'var(--fg3)' }}>{s.bullSamples}</div>
+                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', textAlign:'right',
+                      color: s.bullWinRate == null ? 'var(--fg3)' : s.bullWinRate > 55 ? 'var(--green)' : s.bullWinRate < 45 ? 'var(--red-loss)' : 'var(--fg)' }}>
+                      {s.bullWinRate != null ? `${s.bullWinRate.toFixed(0)}%` : '—'}
+                    </div>
+                    <div style={{ fontSize:11, fontFamily:'var(--font-mono)', textAlign:'right',
+                      color: s.avgBullRet30d == null ? 'var(--fg3)' : s.avgBullRet30d > 0 ? 'var(--green)' : 'var(--red-loss)' }}>
+                      {s.avgBullRet30d != null ? `${s.avgBullRet30d > 0 ? '+' : ''}${s.avgBullRet30d.toFixed(1)}%` : '—'}
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div style={{ marginTop:12, fontSize:10, color:'var(--fg3)', lineHeight:1.6 }}>
+                Win rate: % of times a bullish signal led to positive 30d return. Min 3 samples shown. Grow the dataset by running SCORES daily.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   PortfolioPage, JapanPage, NewsPage, VoicesPage, StockPage, WatchlistPage, AlertsPanel,
   EarningsPage, ToolsPage, AnalyticsPage, PushSettingsPage, NetworkingPage,
@@ -8274,5 +8556,5 @@ Object.assign(window, {
   JournalPage, SentimentPage, ScenarioPage,
   MacroPage, WatchlistIntelPage, InsiderPage, AttributionPage, ResearchPage,
   CalendarPage, CongressPage, OptionsPage, ShortPage, ValuationPage, LPPage, DiligencePage, ConvictionPage,
-  OpportunityBoard,
+  OpportunityBoard, BacktestPage,
 });

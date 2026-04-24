@@ -1,6 +1,8 @@
 import express from 'express';
 import Score from '../models/Score.js';
+import ScoreSnapshot from '../models/ScoreSnapshot.js';
 import { scoreAllWatchlist, scoreTicker } from '../services/scoringService.js';
+import { computeBacktestSummary, fillForwardReturns } from '../services/backtestService.js';
 
 const router = express.Router();
 
@@ -186,6 +188,29 @@ router.post('/single', async (req, res) => {
       { upsert: true, new: true }
     );
     res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scores/backtest — compute signal accuracy + return distribution
+router.get('/backtest', async (req, res) => {
+  try {
+    // First, fill any forward returns that are now mature
+    const filled = await fillForwardReturns();
+    const summary = await computeBacktestSummary(req.query.version || null);
+    res.json({ ...summary, filledThisRun: filled.updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scores/snapshots/:symbol — all historical snapshots for a ticker
+router.get('/snapshots/:symbol', async (req, res) => {
+  try {
+    const sym = req.params.symbol.toUpperCase();
+    const snaps = await ScoreSnapshot.find({ symbol: sym }).sort({ scoredAt: -1 }).limit(100).lean();
+    res.json(snaps);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

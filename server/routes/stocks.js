@@ -311,6 +311,118 @@ router.get('/news-sentiment/:symbol', async (req, res) => {
   }
 });
 
+// StockTwits social sentiment — real-time bullish/bearish tagged messages
+// Da, Engelberg & Gao (2011): investor attention → short-run price pressure.
+router.get('/social/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const url = `https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`;
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return res.status(r.status).json({ error: `StockTwits ${r.status}` });
+    const data = await r.json();
+    if (!data?.messages) return res.status(404).json({ error: 'No StockTwits data' });
+
+    const messages = data.messages || [];
+    const bull = messages.filter(m => m.entities?.sentiment?.basic === 'Bullish').length;
+    const bear = messages.filter(m => m.entities?.sentiment?.basic === 'Bearish').length;
+    const tagged = bull + bear;
+
+    res.json({
+      symbol,
+      bull, bear,
+      total: messages.length,
+      tagged,
+      bullPct: tagged > 0 ? parseFloat((bull / tagged * 100).toFixed(1)) : null,
+      watcherCount: data.symbol?.watchlist_count || null,
+      recentMessages: messages.slice(0, 5).map(m => ({
+        body: m.body?.slice(0, 120),
+        sentiment: m.entities?.sentiment?.basic || null,
+        createdAt: m.created_at,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Technical analysis — RSI, moving averages, momentum (from Yahoo 1y chart)
+router.get('/technicals/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const YF_HEADERS_LOCAL = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      'Accept': 'application/json',
+      'Referer': 'https://finance.yahoo.com/',
+    };
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
+    const r = await fetch(url, { headers: YF_HEADERS_LOCAL, signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return res.status(r.status).json({ error: `Yahoo chart ${r.status}` });
+    const data = await r.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return res.status(404).json({ error: 'No chart data' });
+
+    const closes = result.indicators?.quote?.[0]?.close || [];
+    const valid  = closes.filter(c => c != null && c > 0);
+    if (valid.length < 20) return res.status(404).json({ error: 'Insufficient price history' });
+
+    const current = valid[valid.length - 1];
+    const len = valid.length;
+
+    // RSI-14
+    const rsi14Window = valid.slice(-15);
+    const changes = rsi14Window.map((v, i) => i === 0 ? 0 : v - rsi14Window[i-1]).slice(1);
+    const gains  = changes.map(d => d > 0 ? d : 0);
+    const losses = changes.map(d => d < 0 ? -d : 0);
+    const avgGain = gains.reduce((a,b)=>a+b,0) / 14;
+    const avgLoss = losses.reduce((a,b)=>a+b,0) / 14;
+    const rsi = avgLoss === 0 ? 100 : parseFloat((100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
+
+    // Moving averages
+    const ma20Arr  = valid.slice(-20);
+    const ma50Arr  = valid.slice(-50);
+    const ma200Arr = len >= 200 ? valid.slice(-200) : null;
+    const ma20  = parseFloat((ma20Arr.reduce((a,b)=>a+b,0)  / ma20Arr.length).toFixed(2));
+    const ma50  = parseFloat((ma50Arr.reduce((a,b)=>a+b,0)  / ma50Arr.length).toFixed(2));
+    const ma200 = ma200Arr ? parseFloat((ma200Arr.reduce((a,b)=>a+b,0) / ma200Arr.length).toFixed(2)) : null;
+
+    // Multi-period returns
+    const idx1mo  = Math.max(0, len - 22);
+    const idx3mo  = Math.max(0, len - 66);
+    const idx6mo  = Math.max(0, len - 132);
+    const ret1mo  = parseFloat(((current - valid[idx1mo])  / valid[idx1mo]  * 100).toFixed(2));
+    const ret3mo  = parseFloat(((current - valid[idx3mo])  / valid[idx3mo]  * 100).toFixed(2));
+    const ret6mo  = len >= 66  ? parseFloat(((current - valid[idx6mo])  / valid[idx6mo]  * 100).toFixed(2)) : null;
+    const ret12mo = parseFloat(((current - valid[0]) / valid[0] * 100).toFixed(2));
+
+    // Bollinger Bands (20-day)
+    const bbMean = ma20;
+    const variance = ma20Arr.reduce((s, v) => s + (v - bbMean) ** 2, 0) / ma20Arr.length;
+    const stdDev = Math.sqrt(variance);
+    const bbUpper = parseFloat((bbMean + 2 * stdDev).toFixed(2));
+    const bbLower = parseFloat((bbMean - 2 * stdDev).toFixed(2));
+    const bbPosition = parseFloat(((current - bbLower) / (bbUpper - bbLower) * 100).toFixed(1));
+
+    res.json({
+      symbol, current, dataPoints: valid.length,
+      rsi,
+      ma20, ma50, ma200,
+      aboveMa20: current > ma20,
+      aboveMa50: current > ma50,
+      aboveMa200: ma200 != null && current > ma200,
+      ret1mo, ret3mo, ret6mo, ret12mo,
+      bollingerUpper: bbUpper,
+      bollingerLower: bbLower,
+      bollingerPosition: bbPosition,
+      bollingerInterpret: bbPosition > 80 ? 'overbought' : bbPosition < 20 ? 'oversold' : 'neutral',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Alpha Vantage NEWS_SENTIMENT — real AI-analyzed sentiment with per-article scores
 // Free tier: 25 req/day. Use on-demand (ConvictionPage), not batch scoring.
 router.get('/av-news/:symbol', async (req, res) => {
