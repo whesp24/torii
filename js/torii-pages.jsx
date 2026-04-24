@@ -7474,6 +7474,328 @@ function DiligencePage() {
 
 // ─── CONVICTION SCORE DASHBOARD ───────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OPPORTUNITY BOARD — ranked screener across all watchlist tickers
+// ─────────────────────────────────────────────────────────────────────────────
+function OpportunityBoard() {
+  const [scores,     setScores]     = React.useState([]);
+  const [loading,    setLoading]    = React.useState(true);
+  const [running,    setRunning]    = React.useState(false);
+  const [runStatus,  setRunStatus]  = React.useState('');
+  const [lastRunAt,  setLastRunAt]  = React.useState(null);
+  const [filter,     setFilter]     = React.useState('all');   // all|long|short|options|macro|neutral
+  const [minScore,   setMinScore]   = React.useState(0);
+  const [selected,   setSelected]   = React.useState(null);
+  const [runProgress,setRunProgress]= React.useState(null);    // { done, total }
+
+  React.useEffect(() => { loadScores(); }, []);
+
+  async function loadScores() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/scores`).then(r => r.json());
+      setScores(Array.isArray(res.scores) ? res.scores : []);
+      if (res.lastRunAt) setLastRunAt(new Date(res.lastRunAt));
+      setRunning(res.running || false);
+    } catch (_) {}
+    setLoading(false);
+  }
+
+  async function triggerRun() {
+    setRunning(true);
+    setRunStatus('Connecting…');
+    setRunProgress({ done: 0, total: '?' });
+
+    // Use fetch + SSE manual streaming (EventSource doesn't support POST)
+    try {
+      const resp = await fetch(`${API_URL}/scores/run`, { method: 'POST' });
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === 'progress') {
+              setRunProgress({ done: ev.done, total: ev.total });
+              setRunStatus(`Scoring ${ev.symbol}… (${ev.done}/${ev.total})`);
+            } else if (ev.type === 'complete') {
+              setRunStatus(`Done — ${ev.scored} scored`);
+              setLastRunAt(new Date(ev.lastRunAt));
+            } else if (ev.type === 'error') {
+              setRunStatus(`Error: ${ev.message}`);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      setRunStatus(`Error: ${e.message}`);
+    }
+
+    setRunning(false);
+    setRunProgress(null);
+    await loadScores();
+  }
+
+  const STRATEGY_COLORS = {
+    long:    { bg: '#0a84ff22', text: '#0A84FF' },
+    short:   { bg: '#ff3b3022', text: '#FF3B30' },
+    options: { bg: '#ffd60a22', text: '#9a7f00' },
+    macro:   { bg: '#30d15822', text: '#1a8a40' },
+    neutral: { bg: 'var(--bg)', text: 'var(--fg3)' },
+  };
+
+  const SCORE_COLOR = (s) => s >= 70 ? 'var(--green)' : s >= 45 ? '#f59e0b' : 'var(--red-loss)';
+
+  const filtered = scores
+    .filter(s => filter === 'all' || s.strategy === filter)
+    .filter(s => s.score >= minScore);
+
+  const signalDotColor = (direction) =>
+    direction === 'bullish' ? '#30D158' : direction === 'bearish' ? '#FF3B30' : '#6b7280';
+
+  const fmtPrice = (p) => p == null ? '—' : p >= 1000 ? `$${(p/1000).toFixed(1)}k` : `$${p.toFixed(2)}`;
+  const fmtChg   = (c) => c == null ? '' : `${c > 0 ? '+' : ''}${c.toFixed(2)}%`;
+
+  const strategyTabs = [
+    { key: 'all',     label: 'All' },
+    { key: 'long',    label: 'Long' },
+    { key: 'short',   label: 'Short' },
+    { key: 'options', label: 'Options' },
+    { key: 'macro',   label: 'Macro' },
+    { key: 'neutral', label: 'Neutral' },
+  ];
+
+  return (
+    <div className="page-root">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Opportunity Board</h1>
+          <p className="page-sub">All watchlist tickers scored · ranked by conviction · filter by strategy</p>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          {lastRunAt && (
+            <span style={{ fontSize:11, color:'var(--fg3)' }}>
+              Last run {lastRunAt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+            </span>
+          )}
+          <button onClick={triggerRun} disabled={running}
+            style={{ padding:'8px 18px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6,
+              fontSize:12, fontWeight:700, cursor:running?'not-allowed':'pointer', fontFamily:'var(--font-mono)',
+              letterSpacing:'0.06em', opacity:running?0.7:1 }}>
+            {running ? '⏳ RUNNING…' : '▶ RUN SCORES'}
+          </button>
+        </div>
+      </div>
+
+      {/* Run progress bar */}
+      {running && runProgress && (
+        <div className="card" style={{ marginBottom:10, padding:'10px 14px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+            <span style={{ fontSize:11, color:'var(--fg2)' }}>{runStatus}</span>
+            <span style={{ fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg3)' }}>
+              {runProgress.done}/{runProgress.total}
+            </span>
+          </div>
+          <div style={{ height:3, background:'var(--bg)', borderRadius:2, overflow:'hidden' }}>
+            <div style={{ height:'100%', background:'var(--red)', borderRadius:2, transition:'width 0.3s',
+              width: runProgress.total && runProgress.total !== '?' ? `${(runProgress.done/runProgress.total)*100}%` : '40%' }} />
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="card" style={{ marginBottom:10, padding:'10px 14px', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+        <span style={{ fontSize:11, color:'var(--fg3)', marginRight:4 }}>Strategy:</span>
+        {strategyTabs.map(tab => (
+          <button key={tab.key} onClick={() => setFilter(tab.key)}
+            style={{ padding:'4px 10px', borderRadius:20, fontSize:11, cursor:'pointer', fontWeight:500,
+              border: filter===tab.key ? '1.5px solid var(--red)' : '1px solid var(--bdr)',
+              background: filter===tab.key ? '#ff3b3018' : 'transparent',
+              color: filter===tab.key ? 'var(--red)' : 'var(--fg2)' }}>
+            {tab.label}
+            {tab.key !== 'all' && (
+              <span style={{ marginLeft:4, fontSize:10, opacity:0.7 }}>
+                {scores.filter(s => s.strategy === tab.key).length}
+              </span>
+            )}
+          </button>
+        ))}
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6 }}>
+          <span style={{ fontSize:11, color:'var(--fg3)' }}>Min score:</span>
+          <input type="range" min={0} max={80} step={5} value={minScore}
+            onChange={e => setMinScore(+e.target.value)}
+            style={{ width:80, accentColor:'var(--red)' }} />
+          <span style={{ fontSize:11, fontFamily:'var(--font-mono)', color:'var(--fg2)', minWidth:24 }}>{minScore}</span>
+        </div>
+        <button onClick={loadScores} style={{ padding:'4px 10px', borderRadius:6, border:'1px solid var(--bdr)', background:'transparent', color:'var(--fg3)', fontSize:11, cursor:'pointer' }}>↺ Refresh</button>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 340px' : '1fr', gap:10 }}>
+        {/* Main board */}
+        <div className="card" style={{ padding:0, overflow:'hidden' }}>
+          {/* Table header */}
+          <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 90px 70px 80px 68px',
+            padding:'8px 14px', borderBottom:'1px solid var(--bdr)', background:'var(--bg)' }}>
+            {['Ticker','Score','Strategy','Signals','Price','Change'].map(h => (
+              <span key={h} style={{ fontSize:10, fontWeight:700, color:'var(--fg3)', letterSpacing:'0.06em', textTransform:'uppercase' }}>{h}</span>
+            ))}
+          </div>
+
+          {loading ? (
+            <div style={{ padding:40, textAlign:'center', color:'var(--fg3)', fontSize:13 }}>Loading scores…</div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding:40, textAlign:'center' }}>
+              <div style={{ fontSize:13, color:'var(--fg3)', marginBottom:8 }}>
+                {scores.length === 0 ? 'No scores yet — click RUN SCORES to analyze your watchlist' : 'No tickers match current filters'}
+              </div>
+              {scores.length === 0 && (
+                <button onClick={triggerRun} disabled={running}
+                  style={{ padding:'8px 20px', background:'var(--red)', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+                  ▶ Run Now
+                </button>
+              )}
+            </div>
+          ) : (
+            filtered.map(s => {
+              const sc = STRATEGY_COLORS[s.strategy] || STRATEGY_COLORS.neutral;
+              const isSelected = selected?.symbol === s.symbol;
+              const activeSignals = (s.signals || []).filter(sig => !sig.noData);
+              return (
+                <div key={s.symbol} onClick={() => setSelected(isSelected ? null : s)}
+                  style={{ display:'grid', gridTemplateColumns:'90px 1fr 90px 70px 80px 68px',
+                    padding:'9px 14px', borderBottom:'1px solid var(--bdr)',
+                    cursor:'pointer', background: isSelected ? '#ff3b3010' : 'transparent',
+                    transition:'background 0.1s' }}>
+                  {/* Ticker */}
+                  <div style={{ fontFamily:'var(--font-mono)', fontSize:13, fontWeight:700, color:'var(--fg)', display:'flex', alignItems:'center' }}>
+                    {s.symbol}
+                  </div>
+                  {/* Score bar */}
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <div style={{ flex:1, height:4, background:'var(--bdr)', borderRadius:2, overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:`${s.score}%`, background:SCORE_COLOR(s.score), borderRadius:2, transition:'width 0.3s' }} />
+                    </div>
+                    <span style={{ fontSize:12, fontWeight:700, fontFamily:'var(--font-mono)', color:SCORE_COLOR(s.score), minWidth:26, textAlign:'right' }}>
+                      {s.score}
+                    </span>
+                  </div>
+                  {/* Strategy badge */}
+                  <div>
+                    <span style={{ fontSize:10, padding:'2px 7px', borderRadius:10, background:sc.bg, color:sc.text, fontWeight:600, textTransform:'capitalize' }}>
+                      {s.strategy}
+                    </span>
+                  </div>
+                  {/* Signal dots */}
+                  <div style={{ display:'flex', gap:3, alignItems:'center', flexWrap:'wrap' }}>
+                    {activeSignals.slice(0,6).map((sig,i) => (
+                      <span key={i} title={sig.label}
+                        style={{ width:7, height:7, borderRadius:'50%', background:signalDotColor(sig.direction), display:'inline-block', flexShrink:0 }} />
+                    ))}
+                    {activeSignals.length > 6 && <span style={{ fontSize:9, color:'var(--fg3)' }}>+{activeSignals.length-6}</span>}
+                  </div>
+                  {/* Price */}
+                  <div style={{ fontSize:12, fontFamily:'var(--font-mono)', color:'var(--fg2)' }}>
+                    {fmtPrice(s.currentPrice)}
+                  </div>
+                  {/* Change */}
+                  <div style={{ fontSize:11, fontFamily:'var(--font-mono)', color: s.changePercent>0?'var(--green)':s.changePercent<0?'var(--red-loss)':'var(--fg3)', textAlign:'right' }}>
+                    {fmtChg(s.changePercent)}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Detail panel */}
+        {selected && (
+          <div className="card" style={{ padding:0, overflow:'hidden', alignSelf:'flex-start', position:'sticky', top:0 }}>
+            {/* Panel header */}
+            <div style={{ padding:'12px 14px', borderBottom:'1px solid var(--bdr)', display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+              <div>
+                <div style={{ fontSize:18, fontWeight:800, fontFamily:'var(--font-mono)', color:'var(--fg)' }}>{selected.symbol}</div>
+                <div style={{ fontSize:11, color:'var(--fg3)', marginTop:1 }}>{selected.name}</div>
+              </div>
+              <div style={{ textAlign:'right' }}>
+                <div style={{ fontSize:28, fontWeight:900, fontFamily:'var(--font-mono)', color:SCORE_COLOR(selected.score), lineHeight:1 }}>{selected.score}</div>
+                <div style={{ fontSize:10, color:'var(--fg3)', marginTop:1 }}>{selected.rating}</div>
+              </div>
+            </div>
+
+            {/* Price + strategy row */}
+            <div style={{ padding:'8px 14px', borderBottom:'1px solid var(--bdr)', display:'flex', gap:12, alignItems:'center' }}>
+              <span style={{ fontSize:14, fontFamily:'var(--font-mono)', fontWeight:700, color:'var(--fg)' }}>{fmtPrice(selected.currentPrice)}</span>
+              {selected.changePercent != null && (
+                <span style={{ fontSize:12, fontFamily:'var(--font-mono)', color:selected.changePercent>0?'var(--green)':'var(--red-loss)' }}>
+                  {fmtChg(selected.changePercent)}
+                </span>
+              )}
+              <span style={{ marginLeft:'auto', fontSize:10, padding:'3px 8px', borderRadius:10,
+                background: (STRATEGY_COLORS[selected.strategy]||STRATEGY_COLORS.neutral).bg,
+                color: (STRATEGY_COLORS[selected.strategy]||STRATEGY_COLORS.neutral).text,
+                fontWeight:600, textTransform:'capitalize' }}>
+                {selected.strategy}
+              </span>
+              <button onClick={() => setSelected(null)} style={{ background:'none', border:'none', color:'var(--fg3)', cursor:'pointer', fontSize:14 }}>✕</button>
+            </div>
+
+            {/* Score bar */}
+            <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--bdr)' }}>
+              <div style={{ height:6, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${selected.score}%`, background:SCORE_COLOR(selected.score), borderRadius:3, transition:'width 0.4s' }} />
+              </div>
+            </div>
+
+            {/* Signals breakdown */}
+            <div style={{ padding:'8px 0', maxHeight:420, overflowY:'auto' }}>
+              {(selected.signals || []).map((sig, i) => (
+                <div key={i} style={{ padding:'8px 14px', borderBottom:'1px solid var(--bdr)', opacity:sig.noData?0.45:1 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:3 }}>
+                    <span style={{ fontSize:11, fontWeight:600, color:'var(--fg2)' }}>{sig.label}</span>
+                    <span style={{ fontSize:11, fontFamily:'var(--font-mono)', fontWeight:700,
+                      color: sig.noData?'var(--fg3)':sig.delta>0?'var(--green)':sig.delta<0?'var(--red-loss)':'#f59e0b' }}>
+                      {sig.noData ? 'N/A' : `${sig.delta>0?'+':''}${sig.delta}pts`}
+                    </span>
+                  </div>
+                  <div style={{ fontSize:10, color:'var(--fg3)' }}>{sig.value}</div>
+                  {!sig.noData && (
+                    <div style={{ marginTop:4, height:2, background:'var(--bdr)', borderRadius:1 }}>
+                      <div style={{ height:'100%', width:`${Math.min(100,Math.abs(sig.delta)/15*100)}%`,
+                        background: sig.delta>0?'var(--green)':sig.delta<0?'var(--red-loss)':'#f59e0b',
+                        borderRadius:1 }} />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Link to full conviction */}
+            <div style={{ padding:'10px 14px', borderTop:'1px solid var(--bdr)' }}>
+              <button onClick={() => {
+                  window.__toriiNav && window.__toriiNav('conviction');
+                  setTimeout(() => {
+                    window.__toriiSetConviction && window.__toriiSetConviction(selected.symbol);
+                  }, 100);
+                }}
+                style={{ width:'100%', padding:'8px', background:'var(--bg)', border:'1px solid var(--bdr)', borderRadius:6,
+                  color:'var(--fg2)', fontSize:12, cursor:'pointer', fontWeight:600 }}>
+                Open Full Analysis →
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ConvictionPage() {
   const [ticker,   setTicker]   = React.useState('');
   const [loading,  setLoading]  = React.useState(false);
@@ -7485,6 +7807,9 @@ function ConvictionPage() {
 
   React.useEffect(() => {
     fetch(`${API_URL}/watchlist`).then(r=>r.json()).then(d=>setWatchlist(Array.isArray(d)?d:[])).catch(()=>{});
+    // Expose global setter so OpportunityBoard can pre-fill ticker
+    window.__toriiSetConviction = (sym) => { setTicker(sym.toUpperCase()); };
+    return () => { delete window.__toriiSetConviction; };
   }, []);
 
   async function analyze() {
@@ -7779,4 +8104,5 @@ Object.assign(window, {
   JournalPage, SentimentPage, ScenarioPage,
   MacroPage, WatchlistIntelPage, InsiderPage, AttributionPage, ResearchPage,
   CalendarPage, CongressPage, OptionsPage, ShortPage, ValuationPage, LPPage, DiligencePage, ConvictionPage,
+  OpportunityBoard,
 });

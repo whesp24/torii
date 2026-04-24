@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { fetchAndUpdateStocks } from './services/stockService.js';
+import { scoreAllWatchlist } from './services/scoringService.js';
 import { fetchAndUpdateNews } from './services/newsService.js';
 import { fetchAndUpdateTweets } from './services/tweetService.js';
 import { generateAndSaveBriefing } from './services/briefingService.js';
@@ -43,6 +44,7 @@ import optionsRoutes from './routes/options.js';
 import shortRoutes from './routes/shortinterest.js';
 import lpRoutes from './routes/lps.js';
 import diligenceRoutes from './routes/diligence.js';
+import scoresRoutes from './routes/scores.js';
 
 dotenv.config();
 
@@ -90,6 +92,7 @@ app.use('/api/options', optionsRoutes);
 app.use('/api/short', shortRoutes);
 app.use('/api/lps', lpRoutes);
 app.use('/api/diligence', diligenceRoutes);
+app.use('/api/scores', scoresRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -157,6 +160,12 @@ cron.schedule('0 9 * * *', () => {
 cron.schedule('0 12 * * 1-5', () => {
   console.log('Sending daily digest email...');
   sendDailyDigest().catch(err => console.error('Email error:', err));
+});
+
+// Batch conviction scoring — every 6 hours on weekdays
+cron.schedule('0 */6 * * 1-5', () => {
+  console.log('Running batch conviction scoring...');
+  scoreAllWatchlist().catch(err => console.error('Scoring error:', err));
 });
 
 app.listen(PORT, () => {

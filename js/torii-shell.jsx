@@ -34,11 +34,12 @@ const NAV = [
   { id:'lp',         label:'LP Portal',  icon:'lp'         },
   { id:'diligence',  label:'Diligence',  icon:'diligence'  },
   { id:'conviction', label:'Conviction', icon:'conviction' },
+  { id:'board',      label:'Opp. Board', icon:'board'      },
 ];
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','calendar','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','insider','attribution','research','congress','options','short','valuation','lp','diligence','conviction'];
+const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','calendar','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','insider','attribution','research','congress','options','short','valuation','lp','diligence','conviction','board'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ function NavIcon({ id, active }) {
   if (id==='lp')          return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>;
   if (id==='diligence')   return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>;
   if (id==='conviction')  return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>;
+  if (id==='board')       return <svg {...s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>;
   return null;
 }
 
@@ -580,6 +582,12 @@ function savePortfolio(p) {
 
 function App() {
   const [page,      setPage]     = React.useState(() => localStorage.getItem('tpage')  || 'overview');
+
+  // Expose global nav helpers for cross-page navigation (e.g. Board → Conviction)
+  React.useEffect(() => {
+    window.__toriiNav = (p) => setPage(p);
+    return () => { delete window.__toriiNav; };
+  }, [setPage]);
   const [theme,     setTheme]    = React.useState(() => localStorage.getItem('ttheme') || 'ember');
   const [notifs,    setNotifs]   = React.useState(MOCK.notifications);
   const [tasks,     setTasks]    = React.useState([]);
@@ -762,6 +770,7 @@ function App() {
         {page==='lp'          && <LPPage />}
         {page==='diligence'   && <DiligencePage />}
         {page==='conviction'  && <ConvictionPage />}
+        {page==='board'       && <OpportunityBoard />}
         {page.startsWith('stock-') && <StockPage ticker={page.replace('stock-','')} onBack={() => setPage('portfolio')} />}
       </main>
 
