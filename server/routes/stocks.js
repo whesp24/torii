@@ -83,7 +83,7 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
       'Accept-Language': 'en-US,en;q=0.9',
       'Referer': 'https://finance.yahoo.com/',
     };
-    const modules = encodeURIComponent('summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents');
+    const modules = encodeURIComponent('summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory');
     const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
     const r = await fetch(url, { headers: YF_HEADERS });
     if (!r.ok) return res.status(404).json({ error: `Yahoo Finance ${r.status}` });
@@ -113,6 +113,12 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
       ? Math.round((nextEarningsTs - now) / 86400000)
       : null;
 
+    // Analyst trend breakdown + recent upgrades/downgrades
+    const recTrend = result.recommendationTrend?.trend || [];
+    const latestTrend = recTrend[0] || {};
+    const upgrades = result.upgradeDowngradeHistory?.history || [];
+    const upgrades30d = upgrades.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
+
     res.json({
       symbol,
       name:          price.shortName || price.longName || symbol,
@@ -133,6 +139,14 @@ router.get('/yahoo-summary/:symbol', async (req, res) => {
       beta:          defKS.beta?.raw               ?? null,
       daysToEarnings,
       nextEarningsTs,
+      // Analyst trend breakdown (strongBuy/buy/hold/sell counts)
+      analystBuy:    (latestTrend.strongBuy || 0) + (latestTrend.buy || 0),
+      analystHold:   latestTrend.hold || 0,
+      analystSell:   (latestTrend.sell || 0) + (latestTrend.strongSell || 0),
+      // Recent upgrades/downgrades (last 30 days)
+      recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.newGrade || '')).length,
+      recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.newGrade || '')).length,
+      recentActions: upgrades30d.slice(0, 5).map(u => ({ firm: u.firm, action: u.action, from: u.fromGrade, to: u.toGrade })),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

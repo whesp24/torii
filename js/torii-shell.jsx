@@ -2,44 +2,74 @@
 
 const SHELL_API = 'https://torii-backend.onrender.com/api';
 
+// Flat lookup (used by CmdPalette, MoreSheet, etc.)
 const NAV = [
-  { id:'overview',   label:'Markets',    icon:'markets'    },
-  { id:'briefing',   label:'Briefing',   icon:'briefing'   },
-  { id:'portfolio',  label:'Portfolio',  icon:'portfolio'  },
-  { id:'japan',      label:'Japan',      icon:'japan'      },
-  { id:'news',       label:'News',       icon:'news'       },
-  { id:'voices',     label:'Voices',     icon:'voices'     },
-  { id:'network',    label:'Network',    icon:'network'    },
-  { id:'watchlist',  label:'Watchlist',  icon:'watchlist'  },
-  { id:'alerts',     label:'Alerts',     icon:'alerts'     },
-  { id:'calendar',   label:'Calendar',   icon:'calendar'   },
-  { id:'tools',      label:'Tools',      icon:'tools'      },
-  { id:'analytics',  label:'Analytics',  icon:'analytics'  },
-  { id:'push',       label:'Notify',     icon:'push'       },
-  { id:'assistant',  label:'AI',         icon:'assistant'  },
-  { id:'notes',      label:'Notes',      icon:'notes'      },
-  { id:'deals',      label:'Deals',      icon:'deals'      },
-  { id:'meetings',   label:'Meetings',   icon:'meetings'   },
-  { id:'journal',    label:'Journal',    icon:'journal'    },
-  { id:'sentiment',  label:'Sentiment',  icon:'sentiment'  },
-  { id:'scenario',   label:'Scenario',   icon:'scenario'   },
-  { id:'macro',      label:'Macro',      icon:'macro'      },
-  { id:'insider',    label:'Insider',    icon:'insider'    },
-  { id:'attribution',label:'Attribution',icon:'attribution'},
-  { id:'research',   label:'Research',   icon:'research'   },
-  { id:'congress',   label:'Congress',   icon:'congress'   },
-  { id:'options',    label:'Options',    icon:'options'    },
-  { id:'short',      label:'Short Int',  icon:'short'      },
-  { id:'valuation',  label:'Valuation',  icon:'valuation'  },
-  { id:'lp',         label:'LP Portal',  icon:'lp'         },
-  { id:'diligence',  label:'Diligence',  icon:'diligence'  },
-  { id:'conviction', label:'Conviction', icon:'conviction' },
-  { id:'board',      label:'Opp. Board', icon:'board'      },
+  { id:'overview',   label:'Overview',     icon:'markets'    },
+  { id:'briefing',   label:'Briefing',     icon:'briefing'   },
+  { id:'watchlist',  label:'Watchlist',    icon:'watchlist'  },
+  { id:'board',      label:'Opp Board',    icon:'board'      },
+  { id:'conviction', label:'Conviction',   icon:'conviction' },
+  { id:'portfolio',  label:'Portfolio',    icon:'portfolio'  },
+  { id:'japan',      label:'Japan',        icon:'japan'      },
+  { id:'macro',      label:'Macro',        icon:'macro'      },
+  { id:'scenario',   label:'Scenario',     icon:'scenario'   },
+  { id:'sentiment',  label:'Sentiment',    icon:'sentiment'  },
+  { id:'insider',    label:'Insider',      icon:'insider'    },
+  { id:'congress',   label:'Congress',     icon:'congress'   },
+  { id:'options',    label:'Options Flow', icon:'options'    },
+  { id:'short',      label:'Short Int',    icon:'short'      },
+  { id:'attribution',label:'Attribution',  icon:'attribution'},
+  { id:'research',   label:'Research',     icon:'research'   },
+  { id:'valuation',  label:'Valuation',    icon:'valuation'  },
+  { id:'news',       label:'News',         icon:'news'       },
+  { id:'voices',     label:'Voices',       icon:'voices'     },
+  { id:'notes',      label:'Notes',        icon:'notes'      },
+  { id:'journal',    label:'Journal',      icon:'journal'    },
+  { id:'calendar',   label:'Calendar',     icon:'calendar'   },
+  { id:'meetings',   label:'Meetings',     icon:'meetings'   },
+  { id:'deals',      label:'Deals',        icon:'deals'      },
+  { id:'diligence',  label:'Diligence',    icon:'diligence'  },
+  { id:'lp',         label:'LP Portal',    icon:'lp'         },
+  { id:'network',    label:'Network',      icon:'network'    },
+  { id:'assistant',  label:'AI',           icon:'assistant'  },
+  { id:'alerts',     label:'Alerts',       icon:'alerts'     },
+  { id:'tools',      label:'Tools',        icon:'tools'      },
+  { id:'analytics',  label:'Analytics',    icon:'analytics'  },
+  { id:'push',       label:'Notify',       icon:'push'       },
+];
+
+// Sectioned structure for sidebar rendering
+const NAV_SECTIONS = [
+  {
+    id: 'markets',
+    label: 'MARKETS',
+    items: ['overview','briefing','watchlist','board','conviction','portfolio','japan'],
+  },
+  {
+    id: 'research',
+    label: 'RESEARCH',
+    items: ['macro','scenario','sentiment','insider','congress','options','short','attribution','valuation','research'],
+  },
+  {
+    id: 'intel',
+    label: 'INTEL',
+    items: ['news','voices'],
+  },
+  {
+    id: 'workspace',
+    label: 'WORKSPACE',
+    items: ['notes','journal','calendar','meetings','deals','diligence','lp'],
+  },
+  {
+    id: 'network',
+    label: 'NETWORK & AI',
+    items: ['network','assistant'],
+  },
 ];
 
 // Bottom nav items (mobile — first 4 + More)
 const MOBILE_NAV = ['overview','portfolio','japan','news'];
-const MORE_NAV   = ['briefing','voices','network','watchlist','alerts','calendar','tools','analytics','push','assistant','notes','deals','meetings','journal','sentiment','scenario','macro','insider','attribution','research','congress','options','short','valuation','lp','diligence','conviction','board'];
+const MORE_NAV   = ['briefing','watchlist','board','conviction','portfolio','japan','macro','scenario','sentiment','insider','congress','options','short','attribution','valuation','research','news','voices','notes','journal','calendar','meetings','deals','diligence','lp','network','assistant'];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -340,6 +370,23 @@ function FloatingTasks({ tasks, onAddTask, onToggleTask }) {
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 function Sidebar({ page, onNav, collapsed, onCollapse }) {
+  // Track which sections are expanded (default all open)
+  const [openSections, setOpenSections] = React.useState(() => {
+    const saved = localStorage.getItem('torii-nav-sections');
+    return saved ? JSON.parse(saved) : { markets:true, research:true, intel:true, workspace:true, network:true };
+  });
+
+  function toggleSection(id) {
+    setOpenSections(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      localStorage.setItem('torii-nav-sections', JSON.stringify(next));
+      return next;
+    });
+  }
+
+  // Find which section the active page belongs to
+  const activeSection = NAV_SECTIONS.find(s => s.items.includes(page))?.id;
+
   return (
     <aside className={`sidebar${collapsed?' collapsed':''}`}>
       {/* Logo / collapse */}
@@ -358,15 +405,59 @@ function Sidebar({ page, onNav, collapsed, onCollapse }) {
         </button>
       </div>
 
-      {/* Nav */}
-      <div className="sidebar-section nav-section">
-        {!collapsed && <div className="sidebar-section-label">VIEWS</div>}
-        {NAV.map(({ id, label, icon }) => (
-          <button key={id} className={`nav-item${page===id?' active':''}`} onClick={() => onNav(id)}>
-            <span className="nav-icon"><NavIcon id={icon} active={page===id} /></span>
-            {!collapsed && <span className="nav-label">{label}</span>}
-          </button>
-        ))}
+      {/* Sectioned Nav */}
+      <div className="sidebar-section nav-section" style={{ overflowY:'auto', flex:1 }}>
+        {NAV_SECTIONS.map(section => {
+          const sectionItems = section.items.map(id => NAV.find(n => n.id === id)).filter(Boolean);
+          const isOpen       = openSections[section.id] !== false;
+          const hasActive    = section.items.includes(page);
+
+          if (collapsed) {
+            // Collapsed: show just the first item of each section as a section icon
+            const firstActive = sectionItems.find(n => n.id === page) || sectionItems[0];
+            return (
+              <div key={section.id} style={{ marginBottom:2 }}>
+                {sectionItems.map(({ id, label, icon }) => (
+                  <button key={id} className={`nav-item${page===id?' active':''}`}
+                    onClick={() => onNav(id)} title={label}>
+                    <span className="nav-icon"><NavIcon id={icon} active={page===id} /></span>
+                  </button>
+                ))}
+              </div>
+            );
+          }
+
+          return (
+            <div key={section.id} style={{ marginBottom:4 }}>
+              {/* Section header — clickable to collapse */}
+              <button
+                onClick={() => toggleSection(section.id)}
+                style={{
+                  display:'flex', alignItems:'center', justifyContent:'space-between',
+                  width:'100%', padding:'6px 12px 4px', background:'transparent', border:'none',
+                  cursor:'pointer', color: hasActive ? 'var(--fg)' : 'var(--fg3)',
+                  fontSize:9, fontFamily:'var(--font-mono)', letterSpacing:'0.12em',
+                  fontWeight: hasActive ? 700 : 600,
+                }}>
+                <span>{section.label}</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                  style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition:'transform 0.15s' }}>
+                  <path d="M6 9l6 6 6-6"/>
+                </svg>
+              </button>
+
+              {/* Section items */}
+              {isOpen && sectionItems.map(({ id, label, icon }) => (
+                <button key={id} className={`nav-item${page===id?' active':''}`}
+                  onClick={() => onNav(id)}
+                  style={{ paddingLeft:20 }}>
+                  <span className="nav-icon"><NavIcon id={icon} active={page===id} /></span>
+                  <span className="nav-label">{label}</span>
+                </button>
+              ))}
+            </div>
+          );
+        })}
       </div>
 
       {/* Footer */}

@@ -7886,6 +7886,18 @@ function ConvictionPage() {
       gathered.push({ label:'Analyst Consensus',
         value: `Consensus: ${yf.recKey}${yf.numAnalysts > 0 ? ` · ${yf.numAnalysts} analysts` : ''}`,
         direction: delta>0?'bullish':delta<0?'bearish':'neutral', delta, source: 'Yahoo Finance' });
+    } else if (yf?.recentUpgrades > 0 || yf?.recentDowngrades > 0 || yf?.analystBuy > 0) {
+      const netUpgrade = (yf.recentUpgrades || 0) - (yf.recentDowngrades || 0);
+      const delta = netUpgrade > 0 ? +6 : netUpgrade < 0 ? -6 : yf.analystBuy > 0 ? +4 : 0;
+      total += delta;
+      const parts = [];
+      if (yf.analystBuy > 0) parts.push(`${yf.analystBuy} buy / ${yf.analystHold || 0} hold / ${yf.analystSell || 0} sell`);
+      if (yf.recentUpgrades > 0) parts.push(`${yf.recentUpgrades} upgrade${yf.recentUpgrades > 1 ? 's' : ''} (30d)`);
+      if (yf.recentDowngrades > 0) parts.push(`${yf.recentDowngrades} downgrade${yf.recentDowngrades > 1 ? 's' : ''} (30d)`);
+      gathered.push({ label:'Analyst Consensus',
+        value: parts.join(' · '),
+        direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
+        delta, source: 'Yahoo Finance' });
     } else {
       gathered.push({ label:'Analyst Consensus', value: 'No analyst coverage', direction: 'neutral', delta: 0, source:'Yahoo Finance', noData: true });
     }

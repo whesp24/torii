@@ -93,7 +93,7 @@ async function safeText(url, opts = {}) {
 // Single call gets: quote, analyst targets, short interest, 52w, earnings date
 async function fetchYahooSummary(symbol) {
   const modules = encodeURIComponent(
-    'summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents'
+    'summaryDetail,financialData,defaultKeyStatistics,price,calendarEvents,recommendationTrend,upgradeDowngradeHistory'
   );
   const url  = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
   const data = await yfFetch(url);
@@ -125,6 +125,12 @@ async function fetchYahooSummary(symbol) {
     ? Math.round((nextEarningsTs - now) / 86400000)
     : null;
 
+  // Analyst trend breakdown + recent upgrades/downgrades
+  const recTrend = res.recommendationTrend?.trend || [];
+  const latestTrend = recTrend[0] || {};
+  const upgrades = res.upgradeDowngradeHistory?.history || [];
+  const upgrades30d = upgrades.filter(u => u.epochGradeDate && (now - u.epochGradeDate * 1000) < 30 * 86400000);
+
   return {
     currentPrice, changePercent,
     high52:       sumD.fiftyTwoWeekHigh?.raw    ?? defKS.fiftyTwoWeekHigh?.raw    ?? null,
@@ -143,6 +149,13 @@ async function fetchYahooSummary(symbol) {
     beta:         defKS.beta?.raw               ?? null,
     daysToEarnings,
     nextEarningsTs,
+    // Analyst trend breakdown (strongBuy/buy/hold/sell counts)
+    analystBuy:    (latestTrend.strongBuy || 0) + (latestTrend.buy || 0),
+    analystHold:   latestTrend.hold || 0,
+    analystSell:   (latestTrend.sell || 0) + (latestTrend.strongSell || 0),
+    // Recent upgrades/downgrades (last 30 days)
+    recentUpgrades:   upgrades30d.filter(u => /upgrade|buy|outperform|overweight/i.test(u.newGrade || '')).length,
+    recentDowngrades: upgrades30d.filter(u => /downgrade|sell|underperform|underweight/i.test(u.newGrade || '')).length,
   };
 }
 
@@ -187,7 +200,7 @@ async function fetchOptionsFlow(symbol) {
   const callOI  = calls.reduce((s, c) => s + (c.openInterest || 0), 0);
   const putOI   = puts.reduce((s, p)  => s + (p.openInterest || 0), 0);
 
-  if (callVol + putVol < 10) return null; // not enough activity
+  if (callVol + putVol < 3) return null; // not enough activity
 
   const pcRatioVol = putVol / Math.max(callVol, 1);
   const pcRatioOI  = putOI  / Math.max(callOI, 1);
@@ -413,6 +426,18 @@ export async function scoreTicker(symbol, { congData } = {}) {
       direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
       delta, source: 'Yahoo Finance',
     });
+  } else if (yfSummary?.recentUpgrades > 0 || yfSummary?.recentDowngrades > 0 || yfSummary?.analystBuy > 0) {
+    const netUpgrade = (yfSummary.recentUpgrades || 0) - (yfSummary.recentDowngrades || 0);
+    const delta = netUpgrade > 0 ? +6 : netUpgrade < 0 ? -6 : yfSummary.analystBuy > 0 ? +4 : 0;
+    total += delta;
+    const parts = [];
+    if (yfSummary.analystBuy > 0) parts.push(`${yfSummary.analystBuy} buy / ${yfSummary.analystHold || 0} hold / ${yfSummary.analystSell || 0} sell`);
+    if (yfSummary.recentUpgrades > 0) parts.push(`${yfSummary.recentUpgrades} upgrade${yfSummary.recentUpgrades > 1 ? 's' : ''} (30d)`);
+    if (yfSummary.recentDowngrades > 0) parts.push(`${yfSummary.recentDowngrades} downgrade${yfSummary.recentDowngrades > 1 ? 's' : ''} (30d)`);
+    gathered.push({ label:'Analyst Consensus',
+      value: parts.join(' · '),
+      direction: delta > 0 ? 'bullish' : delta < 0 ? 'bearish' : 'neutral',
+      delta, source: 'Yahoo Finance' });
   } else {
     gathered.push({
       label: 'Analyst Consensus', value: 'No analyst coverage',
